@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Image Sender uses this service to automatically press the Send button in WhatsApp after attaching an image. Enable this only if you want fully automatic sending.</string>
+</resources>

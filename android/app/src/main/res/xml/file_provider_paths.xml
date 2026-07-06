@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Allow sharing files from external storage (where customer images typically live) -->
+    <external-path
+        name="external_files"
+        path="." />
+
+    <!-- Allow sharing files from app-internal storage -->
+    <files-path
+        name="internal_files"
+        path="." />
+
+    <!-- Allow sharing files from cache -->
+    <cache-path
+        name="cache_files"
+        path="." />
+</paths>
