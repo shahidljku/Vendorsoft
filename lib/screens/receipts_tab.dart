@@ -51,6 +51,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   late TabController _tabController;
   bool _waitingForWhatsApp = false;
   Completer<bool>? _whatsAppCompleter;
+  StreamSubscription<bool>? _messageSentSubscription;
   bool _isAccessibilityEnabled = false;
   Timer? _cooldownTimer;
   bool _isCooldown = false;
@@ -61,6 +62,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     AccessibilityService.initialize();
+    _messageSentSubscription = AccessibilityService.onMessageSent.listen((_) {
+      if (_waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+        _waitingForWhatsApp = false;
+        _whatsAppCompleter!.complete(true);
+      }
+    });
     _tabController = TabController(
       length: 2, 
       vsync: this,
@@ -109,6 +116,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   void dispose() {
     _cooldownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    _messageSentSubscription?.cancel();
     if (_isAccessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
@@ -122,14 +130,43 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       _checkAccessibility();
       if (_waitingForWhatsApp) {
         _waitingForWhatsApp = false;
-        if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-          Future.delayed(const Duration(seconds: 3), () {
-            if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-              _whatsAppCompleter!.complete(true);
-            }
-          });
+        if (!_isAccessibilityEnabled) {
+          _showSendConfirmationDialog();
+        } else {
+          if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+            Future.delayed(const Duration(milliseconds: 1500), () {
+              if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+                _showSendConfirmationDialog();
+              }
+            });
+          }
         }
       }
+    }
+  }
+
+  Future<void> _showSendConfirmationDialog() async {
+    if (!mounted) return;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Receipt Status'),
+        content: const Text('Did you send the receipt in WhatsApp?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No / Cancelled'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Yes, Sent'),
+          ),
+        ],
+      ),
+    );
+    if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+      _whatsAppCompleter?.complete(result ?? false);
     }
   }
 

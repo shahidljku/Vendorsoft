@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'package:excel/excel.dart' hide Border;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/customer.dart';
@@ -241,6 +242,107 @@ class BackupService {
       } catch (rollbackErr) {
         print('Rollback failed: $rollbackErr');
       }
+      return false;
+    }
+  }
+
+  /// Exports/copies the current live Excel database to the backups folder as a timestamped .xlsx file.
+  /// This gives users a clean, simple, zero-headache Excel backup that they can easily open or restore on any device!
+  Future<File?> createExcelBackup(ExcelService excelService) async {
+    try {
+      final backupDir = Directory('/storage/emulated/0/VendSoft/backups');
+      if (!await backupDir.exists()) {
+        await backupDir.create(recursive: true);
+      }
+      final fileName = 'VendSoft_Customers_Backup_${DateFormat('yyyyMMdd_HHmmss').format(DateTime.now())}.xlsx';
+      final file = File('${backupDir.path}/$fileName');
+
+      var excel = Excel.createExcel();
+      String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
+      if (defaultSheet != 'Sheet1') {
+        excel.rename(defaultSheet, 'Sheet1');
+      }
+      Sheet sheet = excel['Sheet1'];
+      sheet.appendRow([
+        TextCellValue('mobile_no'),
+        TextCellValue('custname'),
+        TextCellValue('YesNo'),
+        TextCellValue('Status'),
+        TextCellValue('jpg_Path'),
+        TextCellValue('message'),
+        TextCellValue('vouch_date'),
+        TextCellValue('cust_no'),
+        TextCellValue('bill_no'),
+        TextCellValue('bill_amount'),
+        TextCellValue('cl_balance'),
+        TextCellValue('cm_code'),
+        TextCellValue('cm_name'),
+        TextCellValue('Month_nm'),
+        TextCellValue('SentTime'),
+        TextCellValue('PaymentStatus'),
+        TextCellValue('AmountPaid'),
+        TextCellValue('TransactionId'),
+        TextCellValue('PaymentMethod'),
+        TextCellValue('ReceiptStatus'),
+        TextCellValue('PaymentDate'),
+      ]);
+      for (Customer c in excelService.allCustomers) {
+        sheet.appendRow([
+          TextCellValue(c.mobile),
+          TextCellValue(c.custName),
+          TextCellValue(c.yesNo),
+          TextCellValue(c.status),
+          TextCellValue(c.imagePath),
+          TextCellValue(c.message),
+          TextCellValue(c.vouchDate),
+          TextCellValue(c.custNo),
+          TextCellValue(c.billNo),
+          TextCellValue(c.billAmount),
+          TextCellValue(c.clBalance),
+          TextCellValue(c.cmCode),
+          TextCellValue(c.cmName),
+          TextCellValue(c.monthNm),
+          TextCellValue(c.sentTime),
+          TextCellValue(c.paymentStatus),
+          TextCellValue(c.amountPaid),
+          TextCellValue(c.transactionId),
+          TextCellValue(c.paymentMethod),
+          TextCellValue(c.receiptStatus),
+          TextCellValue(c.paymentDate),
+        ]);
+      }
+      for (String sheetName in excel.tables.keys.toList()) {
+        if (sheetName != 'Sheet1') {
+          excel.delete(sheetName);
+        }
+      }
+      List<int>? bytes = excel.encode();
+      if (bytes != null) {
+        await file.writeAsBytes(bytes);
+        print('Excel backup written successfully to: ${file.path}');
+        return file;
+      }
+      return null;
+    } catch (e) {
+      print('Failed to create Excel backup: $e');
+      return null;
+    }
+  }
+
+  /// Restores customer database directly from an Excel (.xlsx) file picked by the user.
+  /// Simple, transparent, and exactly what users expect when working with spreadsheets!
+  Future<bool> restoreFromExcel({
+    required ExcelService excelService,
+  }) async {
+    try {
+      String? pickedName = await excelService.pickExcel();
+      if (pickedName != null && excelService.allCustomers.isNotEmpty) {
+        await excelService.saveCustomers();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('Failed to restore from Excel: $e');
       return false;
     }
   }

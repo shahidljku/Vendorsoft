@@ -14,4 +14,14 @@
     <cache-path
         name="cache_files"
         path="." />
+
+    <!-- Allow sharing files from app external files dir -->
+    <external-files-path
+        name="external_app_files"
+        path="." />
+
+    <!-- Allow sharing any accessible filesystem path -->
+    <root-path
+        name="root"
+        path="." />
 </paths>

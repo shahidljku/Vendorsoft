@@ -31,7 +31,6 @@ class DashboardTab extends StatefulWidget {
 
 class _DashboardTabState extends State<DashboardTab> {
   String? excelFileName;
-  List<Customer> customers = [];
   Timer? _cooldownTimer;
   bool _isCooldown = false;
   Duration _remainingCooldown = Duration.zero;
@@ -72,7 +71,6 @@ class _DashboardTabState extends State<DashboardTab> {
     if (mounted) {
       setState(() {
         excelFileName = lastName;
-        customers = widget.excelService.allCustomers;
         _isDemoMode = demo;
       });
     }
@@ -88,7 +86,6 @@ class _DashboardTabState extends State<DashboardTab> {
       if (mounted) {
         setState(() {
           excelFileName = name;
-          customers = widget.excelService.allCustomers;
         });
         widget.onFileImported();
       }

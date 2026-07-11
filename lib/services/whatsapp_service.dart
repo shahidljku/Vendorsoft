@@ -32,6 +32,25 @@ class WhatsAppService {
     }
   }
 
+  /// Sends a text message to a WhatsApp contact.
+  /// Opens WhatsApp directly in the chat with the message pre-filled.
+  static Future<bool> sendWhatsAppMessage({
+    required String mobile,
+    required String message,
+    bool useBusinessApp = false,
+  }) async {
+    try {
+      final result = await _channel.invokeMethod('sendMessage', {
+        'mobile': mobile,
+        'message': message,
+        'useBusinessApp': useBusinessApp,
+      });
+      return result == true;
+    } on PlatformException catch (e) {
+      throw WhatsAppException(e.code, e.message ?? 'Unknown error');
+    }
+  }
+
   /// Checks if WhatsApp and/or WhatsApp Business are installed.
   /// Returns a map: {'whatsapp': bool, 'whatsappBusiness': bool}
   static Future<Map<String, bool>> isInstalled() async {

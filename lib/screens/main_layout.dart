@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/settings_service.dart';
 import '../services/excel_service.dart';
-import 'package:excel/excel.dart';
+import 'package:excel/excel.dart' hide Border;
 import 'dashboard_tab.dart';
 import 'logs_tab.dart';
 import 'customers_tab.dart';
@@ -214,6 +214,7 @@ class _MainLayoutState extends State<MainLayout> {
         SettingsTab(
           settingsService: widget.settingsService,
           onThemeChanged: widget.onThemeChanged,
+          excelService: _excelService,
         ),
       ],
     );

@@ -31,6 +31,8 @@ MQIDAQAB
 
   String? _deviceIdCache;
   Map<String, dynamic>? _currentLicenseInfo;
+  String? _cachedLicenseKey;
+  bool? _cachedIsValid;
 
   /// Generate a stable, short Device ID.
   Future<String> getDeviceId() async {
@@ -41,7 +43,6 @@ MQIDAQAB
       androidId = 'UNKNOWN_DEVICE';
     }
 
-    // Hash it and take the first 16 chars to make it nice for sharing
     final bytes = utf8.encode(androidId);
     final digest = sha256.convert(bytes);
     final shortId = digest.toString().substring(0, 16).toUpperCase();
@@ -51,7 +52,7 @@ MQIDAQAB
   }
 
   /// Verifies a license key (base64 encoded JSON containing payload and signature)
-  Future<bool> verifyAndSaveLicense(String licenseKeyBase64) async {
+  Future<bool> verifyLicenseKey(String licenseKeyBase64, {bool saveToStorage = true}) async {
     try {
       final decodedBytes = base64Decode(licenseKeyBase64);
       final jsonStr = utf8.decode(decodedBytes);
@@ -60,17 +61,14 @@ MQIDAQAB
       final payloadStr = licenseObj['payload'];
       final signatureBase64 = licenseObj['signature'];
 
-      // Parse payload
       final payload = jsonDecode(payloadStr);
       final licensedDeviceId = payload['deviceId'];
 
-      // Check device ID match
       final currentDeviceId = await getDeviceId();
       if (licensedDeviceId != currentDeviceId) {
         return false;
       }
 
-      // Verify RSA Signature
       final parser = RSAKeyParser();
       final publicKey = parser.parse(publicKeyString) as RSAPublicKey;
       
@@ -78,28 +76,37 @@ MQIDAQAB
       final isValid = signer.verify(payloadStr, Encrypted.fromBase64(signatureBase64));
 
       if (isValid) {
-        await _storage.write(key: _licenseKeyPref, value: licenseKeyBase64);
+        if (saveToStorage) {
+          await _storage.write(key: _licenseKeyPref, value: licenseKeyBase64);
+        }
+        _cachedLicenseKey = licenseKeyBase64;
+        _cachedIsValid = true;
         _currentLicenseInfo = payload;
         return true;
       }
     } catch (e) {
-      // Invalid format or tampering
-      print('License verification failed: \$e');
+      print('License verification failed: $e');
     }
     return false;
   }
 
+  Future<bool> verifyAndSaveLicense(String licenseKeyBase64) async {
+    return verifyLicenseKey(licenseKeyBase64, saveToStorage: true);
+  }
+
   /// Check if the app is currently licensed on this device
   Future<bool> isLicensed() async {
+    if (_cachedIsValid != null && _cachedIsValid == true && _cachedLicenseKey != null) {
+      return true;
+    }
     final savedKey = await _storage.read(key: _licenseKeyPref);
     if (savedKey == null) {
+      _cachedIsValid = false;
       return false;
     }
 
-    // We verify it again to ensure device ID hasn't changed (e.g. copied APK/data to new phone)
-    final isValid = await verifyAndSaveLicense(savedKey);
+    final isValid = await verifyLicenseKey(savedKey, saveToStorage: false);
     if (!isValid) {
-      // Remove invalid key
       await removeLicense();
     }
     return isValid;
@@ -147,6 +154,8 @@ MQIDAQAB
   Future<void> removeLicense() async {
     await _storage.delete(key: _licenseKeyPref);
     _currentLicenseInfo = null;
+    _cachedLicenseKey = null;
+    _cachedIsValid = false;
   }
 
   /// Check if application is currently in Demo Mode (unlicensed or expired)

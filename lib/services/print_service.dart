@@ -1,6 +1,4 @@
 // ignore_for_file: avoid_print
-import 'dart:typed_data';
-import 'package:flutter/material.dart' hide TextStyle, EdgeInsets, Divider, Column, Row, MainAxisAlignment, CrossAxisAlignment, Container, Border, BorderSide, SizedBox;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';

@@ -3,6 +3,8 @@ import '../services/settings_service.dart';
 import '../services/security_service.dart';
 import '../services/license_service.dart';
 import '../services/accessibility_service.dart';
+import '../services/excel_service.dart';
+import '../services/backup_service.dart';
 import 'package:flutter/services.dart';
 import 'pin_lock_screen.dart';
 import '../widgets/subscription_dialog.dart';
@@ -10,11 +12,13 @@ import '../widgets/subscription_dialog.dart';
 class SettingsTab extends StatefulWidget {
   final SettingsService settingsService;
   final VoidCallback onThemeChanged;
+  final ExcelService? excelService;
 
   const SettingsTab({
     super.key,
     required this.settingsService,
     required this.onThemeChanged,
+    this.excelService,
   });
 
   @override
@@ -228,6 +232,64 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     }
                   }
                   _loadSettings();
+                },
+              ),
+            ],
+          ),
+
+          _buildSettingsGroup(
+            title: 'Database & Backup (Excel)',
+            children: [
+              _buildSettingItem(
+                icon: Icons.backup_table,
+                title: 'Export Customers Excel Backup',
+                subtitle: 'Auto-generates clean .xlsx backup file in Internal Storage > VendSoft > backups',
+                onTap: () async {
+                  if (widget.excelService == null || widget.excelService!.allCustomers.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('No customers loaded to back up.')),
+                    );
+                    return;
+                  }
+                  final file = await BackupService().createExcelBackup(widget.excelService!);
+                  if (file != null) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Excel Backup created:\n${file.path}')),
+                      );
+                    }
+                  } else {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Failed to create Excel backup.')),
+                      );
+                    }
+                  }
+                },
+              ),
+              _buildSettingItem(
+                icon: Icons.restore_page,
+                title: 'Restore Database from Excel (.xlsx)',
+                subtitle: 'Pick any Excel sheet or backup to instantly load and update your customers',
+                onTap: () async {
+                  if (widget.excelService == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Excel service not available.')),
+                    );
+                    return;
+                  }
+                  bool success = await BackupService().restoreFromExcel(excelService: widget.excelService!);
+                  if (mounted) {
+                    if (success) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Restored ${widget.excelService!.allCustomers.length} customers successfully!')),
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Restore cancelled or failed.')),
+                      );
+                    }
+                  }
                 },
               ),
             ],
@@ -449,6 +511,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
             const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
           ],
         ),
+      ),
     );
   }
 

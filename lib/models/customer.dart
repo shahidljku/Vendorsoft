@@ -48,7 +48,7 @@ class Customer {
     this.cmCode = '',
     this.cmName = '',
     this.monthNm = '',
-    required this.sentTime,
+    this.sentTime = '',
     this.lastError = '',
     this.paymentStatus = '',
     this.amountPaid = '',
@@ -58,29 +58,48 @@ class Customer {
     this.paymentDate = '',
   });
 
+  static String _extractCellString(dynamic cell) {
+    if (cell == null) return '';
+    if (cell is String) {
+      if (cell == 'null') return '';
+      return cell.trim();
+    }
+    try {
+      final val = (cell as dynamic).value;
+      if (val == null) return '';
+      final str = val.toString();
+      if (str == 'null') return '';
+      return str.trim();
+    } catch (_) {
+      final str = cell.toString();
+      if (str == 'null') return '';
+      return str.trim();
+    }
+  }
+
   factory Customer.fromRow(List<dynamic> row) {
     return Customer(
-      mobile: row.isNotEmpty ? row[0]?.toString() ?? '' : '',
-      custName: row.length > 1 ? row[1]?.toString() ?? '' : '',
-      yesNo: row.length > 2 ? row[2]?.toString() ?? '' : '',
-      status: row.length > 3 ? row[3]?.toString() ?? '' : '',
-      imagePath: row.length > 4 ? row[4]?.toString() ?? '' : '',
-      message: row.length > 5 ? row[5]?.toString() ?? '' : '',
-      vouchDate: row.length > 6 ? row[6]?.toString() ?? '' : '',
-      custNo: row.length > 7 ? row[7]?.toString() ?? '' : '',
-      billNo: row.length > 8 ? row[8]?.toString() ?? '' : '',
-      billAmount: row.length > 9 ? row[9]?.toString() ?? '' : '',
-      clBalance: row.length > 10 ? row[10]?.toString() ?? '' : '',
-      cmCode: row.length > 11 ? row[11]?.toString() ?? '' : '',
-      cmName: row.length > 12 ? row[12]?.toString() ?? '' : '',
-      monthNm: row.length > 13 ? row[13]?.toString() ?? '' : '',
-      sentTime: row.length > 14 ? row[14]?.toString() ?? '' : '',
-      paymentStatus: (row.length > 15 && row[15]?.value != null) ? row[15]!.value.toString().trim() : '',
-      amountPaid: (row.length > 16 && row[16]?.value != null) ? row[16]!.value.toString().trim() : '',
-      transactionId: (row.length > 17 && row[17]?.value != null) ? row[17]!.value.toString().trim() : '',
-      paymentMethod: (row.length > 18 && row[18]?.value != null) ? row[18]!.value.toString().trim() : '',
-      receiptStatus: (row.length > 19 && row[19]?.value != null) ? row[19]!.value.toString().trim() : '',
-      paymentDate: (row.length > 20 && row[20]?.value != null) ? row[20]!.value.toString().trim() : '',
+      mobile: row.isNotEmpty ? _extractCellString(row[0]) : '',
+      custName: row.length > 1 ? _extractCellString(row[1]) : '',
+      yesNo: row.length > 2 ? _extractCellString(row[2]) : '',
+      status: row.length > 3 ? _extractCellString(row[3]) : '',
+      imagePath: row.length > 4 ? _extractCellString(row[4]) : '',
+      message: row.length > 5 ? _extractCellString(row[5]) : '',
+      vouchDate: row.length > 6 ? _extractCellString(row[6]) : '',
+      custNo: row.length > 7 ? _extractCellString(row[7]) : '',
+      billNo: row.length > 8 ? _extractCellString(row[8]) : '',
+      billAmount: row.length > 9 ? _extractCellString(row[9]) : '',
+      clBalance: row.length > 10 ? _extractCellString(row[10]) : '',
+      cmCode: row.length > 11 ? _extractCellString(row[11]) : '',
+      cmName: row.length > 12 ? _extractCellString(row[12]) : '',
+      monthNm: row.length > 13 ? _extractCellString(row[13]) : '',
+      sentTime: row.length > 14 ? _extractCellString(row[14]) : '',
+      paymentStatus: row.length > 15 ? _extractCellString(row[15]) : '',
+      amountPaid: row.length > 16 ? _extractCellString(row[16]) : '',
+      transactionId: row.length > 17 ? _extractCellString(row[17]) : '',
+      paymentMethod: row.length > 18 ? _extractCellString(row[18]) : '',
+      receiptStatus: row.length > 19 ? _extractCellString(row[19]) : '',
+      paymentDate: row.length > 20 ? _extractCellString(row[20]) : '',
     );
   }
 

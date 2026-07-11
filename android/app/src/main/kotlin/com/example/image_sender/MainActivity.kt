@@ -116,6 +116,16 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARGS", "mobile and imagePath are required", null)
                         }
                     }
+                    "sendMessage" -> {
+                        val mobile = call.argument<String>("mobile")
+                        val message = call.argument<String>("message")
+                        val useBusinessApp = call.argument<Boolean>("useBusinessApp") ?: false
+                        if (mobile != null && message != null) {
+                            sendMessageToWhatsApp(mobile, message, useBusinessApp, result)
+                        } else {
+                            result.error("INVALID_ARGS", "mobile and message are required", null)
+                        }
+                    }
                     "isInstalled" -> {
                         val regular = isPackageInstalled("com.whatsapp")
                         val business = isPackageInstalled("com.whatsapp.w4b")
@@ -372,6 +382,48 @@ class MainActivity : FlutterActivity() {
                 // The "jid" extra opens the specific contact's chat
                 putExtra("jid", "$cleanNumber@s.whatsapp.net")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            startActivity(intent)
+            result.success(true)
+
+        } catch (e: Exception) {
+            result.error("WHATSAPP_ERROR", e.message, null)
+        }
+    }
+
+    private fun sendMessageToWhatsApp(
+        mobile: String,
+        message: String,
+        useBusinessApp: Boolean,
+        result: MethodChannel.Result
+    ) {
+        try {
+            val packageName = if (useBusinessApp) "com.whatsapp.w4b" else "com.whatsapp"
+
+            if (!isPackageInstalled(packageName)) {
+                result.error(
+                    "NOT_INSTALLED",
+                    if (useBusinessApp) "WhatsApp Business is not installed"
+                    else "WhatsApp is not installed",
+                    null
+                )
+                return
+            }
+
+            var cleanNumber = mobile.replace(Regex("[^0-9]"), "")
+            while (cleanNumber.startsWith("0") && cleanNumber.length > 10) {
+                cleanNumber = cleanNumber.substring(1)
+            }
+            if (cleanNumber.length == 10) {
+                cleanNumber = "91$cleanNumber"
+            }
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                setPackage(packageName)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, message)
+                putExtra("jid", "$cleanNumber@s.whatsapp.net")
             }
 
             startActivity(intent)

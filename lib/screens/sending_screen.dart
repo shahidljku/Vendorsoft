@@ -105,11 +105,11 @@ class _SendingScreenState
         // Manual mode: show confirmation dialog
         _showSendConfirmationDialog();
       } else {
-        // Fallback for accessibility if broadcast failed or is delayed
+        // Fallback for accessibility if broadcast failed or user cancelled/encountered error
         if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-          Future.delayed(const Duration(seconds: 3), () {
+          Future.delayed(const Duration(milliseconds: 1500), () {
             if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-              _whatsAppCompleter?.complete(true);
+              _showSendConfirmationDialog();
             }
           });
         }

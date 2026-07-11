@@ -796,6 +796,10 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
             );
           }
         );
+      },
+    );
+  }
+
   Future<void> _showAddCustomerDialog(BuildContext context, [Customer? existingCustomer]) async {
     // Check 50 Customer Demo Limit if adding new customer
     if (existingCustomer == null) {
@@ -892,7 +896,8 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: selectedAgent,
+                            key: ValueKey(selectedAgent),
+                            initialValue: selectedAgent,
                             dropdownColor: const Color(0xFF161B22),
                             decoration: const InputDecoration(labelText: 'Collection Man / Agent', labelStyle: TextStyle(color: Colors.grey)),
                             items: agentList.map((a) => DropdownMenuItem(value: a, child: Text(a, style: const TextStyle(color: Colors.white)))).toList(),
@@ -925,7 +930,8 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: selectedItem,
+                            key: ValueKey(selectedItem),
+                            initialValue: selectedItem,
                             dropdownColor: const Color(0xFF161B22),
                             decoration: const InputDecoration(labelText: 'Select Item / Product', labelStyle: TextStyle(color: Colors.grey)),
                             items: ['None', ...savedItems].map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(color: Colors.white)))).toList(),

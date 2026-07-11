@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_print
+import 'dart:async';
 import '../models/customer.dart';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';
@@ -169,12 +170,38 @@ class ExcelService extends ChangeNotifier {
     return pending.sublist(0, limit);
   }
 
-  /// Saves all customers back to the ORIGINAL Excel file via SAF.
-  /// Returns true on success, false on failure.
-  Future<bool> saveCustomers(
-      List<Customer> customers,
-      ) async {
+  Future<bool>? _activeSaveFuture;
 
+  /// Saves all customers back to the ORIGINAL Excel file via SAF.
+  /// Uses a mutex lock to serialize concurrent save requests to prevent file corruption.
+  /// Returns true on success, false on failure.
+  Future<bool> saveCustomers([List<Customer>? customers]) async {
+    while (_activeSaveFuture != null) {
+      try {
+        await _activeSaveFuture;
+      } catch (_) {}
+    }
+
+    final completer = Completer<bool>();
+    _activeSaveFuture = completer.future;
+
+    try {
+      final targetCustomers = customers ?? allCustomers;
+      final result = await _executeSave(targetCustomers);
+      completer.complete(result);
+      return result;
+    } catch (e) {
+      print('ExcelService save error: $e');
+      if (!completer.isCompleted) completer.complete(false);
+      return false;
+    } finally {
+      if (_activeSaveFuture == completer.future) {
+        _activeSaveFuture = null;
+      }
+    }
+  }
+
+  Future<bool> _executeSave(List<Customer> customers) async {
     if (_documentUri == null) {
       print('ExcelService save error: no document URI');
       return false;
