@@ -1,11 +1,12 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'sending_screen.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
-import 'package:permission_handler/permission_handler.dart';
+import '../services/cooldown_service.dart';
 
 class BillsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -32,7 +33,9 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   bool _isSearching = false;
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isAccessibilityEnabled = false;
-  bool _isBatteryOptimized = false;
+  Timer? _cooldownTimer;
+  bool _isCooldown = false;
+  Duration _remainingCooldown = Duration.zero;
 
   @override
   void initState() {
@@ -40,10 +43,28 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     _statusFilter = widget.initialFilter ?? 'All';
     WidgetsBinding.instance.addObserver(this);
     _checkAccessibility();
+    _startCooldownTimer();
+  }
+
+  void _startCooldownTimer() {
+    _checkCooldown();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
+  }
+
+  Future<void> _checkCooldown() async {
+    bool active = await CooldownService().isCooldownActive();
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
+      setState(() {
+        _isCooldown = active;
+        _remainingCooldown = remaining;
+      });
+    }
   }
 
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _searchCtrl.dispose();
     super.dispose();
@@ -58,11 +79,9 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
   void _checkAccessibility() async {
     bool enabled = await AccessibilityService.isEnabled();
-    bool batteryOptimized = !(await Permission.ignoreBatteryOptimizations.isGranted);
     if (mounted) {
       setState(() {
         _isAccessibilityEnabled = enabled;
-        _isBatteryOptimized = batteryOptimized;
       });
     }
   }
@@ -83,11 +102,14 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     List<Customer> result = widget.excelService.allCustomers;
     if (_statusFilter != 'All') {
       result = result.where((c) {
-        if (_statusFilter == 'Pending Bills') return c.status.toLowerCase() == 'pending' || c.status == 'Waiting';
-        if (_statusFilter == 'Sent Bills') return c.status == 'Sent' || c.status == 'Message Sent';
-        if (_statusFilter == 'Failed Bills') return c.status == 'Failed';
-        if (_statusFilter == 'Unpaid Bills') return c.paymentStatus != 'Successful';
-        if (_statusFilter == 'Receipts Pending') return c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent';
+        String st = c.status.trim().toLowerCase();
+        String pst = c.paymentStatus.trim().toLowerCase();
+        String rst = c.receiptStatus.trim().toLowerCase();
+        if (_statusFilter == 'Pending Bills') return st == 'pending' || st == 'waiting' || st == 'processing';
+        if (_statusFilter == 'Sent Bills') return st == 'sent' || st == 'message sent';
+        if (_statusFilter == 'Failed Bills') return st == 'failed';
+        if (_statusFilter == 'Unpaid Bills') return pst != 'successful' && !pst.contains('success') && pst != 'paid';
+        if (_statusFilter == 'Receipts Pending') return (pst == 'successful' || pst.contains('success') || pst == 'paid') && rst != 'sent';
         return true;
       }).toList();
     }
@@ -170,11 +192,15 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         builder: (context, _) {
           List<Customer> customers = filteredCustomers;
           int allCount = widget.excelService.allCustomers.length;
-          int pendingBillsCount = widget.excelService.allCustomers.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').length;
-          int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Failed').length;
-          int sentBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Sent' || c.status == 'Message Sent').length;
-          int unpaidCount = widget.excelService.allCustomers.where((c) => c.paymentStatus != 'Successful').length;
-          int receiptPendingCount = widget.excelService.allCustomers.where((c) => c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent').length;
+          int pendingBillsCount = widget.excelService.allCustomers.where((c) {
+            String st = c.status.trim().toLowerCase();
+            return st == 'pending' || st == 'waiting' || st == 'processing';
+          }).length;
+          int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status.trim().toLowerCase() == 'failed').length;
+          int sentBillsCount = widget.excelService.allCustomers.where((c) {
+            String st = c.status.trim().toLowerCase();
+            return st == 'sent' || st == 'message sent';
+          }).length;
 
           // Compute unique collection men
           Set<String> cmNames = {'All'};
@@ -254,8 +280,10 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                     ),
                   ),
                   TextButton(
-                    onPressed: () {
-                      AccessibilityService.openSettings();
+                    onPressed: () async {
+                      await AccessibilityService.showGuidanceDialog(context);
+                      bool check = await AccessibilityService.isEnabled();
+                      if (mounted) setState(() { _isAccessibilityEnabled = check; });
                     },
                     child: const Text('ENABLE'),
                   ),
@@ -291,18 +319,45 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
       );
     }),
     floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isAccessibilityEnabled ? () {
+        onPressed: _isCooldown ? () {
+          _showCooldownDialog(context);
+        } : (_isAccessibilityEnabled ? () {
           _runPreflightChecks(context);
-        } : () {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Please enable accessibility first')),
-          );
-          AccessibilityService.openSettings();
-        },
-        backgroundColor: _isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey,
+        } : () async {
+          await AccessibilityService.showGuidanceDialog(context);
+          bool check = await AccessibilityService.isEnabled();
+          if (mounted) setState(() { _isAccessibilityEnabled = check; });
+        }),
+        backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
         foregroundColor: Colors.black,
-        icon: const Icon(Icons.send),
-        label: const Text('Send Bills'),
+        icon: Icon(_isCooldown ? Icons.timer : Icons.send),
+        label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills'),
+      ),
+    );
+  }
+
+  void _showCooldownDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor,
+        title: const Row(
+          children: [
+            Icon(Icons.timer_outlined, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Cooldown Active', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Text(
+          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF00E676))),
+          ),
+        ],
       ),
     );
   }
@@ -339,14 +394,21 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
   Widget _buildCustomerItem(BuildContext context, Customer customer, int index) {
     Color billStatusColor = Colors.grey;
-    if (customer.status == 'Sent') billStatusColor = const Color(0xFF00E676);
-    else if (customer.status == 'Failed') billStatusColor = Colors.red;
-    else if (customer.status.toLowerCase() == 'pending') billStatusColor = Colors.orange;
+    String st = customer.status.trim().toLowerCase();
+    if (st == 'sent' || st == 'message sent') {
+      billStatusColor = const Color(0xFF00E676);
+    } else if (st == 'failed') {
+      billStatusColor = Colors.red;
+    } else if (st == 'pending' || st == 'waiting' || st == 'processing') {
+      billStatusColor = Colors.orange;
+    }
 
     Color receiptStatusColor = Colors.grey;
     String receiptText = '';
-    if (customer.paymentStatus == 'Successful') {
-      if (customer.receiptStatus == 'Sent') {
+    String pst = customer.paymentStatus.trim().toLowerCase();
+    String rst = customer.receiptStatus.trim().toLowerCase();
+    if (pst == 'successful' || pst.contains('success') || pst == 'paid') {
+      if (rst == 'sent') {
         receiptStatusColor = const Color(0xFF00E676);
         receiptText = 'Receipt Sent';
       } else {
@@ -427,7 +489,9 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                       style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
                     ),
                     const SizedBox(height: 6),
-                    Row(
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
                       children: [
                         buildBadge('Bill: ${customer.status}', billStatusColor),
                         buildBadge(receiptText, receiptStatusColor),
@@ -694,7 +758,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: paymentMethod,
+                      initialValue: paymentMethod,
                       dropdownColor: Theme.of(context).cardColor,
                       decoration: const InputDecoration(labelText: 'Payment Method', labelStyle: TextStyle(color: Colors.grey)),
                       items: ['Online', 'Cash'].map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(color: Colors.white)))).toList(),
@@ -846,6 +910,10 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
   void _showStartOptions(BuildContext context) async {
     int defaultLimit = await widget.settingsService.getDefaultSendLimit();
+    int remainingQuota = await CooldownService().getRemainingQuota();
+    if (defaultLimit > remainingQuota && remainingQuota > 0) {
+      defaultLimit = remainingQuota;
+    }
     TextEditingController limitCtrl = TextEditingController(text: defaultLimit.toString());
     bool setAsDefault = false;
     
@@ -869,18 +937,18 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                         controller: limitCtrl,
                         keyboardType: TextInputType.number,
                         style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: 'Send Limit (Required)',
-                          labelStyle: TextStyle(color: Colors.grey),
-                          enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
+                        decoration: InputDecoration(
+                          labelText: 'Send Limit (Max $remainingQuota)',
+                          labelStyle: const TextStyle(color: Colors.grey),
+                          enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                          focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
                         ),
                         onChanged: (val) {
                           setSheetState(() {
                             int? parsed = int.tryParse(val);
-                            if (parsed != null && parsed > 30) {
-                              limitCtrl.text = '30';
-                              limitCtrl.selection = TextSelection.fromPosition(const TextPosition(offset: 2));
+                            if (parsed != null && parsed > remainingQuota) {
+                              limitCtrl.text = remainingQuota.toString();
+                              limitCtrl.selection = TextSelection.fromPosition(TextPosition(offset: limitCtrl.text.length));
                             }
                           });
                         },
@@ -909,7 +977,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                         title: Text('Start Now', style: TextStyle(color: limitCtrl.text.isEmpty ? Colors.grey : Colors.black, fontWeight: FontWeight.bold)),
                         onTap: limitCtrl.text.isEmpty ? null : () async {
                           int limit = int.tryParse(limitCtrl.text) ?? defaultLimit;
-                          if (limit > 50) limit = 50;
+                          if (limit > remainingQuota) limit = remainingQuota;
                           
                           if (setAsDefault) {
                             await widget.settingsService.setDefaultSendLimit(limit);

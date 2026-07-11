@@ -7,16 +7,13 @@ class SettingsService extends ChangeNotifier {
   static const _keyDefaultSendLimit = 'defaultSendLimit';
   static const _keyDelayBetweenCustomers = 'delayBetweenCustomers';
   static const _keyDelayBeforeNext = 'delayBeforeNext';
-  static const _keyEnableLogs = 'enableLogs';
   static const _keyThemeMode = 'themeMode';
   static const _keyAutoSendEnabled = 'autoSendEnabled';
   static const _keyIdleTimeout = 'idleTimeout';
   static const _keyPinHash = 'pinHash';
   static const _keyPinSalt = 'pinSalt';
   static const _keyPinEnabled = 'pinEnabled';
-  static const _keyScreenshotProtection = 'screenshotProtection';
   static const _keyUseWhatsAppBusiness = 'useWhatsAppBusiness';
-  static const _keySleepScheduleEnabled = 'sleepScheduleEnabled';
   static const _keySleepStartTime = 'sleepStartTime';
   static const _keySleepEndTime = 'sleepEndTime';
   static const _keyLastExcelUri = 'lastExcelUri';
@@ -33,7 +30,7 @@ class SettingsService extends ChangeNotifier {
 
   Future<int> getDefaultSendLimit() async {
     await _init();
-    return _prefs!.getInt(_keyDefaultSendLimit) ?? 50;
+    return _prefs!.getInt(_keyDefaultSendLimit) ?? 30;
   }
 
   Future<void> setDefaultSendLimit(int value) async {

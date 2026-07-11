@@ -7,6 +7,7 @@ import 'package:screenshot/screenshot.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/settings_service.dart';
+import '../services/cooldown_service.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../services/whatsapp_service.dart';
 import '../services/accessibility_service.dart';
@@ -50,6 +51,9 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   bool _waitingForWhatsApp = false;
   Completer<bool>? _whatsAppCompleter;
   bool _isAccessibilityEnabled = false;
+  Timer? _cooldownTimer;
+  bool _isCooldown = false;
+  Duration _remainingCooldown = Duration.zero;
 
   @override
   void initState() {
@@ -63,6 +67,23 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     );
     _checkAccessibility();
     _refreshQueue();
+    _startCooldownTimer();
+  }
+
+  void _startCooldownTimer() {
+    _checkCooldown();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
+  }
+
+  Future<void> _checkCooldown() async {
+    bool active = await CooldownService().isCooldownActive();
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
+      setState(() {
+        _isCooldown = active;
+        _remainingCooldown = remaining;
+      });
+    }
   }
 
 
@@ -85,7 +106,11 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    if (_isAccessibilityEnabled) {
+      AccessibilityService.setAutoSendMode(false);
+    }
     _tabController.dispose();
     super.dispose();
   }
@@ -97,7 +122,11 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       if (_waitingForWhatsApp) {
         _waitingForWhatsApp = false;
         if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-          _whatsAppCompleter!.complete(true);
+          Future.delayed(const Duration(seconds: 3), () {
+            if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+              _whatsAppCompleter!.complete(true);
+            }
+          });
         }
       }
     }
@@ -208,9 +237,14 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                   children: [
                     const Icon(Icons.receipt, color: Color(0xFF02295B), size: 36),
                     const SizedBox(width: 12),
-                    Text(
-                      businessName.isNotEmpty ? businessName : 'Vendor Software',
-                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          businessName.isNotEmpty ? businessName : 'Vendor Software',
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -279,7 +313,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   void _runPreflightChecks(BuildContext context) async {
     bool isAccessible = await AccessibilityService.isEnabled();
-    if (!isAccessible && mounted) {
+    if (!isAccessible && context.mounted) {
       bool? proceed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
@@ -311,6 +345,10 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   void _showStartOptions(BuildContext context) async {
     int defaultLimit = await widget.settingsService.getDefaultSendLimit();
+    int remainingQuota = await CooldownService().getRemainingQuota();
+    if (defaultLimit > remainingQuota && remainingQuota > 0) {
+      defaultLimit = remainingQuota;
+    }
     TextEditingController limitCtrl = TextEditingController(text: defaultLimit.toString());
     bool setAsDefault = false;
     
@@ -334,18 +372,18 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                         controller: limitCtrl,
                         keyboardType: TextInputType.number,
                         style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          labelText: 'Send Limit (Required)',
-                          labelStyle: TextStyle(color: Colors.grey),
-                          enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                          focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
+                        decoration: InputDecoration(
+                          labelText: 'Send Limit (Max $remainingQuota)',
+                          labelStyle: const TextStyle(color: Colors.grey),
+                          enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                          focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
                         ),
                         onChanged: (val) {
                           setSheetState(() {
                             int? parsed = int.tryParse(val);
-                            if (parsed != null && parsed > 30) {
-                              limitCtrl.text = '30';
-                              limitCtrl.selection = TextSelection.fromPosition(const TextPosition(offset: 2));
+                            if (parsed != null && parsed > remainingQuota) {
+                              limitCtrl.text = remainingQuota.toString();
+                              limitCtrl.selection = TextSelection.fromPosition(TextPosition(offset: limitCtrl.text.length));
                             }
                           });
                         },
@@ -374,7 +412,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                         title: Text('Start Now', style: TextStyle(color: limitCtrl.text.isEmpty ? Colors.grey : Colors.black, fontWeight: FontWeight.bold)),
                         onTap: limitCtrl.text.isEmpty ? null : () async {
                           int limit = int.tryParse(limitCtrl.text) ?? defaultLimit;
-                          if (limit > 30) limit = 30;
+                          if (limit > remainingQuota) limit = remainingQuota;
                           if (setAsDefault) {
                             await widget.settingsService.setDefaultSendLimit(limit);
                           }
@@ -475,6 +513,18 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         if (sent) {
           customer.receiptStatus = 'Sent';
           await LogService().writeLog(customer.mobile, "Receipt Sent");
+          await CooldownService().recordMessageSent();
+          if (await CooldownService().isCooldownActive()) {
+            if (mounted) {
+              setState(() {
+                _isSending = false;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Cooldown limit reached (30 messages). Pausing sending.')),
+              );
+            }
+            break;
+          }
         } else {
           throw Exception("Timeout or failed to send");
         }
@@ -484,6 +534,8 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
       await widget.excelService.saveCustomers(widget.excelService.allCustomers);
 
+      if (!_isSending || !mounted) break;
+
       if (mounted) {
         setState(() {
           _currentIndex++;
@@ -492,13 +544,17 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       sentInSession++;
       
       if (_currentIndex < _pendingReceipts.length && sentInSession < limit) {
-        int delayMs = await widget.settingsService.getDelayBetweenCustomers();
+        int delayMs = CooldownService.getJitterDelayMilliseconds();
         int remainingSeconds = (delayMs / 1000).round();
         while (remainingSeconds > 0 && _isSending) {
           await Future.delayed(const Duration(seconds: 1));
           remainingSeconds--;
         }
       }
+    }
+
+    if (_isAccessibilityEnabled) {
+      await AccessibilityService.setAutoSendMode(false);
     }
 
     if (mounted) {
@@ -552,7 +608,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: paymentMethod,
+                      initialValue: paymentMethod,
                       dropdownColor: Theme.of(context).cardColor,
                       decoration: const InputDecoration(labelText: 'Payment Method', labelStyle: TextStyle(color: Colors.grey)),
                       items: ['Online', 'Cash'].map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(color: Colors.white)))).toList(),
@@ -562,7 +618,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: paymentStatus,
+                      initialValue: paymentStatus,
                       dropdownColor: Theme.of(context).cardColor,
                       decoration: const InputDecoration(labelText: 'Payment Status', labelStyle: TextStyle(color: Colors.grey)),
                       items: ['Successful', 'Unpaid'].map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(color: Colors.white)))).toList(),
@@ -884,20 +940,47 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       ),
       floatingActionButton: _pendingReceipts.isNotEmpty && !_isSending
           ? FloatingActionButton.extended(
-              onPressed: _isAccessibilityEnabled ? () {
+              onPressed: _isCooldown ? () {
+                _showCooldownDialog(context);
+              } : (_isAccessibilityEnabled ? () {
                 _runPreflightChecks(context);
-              } : () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enable accessibility first')),
-                );
-                AccessibilityService.openSettings();
-              },
-              backgroundColor: _isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey,
+              } : () async {
+                await AccessibilityService.showGuidanceDialog(context);
+                bool check = await AccessibilityService.isEnabled();
+                if (mounted) setState(() { _isAccessibilityEnabled = check; });
+              }),
+              backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
               foregroundColor: Colors.black,
-              icon: const Icon(Icons.send),
-              label: const Text('Send Receipts'),
+              icon: Icon(_isCooldown ? Icons.timer : Icons.send),
+              label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Receipts'),
             )
           : null,
+    );
+  }
+
+  void _showCooldownDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor,
+        title: const Row(
+          children: [
+            Icon(Icons.timer_outlined, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Cooldown Active', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Text(
+          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF00E676))),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -16,6 +16,10 @@ import java.io.File
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
+import android.app.AlarmManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 
 class MainActivity : FlutterActivity() {
 
@@ -30,6 +34,18 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = NotificationChannel(
+                "cooldown_channel",
+                "Batch Cooldown",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for when WhatsApp sending cooldown expires"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
 
         // ── Accessibility Message Sent Receiver ──
         val receiver = object : BroadcastReceiver() {
@@ -125,6 +141,14 @@ class MainActivity : FlutterActivity() {
                         startActivity(intent)
                         result.success(true)
                     }
+                    "openAppInfo" -> {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", packageName, null)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    }
                     "setAutoSendMode" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
                         ImageSenderAccessibilityService.autoSendEnabled = enabled
@@ -147,6 +171,23 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 } else {
                     result.notImplemented()
+                }
+            }
+
+        // ── Cooldown Notification Channel ──
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.example.image_sender/cooldown")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "scheduleNotification" -> {
+                        val seconds = call.argument<Int>("seconds") ?: 3600
+                        scheduleCooldownAlarm(seconds)
+                        result.success(true)
+                    }
+                    "cancelNotification" -> {
+                        cancelCooldownAlarm()
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
                 }
             }
     }
@@ -313,6 +354,11 @@ class MainActivity : FlutterActivity() {
             // Clean the phone number — remove spaces, dashes, plus signs, and any trailing decimals like .0
             var cleanNumber = mobile.replace(Regex("[^0-9]"), "")
             
+            // Strip leading zeros if present (e.g., 09876543210 -> 9876543210)
+            while (cleanNumber.startsWith("0") && cleanNumber.length > 10) {
+                cleanNumber = cleanNumber.substring(1)
+            }
+            
             // If the number is exactly 10 digits, assume India (+91)
             // WhatsApp JID requires the country code to work
             if (cleanNumber.length == 10) {
@@ -374,6 +420,58 @@ class MainActivity : FlutterActivity() {
             }
         }
         return false
+    }
+
+    // ══════════════════════════════════════════
+    // ── Cooldown Alarm Methods ──
+    // ══════════════════════════════════════════
+
+    private fun scheduleCooldownAlarm(seconds: Int) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "cooldown_channel",
+                "Batch Cooldown",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for when WhatsApp sending cooldown expires"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, CooldownAlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            2001,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val triggerTime = System.currentTimeMillis() + (seconds * 1000L)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            }
+        } catch (e: SecurityException) {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+        }
+    }
+
+    private fun cancelCooldownAlarm() {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, CooldownAlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            2001,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(pendingIntent)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(2001)
     }
 
     override fun onDestroy() {

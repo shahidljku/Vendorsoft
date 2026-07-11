@@ -182,6 +182,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      themeMode: _themeMode,
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFF00E676), // Neon green
         useMaterial3: true,

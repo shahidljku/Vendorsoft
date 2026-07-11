@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/settings_service.dart';
+import '../services/cooldown_service.dart';
 
 class DashboardTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -28,8 +30,13 @@ class DashboardTab extends StatefulWidget {
 class _DashboardTabState extends State<DashboardTab> {
   String? excelFileName;
   List<Customer> customers = [];
+  Timer? _cooldownTimer;
+  bool _isCooldown = false;
+  Duration _remainingCooldown = Duration.zero;
+
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     super.dispose();
   }
 
@@ -37,6 +44,23 @@ class _DashboardTabState extends State<DashboardTab> {
   void initState() {
     super.initState();
     _initPreloadedData();
+    _startCooldownTimer();
+  }
+
+  void _startCooldownTimer() {
+    _checkCooldown();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
+  }
+
+  Future<void> _checkCooldown() async {
+    bool active = await CooldownService().isCooldownActive();
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
+      setState(() {
+        _isCooldown = active;
+        _remainingCooldown = remaining;
+      });
+    }
   }
 
   Future<void> _initPreloadedData() async {
@@ -83,8 +107,14 @@ class _DashboardTabState extends State<DashboardTab> {
         builder: (context, _) {
           List<Customer> currentCustomers = widget.excelService.allCustomers;
           int total = currentCustomers.length;
-          int sent = currentCustomers.where((c) => c.status == 'Sent').length;
-          int pending = currentCustomers.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Processing' || c.status == 'Waiting').length;
+          int sent = currentCustomers.where((c) {
+            String st = c.status.trim().toLowerCase();
+            return st == 'sent' || st == 'message sent';
+          }).length;
+          int pending = currentCustomers.where((c) {
+            String st = c.status.trim().toLowerCase();
+            return st == 'pending' || st == 'processing' || st == 'waiting';
+          }).length;
 
 
           double progress = total > 0 ? (sent / total) : 0.0;
@@ -199,19 +229,19 @@ class _DashboardTabState extends State<DashboardTab> {
                   children: [
                     Expanded(
                       child: _buildQuickAction(
-                        'Send Bills',
-                        Icons.send_rounded,
-                        const Color(0xFF00E676),
-                        () => widget.onNavigateToQueue('Pending Bills'),
+                        _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills',
+                        _isCooldown ? Icons.timer : Icons.send_rounded,
+                        _isCooldown ? Colors.orange : const Color(0xFF00E676),
+                        _isCooldown ? () => _showCooldownDialog(context) : () => widget.onNavigateToQueue('Pending Bills'),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _buildQuickAction(
-                        'Send Receipts',
-                        Icons.receipt_long,
-                        Colors.blue,
-                        () => widget.onNavigateToReceipts('Pending'),
+                        _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Receipts',
+                        _isCooldown ? Icons.timer : Icons.receipt_long,
+                        _isCooldown ? Colors.orange : Colors.blue,
+                        _isCooldown ? () => _showCooldownDialog(context) : () => widget.onNavigateToReceipts('Pending'),
                       ),
                     ),
                   ],
@@ -223,7 +253,33 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
-  Widget _buildQuickAction(String title, IconData icon, Color color, VoidCallback onTap, {bool isWide = false}) {
+  void _showCooldownDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor,
+        title: const Row(
+          children: [
+            Icon(Icons.timer_outlined, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Cooldown Active', style: TextStyle(color: Colors.white)),
+          ],
+        ),
+        content: Text(
+          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF00E676))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickAction(String title, IconData icon, Color color, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -238,7 +294,13 @@ class _DashboardTabState extends State<DashboardTab> {
           children: [
             Icon(icon, color: color, size: 24),
             const SizedBox(width: 8),
-            Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+            Expanded(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
+              ),
+            ),
           ],
         ),
       ),
@@ -275,7 +337,11 @@ class _DashboardTabState extends State<DashboardTab> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+              ),
             ],
           ),
         ),

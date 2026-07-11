@@ -50,7 +50,7 @@ class ImageSenderAccessibilityService : AccessibilityService() {
                 // Wait briefly then return to Image Sender
                 android.os.Handler(mainLooper).postDelayed({
                     val broadcastIntent = Intent("com.example.image_sender.MESSAGE_SENT")
-                    broadcastIntent.setPackage(packageName)
+                    broadcastIntent.setPackage(applicationContext.packageName)
                     sendBroadcast(broadcastIntent)
                     returnToImageSender()
                     sendPressed = false
@@ -99,6 +99,7 @@ class ImageSenderAccessibilityService : AccessibilityService() {
             val intent = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
             startActivity(intent)
         } catch (e: Exception) {

@@ -1,6 +1,4 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import '../services/settings_service.dart';
 import '../services/security_service.dart';
 import '../services/license_service.dart';
@@ -26,17 +24,12 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   late SecurityService _securityService;
   bool _pinEnabled = false;
   bool _hasPinSet = false;
-  bool _screenshotProtection = false;
-  bool _sleepScheduleEnabled = false;
   bool _autoSendEnabled = false;
   bool _useWhatsAppBusiness = false;
-  bool _enableLogs = true;
   int _sendLimit = 50;
   int _delayBetween = 10000;
   int _delayNext = 10000;
   
-  String _sleepStartTime = '22:00';
-  String _sleepEndTime = '08:00';
   bool _isLoading = true;
   bool _waitingForAccessibility = false;
 
@@ -69,32 +62,16 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   Future<void> _loadSettings() async {
     _pinEnabled = await _securityService.isPinEnabled();
     _hasPinSet = await _securityService.hasPinSet();
-    _screenshotProtection = await widget.settingsService.getScreenshotProtection();
-    _sleepScheduleEnabled = await widget.settingsService.getSleepScheduleEnabled();
     _autoSendEnabled = await widget.settingsService.getAutoSendEnabled();
     _useWhatsAppBusiness = await widget.settingsService.getUseWhatsAppBusiness();
-    _enableLogs = await widget.settingsService.getEnableLogs();
     
     _sendLimit = await widget.settingsService.getDefaultSendLimit();
     _delayBetween = await widget.settingsService.getDelayBetweenCustomers();
     _delayNext = await widget.settingsService.getDelayBeforeNext();
 
-    _sleepStartTime = await widget.settingsService.getSleepStartTime();
-    _sleepEndTime = await widget.settingsService.getSleepEndTime();
-
     setState(() {
       _isLoading = false;
     });
-  }
-
-  TimeOfDay _parseTime(String timeString) {
-    try {
-      final parts = timeString.split(':');
-      if (parts.length == 2) {
-        return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
-      }
-    } catch (_) {}
-    return const TimeOfDay(hour: 0, minute: 0);
   }
 
   @override
@@ -127,30 +104,10 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                 onChanged: (val) async {
                   if (val) {
                     bool isAccessible = await AccessibilityService.isEnabled();
-                    if (!isAccessible && context.mounted) {
-                      showDialog(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          backgroundColor: Theme.of(context).cardColor,
-                          title: const Text('Accessibility Required', style: TextStyle(color: Colors.white)),
-                          content: const Text('To use Auto Send, you must enable the Vendor Soft Accessibility Service in your device settings.', style: TextStyle(color: Colors.white70)),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context),
-                              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-                            ),
-                            ElevatedButton(
-                              onPressed: () {
-                                _waitingForAccessibility = true;
-                                Navigator.pop(context);
-                                AccessibilityService.openSettings();
-                              },
-                              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
-                              child: const Text('Open Settings', style: TextStyle(color: Colors.black)),
-                            ),
-                          ],
-                        ),
-                      );
+                    if (!isAccessible) {
+                      if (!context.mounted) return;
+                      _waitingForAccessibility = true;
+                      await AccessibilityService.showGuidanceDialog(context);
                       return;
                     }
                   }
@@ -388,7 +345,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       value: value,
       onChanged: onChanged,
       activeTrackColor: const Color(0xFF00E676).withValues(alpha: 0.5),
-      activeColor: const Color(0xFF00E676),
+      activeThumbColor: const Color(0xFF00E676),
       title: Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
       subtitle: Text(subtitle, style: TextStyle(color: Colors.grey.withValues(alpha: 0.8), fontSize: 13)),
       secondary: Icon(icon, color: Colors.grey, size: 24),

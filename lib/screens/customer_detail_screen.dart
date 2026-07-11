@@ -276,17 +276,11 @@ class CustomerDetailScreen extends StatelessWidget {
   }
 
   Color _getStatusColor(String status) {
-    switch (status) {
-      case "Sent":
-        return Colors.green;
-      case "Processing":
-        return Colors.orange;
-      case "Waiting":
-        return Colors.blue;
-      case "Failed":
-        return Colors.red;
-      default:
-        return Colors.grey;
-    }
+    String st = status.trim().toLowerCase();
+    if (st == 'sent' || st == 'message sent') return const Color(0xFF00E676);
+    if (st == 'processing') return Colors.orange;
+    if (st == 'waiting' || st == 'pending') return Colors.blue;
+    if (st == 'failed') return Colors.red;
+    return Colors.grey;
   }
 }

@@ -1,6 +1,4 @@
 // ignore_for_file: avoid_print
-import 'dart:typed_data';
-
 import '../models/customer.dart';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';

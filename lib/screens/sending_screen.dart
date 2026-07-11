@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/customer.dart';
@@ -11,6 +10,7 @@ import '../services/excel_service.dart';
 import '../services/whatsapp_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
+import '../services/cooldown_service.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 class SendingScreen extends StatefulWidget {
@@ -76,32 +76,19 @@ class _SendingScreenState
     _loadSettings();
   }
 
-  TimeOfDay _parseTime(String timeString, TimeOfDay defaultTime) {
-    try {
-      final parts = timeString.split(':');
-      if (parts.length == 2) {
-        return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
-      }
-    } catch (e) {
-      // ignore
-    }
-    return defaultTime;
-  }
-
   Future<void> _loadSettings() async {
     final settingsService = SettingsService();
     _useWhatsAppBusiness = await settingsService.getUseWhatsAppBusiness();
 
   }
 
-  bool _isSleepTime() {
-    return false;
-  }
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messageSentSubscription?.cancel();
+    if (_accessibilityEnabled) {
+      AccessibilityService.setAutoSendMode(false);
+    }
     super.dispose();
   }
 
@@ -118,9 +105,13 @@ class _SendingScreenState
         // Manual mode: show confirmation dialog
         _showSendConfirmationDialog();
       } else {
-        // Fallback for accessibility if broadcast failed
+        // Fallback for accessibility if broadcast failed or is delayed
         if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-           _whatsAppCompleter?.complete(true);
+          Future.delayed(const Duration(seconds: 3), () {
+            if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+              _whatsAppCompleter?.complete(true);
+            }
+          });
         }
       }
     }
@@ -164,6 +155,10 @@ class _SendingScreenState
 
     if (await Permission.storage.isDenied) {
       await Permission.storage.request();
+    }
+
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
     }
 
   }
@@ -258,6 +253,18 @@ class _SendingScreenState
             customer.sentTime = DateTime.now().toString();
           });
           await logService.writeLog(customer.mobile, "Sent");
+          await CooldownService().recordMessageSent();
+          if (await CooldownService().isCooldownActive()) {
+            if (mounted) {
+              setState(() {
+                isSending = false;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Cooldown limit reached (30 messages). Pausing sending.')),
+              );
+            }
+            break;
+          }
         } else {
           throw Exception("User cancelled in WhatsApp");
         }
@@ -281,6 +288,8 @@ class _SendingScreenState
         widget.excelService.allCustomers,
       );
 
+      if (!isSending || _sendingSessionId != sessionId || !mounted) break;
+
       if (!saved && customer.status == "Sent") {
         setState(() {
           customer.status = "Failed";
@@ -292,31 +301,33 @@ class _SendingScreenState
       // Advance to next customer
       currentIndex++;
 
-      // Fetch dynamic delay from settings
-      int delayMs = await SettingsService().getDelayBetweenCustomers();
-      int remainingSeconds = (delayMs / 1000).round();
-      
-      while (remainingSeconds > 0 && isSending && _sendingSessionId == sessionId) {
-        if (isPaused) {
-          _pauseCompleter = Completer<void>();
-          await _pauseCompleter!.future;
-          if (!isSending || _sendingSessionId != sessionId) break;
-        }
+      // Fetch dynamic jitter delay (5 to 10 seconds)
+      if (currentIndex < widget.queue.length && isSending && _sendingSessionId == sessionId) {
+        int delayMs = CooldownService.getJitterDelayMilliseconds();
+        int remainingSeconds = (delayMs / 1000).round();
+        
+        while (remainingSeconds > 0 && isSending && _sendingSessionId == sessionId) {
+          if (isPaused) {
+            _pauseCompleter = Completer<void>();
+            await _pauseCompleter!.future;
+            if (!isSending || _sendingSessionId != sessionId) break;
+          }
 
-        if (mounted) {
-          setState(() {
-            _countdownSeconds = remainingSeconds;
-          });
+          if (mounted) {
+            setState(() {
+              _countdownSeconds = remainingSeconds;
+            });
+          }
+          
+          await Future.delayed(const Duration(seconds: 1));
+          remainingSeconds--;
         }
         
-        await Future.delayed(const Duration(seconds: 1));
-        remainingSeconds--;
-      }
-      
-      if (mounted) {
-        setState(() {
-          _countdownSeconds = 0;
-        });
+        if (mounted) {
+          setState(() {
+            _countdownSeconds = 0;
+          });
+        }
       }
 
       if (mounted) {
@@ -326,6 +337,9 @@ class _SendingScreenState
 
     // All customers processed
     if (currentIndex >= widget.queue.length) {
+      if (_accessibilityEnabled) {
+        await AccessibilityService.setAutoSendMode(false);
+      }
 
       setState(() {
         isSending = false;
@@ -365,6 +379,9 @@ class _SendingScreenState
 
 
   void stopSending() {
+    if (_accessibilityEnabled) {
+      AccessibilityService.setAutoSendMode(false);
+    }
 
     setState(() {
       isSending = false;
@@ -385,6 +402,9 @@ class _SendingScreenState
   }
 
   void pauseSending() {
+    if (_accessibilityEnabled) {
+      AccessibilityService.setAutoSendMode(false);
+    }
 
     setState(() {
       isPaused = true;
@@ -617,7 +637,7 @@ class _SendingScreenState
                 : 'Auto-Send: OFF (tap to enable)',
             onPressed: () async {
               if (!_accessibilityEnabled) {
-                // Re-check after returning from settings
+                await AccessibilityService.showGuidanceDialog(context);
                 bool check = await AccessibilityService.isEnabled();
                 if (mounted) setState(() { _accessibilityEnabled = check; });
               }
@@ -784,9 +804,12 @@ class _SendingScreenState
                 children: const [
                   Icon(Icons.bedtime, color: Colors.deepPurple),
                   SizedBox(width: 8),
-                  Text(
-                    'Sleeping based on schedule...',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                  Flexible(
+                    child: Text(
+                      'Sleeping based on schedule...',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ],
               ),
@@ -797,9 +820,12 @@ class _SendingScreenState
                 children: [
                   const Icon(Icons.schedule, color: Colors.blueAccent),
                   const SizedBox(width: 8),
-                  Text(
-                    'Scheduled to start at ${TimeOfDay.fromDateTime(widget.scheduledStart!).format(context)}',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+                  Flexible(
+                    child: Text(
+                      'Scheduled to start at ${TimeOfDay.fromDateTime(widget.scheduledStart!).format(context)}',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ],
               ),

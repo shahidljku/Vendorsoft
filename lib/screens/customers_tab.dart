@@ -1,11 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'sending_screen.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class CustomersTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -32,7 +30,6 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
   bool _isSearching = false;
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isAccessibilityEnabled = false;
-  bool _isBatteryOptimized = false;
 
   @override
   void initState() {
@@ -58,11 +55,9 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
 
   void _checkAccessibility() async {
     bool enabled = await AccessibilityService.isEnabled();
-    bool batteryOptimized = !(await Permission.ignoreBatteryOptimizations.isGranted);
     if (mounted) {
       setState(() {
         _isAccessibilityEnabled = enabled;
-        _isBatteryOptimized = batteryOptimized;
       });
     }
   }
@@ -83,11 +78,14 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     List<Customer> result = widget.excelService.allCustomers;
     if (_statusFilter != 'All') {
       result = result.where((c) {
-        if (_statusFilter == 'Pending Bills') return c.status.toLowerCase() == 'pending' || c.status == 'Waiting';
-        if (_statusFilter == 'Sent Bills') return c.status == 'Sent' || c.status == 'Message Sent';
-        if (_statusFilter == 'Failed Bills') return c.status == 'Failed';
-        if (_statusFilter == 'Unpaid Bills') return c.paymentStatus != 'Successful';
-        if (_statusFilter == 'Receipts Pending') return c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent';
+        String st = c.status.trim().toLowerCase();
+        String pst = c.paymentStatus.trim().toLowerCase();
+        String rst = c.receiptStatus.trim().toLowerCase();
+        if (_statusFilter == 'Pending Bills') return st == 'pending' || st == 'waiting' || st == 'processing';
+        if (_statusFilter == 'Sent Bills') return st == 'sent' || st == 'message sent';
+        if (_statusFilter == 'Failed Bills') return st == 'failed';
+        if (_statusFilter == 'Unpaid Bills') return pst != 'successful' && !pst.contains('success') && pst != 'paid';
+        if (_statusFilter == 'Receipts Pending') return (pst == 'successful' || pst.contains('success') || pst == 'paid') && rst != 'sent';
         return true;
       }).toList();
     }
@@ -97,13 +95,23 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     if (_searchQuery.isNotEmpty) {
       String q = _searchQuery.toLowerCase().trim();
       if (q == 'unpaid') {
-        result = result.where((c) => c.paymentStatus != 'Successful').toList();
+        result = result.where((c) {
+          String pst = c.paymentStatus.trim().toLowerCase();
+          return pst != 'successful' && !pst.contains('success') && pst != 'paid';
+        }).toList();
       } else if (q == 'failed') {
-        result = result.where((c) => c.status.toLowerCase() == 'failed').toList();
+        result = result.where((c) => c.status.trim().toLowerCase() == 'failed').toList();
       } else if (q == 'pending') {
-        result = result.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').toList();
+        result = result.where((c) {
+          String st = c.status.trim().toLowerCase();
+          return st == 'pending' || st == 'waiting' || st == 'processing';
+        }).toList();
       } else if (q == 'sent') {
-        result = result.where((c) => c.status.toLowerCase() == 'sent' || c.receiptStatus.toLowerCase() == 'sent').toList();
+        result = result.where((c) {
+          String st = c.status.trim().toLowerCase();
+          String rst = c.receiptStatus.trim().toLowerCase();
+          return st == 'sent' || st == 'message sent' || rst == 'sent';
+        }).toList();
       } else {
         result = result.where((c) => c.custName.toLowerCase().contains(q) || c.mobile.contains(q) || c.billNo.toLowerCase().contains(q)).toList();
       }
@@ -258,8 +266,10 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                     ),
                   ),
                   TextButton(
-                    onPressed: () {
-                      AccessibilityService.openSettings();
+                    onPressed: () async {
+                      await AccessibilityService.showGuidanceDialog(context);
+                      bool check = await AccessibilityService.isEnabled();
+                      if (mounted) setState(() { _isAccessibilityEnabled = check; });
                     },
                     child: const Text('ENABLE'),
                   ),
@@ -329,14 +339,21 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
 
   Widget _buildCustomerItem(BuildContext context, Customer customer, int index) {
     Color billStatusColor = Colors.grey;
-    if (customer.status == 'Sent') billStatusColor = const Color(0xFF00E676);
-    else if (customer.status == 'Failed') billStatusColor = Colors.red;
-    else if (customer.status.toLowerCase() == 'pending') billStatusColor = Colors.orange;
+    String st = customer.status.trim().toLowerCase();
+    if (st == 'sent' || st == 'message sent') {
+      billStatusColor = const Color(0xFF00E676);
+    } else if (st == 'failed') {
+      billStatusColor = Colors.red;
+    } else if (st == 'pending' || st == 'waiting' || st == 'processing') {
+      billStatusColor = Colors.orange;
+    }
 
     Color receiptStatusColor = Colors.grey;
     String receiptText = '';
-    if (customer.paymentStatus == 'Successful') {
-      if (customer.receiptStatus == 'Sent') {
+    String pst = customer.paymentStatus.trim().toLowerCase();
+    String rst = customer.receiptStatus.trim().toLowerCase();
+    if (pst == 'successful' || pst.contains('success') || pst == 'paid') {
+      if (rst == 'sent') {
         receiptStatusColor = const Color(0xFF00E676);
         receiptText = 'Receipt Sent';
       } else {
@@ -417,7 +434,9 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
                     ),
                     const SizedBox(height: 6),
-                    Row(
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
                       children: [
                         buildBadge('Bill: ${customer.status}', billStatusColor),
                         buildBadge(receiptText, receiptStatusColor),
@@ -684,7 +703,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: paymentMethod,
+                      initialValue: paymentMethod,
                       dropdownColor: Theme.of(context).cardColor,
                       decoration: const InputDecoration(labelText: 'Payment Method', labelStyle: TextStyle(color: Colors.grey)),
                       items: ['Online', 'Cash'].map((m) => DropdownMenuItem(value: m, child: Text(m, style: const TextStyle(color: Colors.white)))).toList(),

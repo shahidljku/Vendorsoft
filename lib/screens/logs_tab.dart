@@ -120,7 +120,7 @@ class _LogsTabState extends State<LogsTab> {
               }
               String content = _logLines.join('\n');
               String? uri = await FileAccessService.exportLogFile(content);
-              if (mounted) {
+              if (context.mounted) {
                 if (uri != null) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logs saved successfully.')));
                 } else {
@@ -137,7 +137,7 @@ class _LogsTabState extends State<LogsTab> {
               final logFile = File('${directory.path}/VendSoft/logs.txt');
               if (await logFile.exists()) {
                 await logFile.delete();
-                if (mounted) {
+                if (context.mounted) {
                   setState(() {
                     _logLines = [];
                   });
@@ -193,9 +193,9 @@ class _LogsTabState extends State<LogsTab> {
                 builder: (context) {
                   List<String> filteredLogs = _logLines;
                   if (_logFilter == 'Info') {
-                    filteredLogs = _logLines.where((line) => line.contains('[INFO]') || !line.contains('[ERROR]')).toList();
+                    filteredLogs = _logLines.where((line) => !line.toLowerCase().contains('failed') && !line.toLowerCase().contains('error')).toList();
                   } else if (_logFilter == 'Error') {
-                    filteredLogs = _logLines.where((line) => line.contains('[ERROR]')).toList();
+                    filteredLogs = _logLines.where((line) => line.toLowerCase().contains('failed') || line.toLowerCase().contains('error')).toList();
                   }
                   
                   if (filteredLogs.isEmpty) {
@@ -227,7 +227,7 @@ class _LogsTabState extends State<LogsTab> {
     DateTime? date = DateTime.tryParse(dateTimeStr);
     String timeStr = date != null ? DateFormat('hh:mm:ss a').format(date) : dateTimeStr;
 
-    bool isSuccess = status.toLowerCase() == 'sent' || status.toLowerCase().contains('success');
+    bool isSuccess = status.toLowerCase().contains('sent') || status.toLowerCase().contains('success');
     Color iconColor = isSuccess ? const Color(0xFF00E676) : Colors.red;
     IconData leadingIcon = isSuccess ? Icons.send : Icons.error;
     IconData trailingIcon = isSuccess ? Icons.check_circle_outline : Icons.cancel_outlined;
