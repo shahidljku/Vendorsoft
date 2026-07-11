@@ -14,6 +14,7 @@ import '../services/accessibility_service.dart';
 import '../services/license_service.dart';
 import '../services/log_service.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../services/print_service.dart';
 
 class ReceiptsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -658,6 +659,15 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
                 ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.print, color: Colors.blue, size: 18),
+                  style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.blue)),
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await PrintService().printReceipt(customer: customer, settingsService: widget.settingsService);
+                  },
+                  label: const Text('Print', style: TextStyle(color: Colors.blue)),
+                ),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
                   onPressed: () async {
@@ -731,11 +741,43 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
             itemBuilder: (context, index) {
               Customer c = list[index];
               bool isCurrent = _isSending && isPending && index == _currentIndex;
-              return ListTile(
-                onTap: isPending && !_isSending ? () {
-                  _showEditPaymentDialog(context, c);
-                } : null,
-                leading: CircleAvatar(
+              return Dismissible(
+                key: Key('receipt_${c.mobile}_$index'),
+                background: Container(
+                  color: const Color(0xFF00E676),
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.only(left: 24),
+                  child: const Icon(Icons.check_circle, color: Colors.black, size: 32),
+                ),
+                secondaryBackground: Container(
+                  color: Colors.blue,
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 24),
+                  child: const Icon(Icons.print, color: Colors.white, size: 32),
+                ),
+                confirmDismiss: (direction) async {
+                  if (direction == DismissDirection.startToEnd) {
+                    if (c.receiptStatus != 'Sent') {
+                      setState(() {
+                        c.receiptStatus = 'Sent';
+                      });
+                      await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                      _refreshQueue();
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt already marked as sent')));
+                    }
+                    return false;
+                  } else if (direction == DismissDirection.endToStart) {
+                    await PrintService().printReceipt(customer: c, settingsService: widget.settingsService);
+                    return false;
+                  }
+                  return false;
+                },
+                child: ListTile(
+                  onTap: isPending && !_isSending ? () {
+                    _showEditPaymentDialog(context, c);
+                  } : null,
+                  leading: CircleAvatar(
                   backgroundColor: isCurrent ? Colors.blueAccent : (isPending ? Colors.orangeAccent : Colors.green),
                   child: Icon(isPending ? Icons.receipt : Icons.check, color: Colors.white),
                 ),
@@ -893,6 +935,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                     ),
                   ],
                 ),
+              ),
               );
             },
           ),

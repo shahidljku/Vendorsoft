@@ -3,6 +3,7 @@ import '../models/customer.dart';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';
 import 'file_access_service.dart';
+import 'license_service.dart';
 
 class ExcelService extends ChangeNotifier {
 
@@ -33,7 +34,7 @@ class ExcelService extends ChangeNotifier {
     fileName = result['fileName'] as String;
 
     // Parse the Excel content
-    _parseExcelBytes(bytes);
+    await _parseExcelBytes(bytes);
 
     return fileName;
   }
@@ -48,7 +49,7 @@ class ExcelService extends ChangeNotifier {
     fileName = name;
 
     try {
-      _parseExcelBytes(bytes);
+      await _parseExcelBytes(bytes);
       return true;
     } catch (e) {
       print('ExcelService loadFromUri error: $e');
@@ -57,52 +58,64 @@ class ExcelService extends ChangeNotifier {
   }
 
   /// Parses Excel bytes and populates allCustomers.
-  void _parseExcelBytes(Uint8List bytes) {
+  Future<void> _parseExcelBytes(Uint8List bytes) async {
     List<Customer> customers = [];
 
     var excel = Excel.decodeBytes(bytes);
 
-    String firstSheet = excel.tables.keys.first;
+    for (var table in excel.tables.keys) {
+      var rows = excel.tables[table]?.rows;
+      if (rows == null || rows.isEmpty) continue;
 
-    Sheet sheet = excel.tables[firstSheet]!;
+      // Skip header row
+      for (int i = 1; i < rows.length; i++) {
+        var row = rows[i];
+        if (row.isEmpty) continue;
 
-    for (int i = 1; i < sheet.maxRows; i++) {
-      var row = sheet.row(i);
+        String mobile = _cellToString(row[0]);
+        if (mobile.isEmpty || mobile == 'mobile_no') continue;
 
-      String status = row.length > 3
-          ? _cellToString(row[3], 'Pending')
-          : 'Pending';
+        String status = row.length > 3 ? _cellToString(row[3]) : 'Pending';
 
-      // If status is empty, default to Pending
-      if (status.isEmpty) {
-        status = 'Pending';
+        // If status is empty, default to Pending
+        if (status.isEmpty) {
+          status = 'Pending';
+        }
+
+        customers.add(
+          Customer(
+            mobile: row.isNotEmpty ? _cellToString(row[0]) : '',
+            custName: row.length > 1 ? _cellToString(row[1]) : '',
+            yesNo: row.length > 2 ? _cellToString(row[2]) : '',
+            status: status,
+            imagePath: row.length > 4 ? _cellToString(row[4]) : '',
+            message: row.length > 5 ? _cellToString(row[5]) : '',
+            vouchDate: row.length > 6 ? _cellToString(row[6], '', true) : '',
+            custNo: row.length > 7 ? _cellToString(row[7]) : '',
+            billNo: row.length > 8 ? _cellToString(row[8]) : '',
+            billAmount: row.length > 9 ? _cellToString(row[9]) : '',
+            clBalance: row.length > 10 ? _cellToString(row[10]) : '',
+            cmCode: row.length > 11 ? _cellToString(row[11]) : '',
+            cmName: row.length > 12 ? _cellToString(row[12]) : '',
+            monthNm: row.length > 13 ? _cellToString(row[13]) : '',
+            sentTime: row.length > 14 ? _cellToString(row[14]) : '',
+            paymentStatus: row.length > 15 ? _cellToString(row[15]) : '',
+            amountPaid: row.length > 16 ? _cellToString(row[16]) : '',
+            transactionId: row.length > 17 ? _cellToString(row[17]) : '',
+            paymentMethod: row.length > 18 ? _cellToString(row[18]) : '',
+            receiptStatus: row.length > 19 ? _cellToString(row[19]) : '',
+            paymentDate: row.length > 20 ? _cellToString(row[20], '', true) : '',
+          ),
+        );
       }
+    }
 
-      customers.add(
-        Customer(
-          mobile: row.isNotEmpty ? _cellToString(row[0]) : '',
-          custName: row.length > 1 ? _cellToString(row[1]) : '',
-          yesNo: row.length > 2 ? _cellToString(row[2]) : '',
-          status: status,
-          imagePath: row.length > 4 ? _cellToString(row[4]) : '',
-          message: row.length > 5 ? _cellToString(row[5]) : '',
-          vouchDate: row.length > 6 ? _cellToString(row[6], '', true) : '',
-          custNo: row.length > 7 ? _cellToString(row[7]) : '',
-          billNo: row.length > 8 ? _cellToString(row[8]) : '',
-          billAmount: row.length > 9 ? _cellToString(row[9]) : '',
-          clBalance: row.length > 10 ? _cellToString(row[10]) : '',
-          cmCode: row.length > 11 ? _cellToString(row[11]) : '',
-          cmName: row.length > 12 ? _cellToString(row[12]) : '',
-          monthNm: row.length > 13 ? _cellToString(row[13]) : '',
-          sentTime: row.length > 14 ? _cellToString(row[14]) : '',
-          paymentStatus: row.length > 15 ? _cellToString(row[15]) : '',
-          amountPaid: row.length > 16 ? _cellToString(row[16]) : '',
-          transactionId: row.length > 17 ? _cellToString(row[17]) : '',
-          paymentMethod: row.length > 18 ? _cellToString(row[18]) : '',
-          receiptStatus: row.length > 19 ? _cellToString(row[19]) : '',
-          paymentDate: row.length > 20 ? _cellToString(row[20], '', true) : '',
-        ),
-      );
+    if (await LicenseService().isDemoMode()) {
+      int limit = LicenseService().getDemoCustomerLimit();
+      if (customers.length > limit) {
+        print('Demo Mode: Truncating loaded customers to $limit');
+        customers = customers.sublist(0, limit);
+      }
     }
 
     allCustomers = customers;

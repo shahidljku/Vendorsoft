@@ -7,6 +7,7 @@ import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
+import '../services/print_service.dart';
 
 class BillsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -445,7 +446,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         color: Colors.blue,
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 24),
-        child: const Icon(Icons.info_outline, color: Colors.white, size: 32),
+        child: const Icon(Icons.print, color: Colors.white, size: 32),
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
@@ -456,7 +457,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           }
           return false;
         } else if (direction == DismissDirection.endToStart) {
-          _showCustomerTimelineCard(context, customer);
+          await PrintService().printBill(customer: customer, settingsService: widget.settingsService);
           return false;
         }
         return false;
@@ -667,6 +668,22 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                       fontSize: 16,
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.print, color: Colors.blue),
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await PrintService().printBill(customer: customer, settingsService: widget.settingsService);
+                  },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.blue),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  label: const Text('Print Thermal Bill', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
               if (customer.status == 'Failed') ...[

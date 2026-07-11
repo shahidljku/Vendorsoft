@@ -261,6 +261,26 @@ class _MainLayoutState extends State<MainLayout> {
                   ],
                 ),
               ),
+              // Highlighted Import Excel Option
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF00E676).withValues(alpha: 0.5)),
+                ),
+                child: ListTile(
+                  leading: const Icon(Icons.table_view, color: Color(0xFF00E676), size: 28),
+                  title: const Text('Import from Excel', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  subtitle: Text(_excelFileName ?? 'Tap to pick customers.xlsx', style: const TextStyle(color: Color(0xFF00E676), fontSize: 12)),
+                  trailing: const Icon(Icons.upload_file, color: Color(0xFF00E676)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _importExcel();
+                  },
+                ),
+              ),
+              const Divider(color: Colors.white24, height: 1),
               ListTile(
                 leading: const Icon(Icons.home, color: Colors.white70),
                 title: const Text('Dashboard', style: TextStyle(color: Colors.white)),

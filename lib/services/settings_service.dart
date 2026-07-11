@@ -19,6 +19,9 @@ class SettingsService extends ChangeNotifier {
   static const _keyLastExcelUri = 'lastExcelUri';
   static const _keyLastExcelFileName = 'lastExcelFileName';
   static const _keyIsFirstLaunch = 'isFirstLaunch';
+  static const _keyDefaultPrinterWidth = 'defaultPrinterWidth';
+  static const _keySavedCollectionMen = 'savedCollectionMen';
+  static const _keySavedItems = 'savedItems';
 
   SharedPreferences? _prefs;
 
@@ -225,4 +228,68 @@ class SettingsService extends ChangeNotifier {
     await _init();
     await _prefs!.setBool(_keyIsFirstLaunch, value);
   }
+
+  // ── Printer Settings ──
+
+  Future<String> getDefaultPrinterWidth() async {
+    await _init();
+    return _prefs!.getString(_keyDefaultPrinterWidth) ?? '58mm';
+  }
+
+  Future<void> setDefaultPrinterWidth(String value) async {
+    await _init();
+    await _prefs!.setString(_keyDefaultPrinterWidth, value);
+    notifyListeners();
+  }
+
+  // ── Saved Collection Men (Agents) ──
+
+  Future<List<String>> getSavedCollectionMen() async {
+    await _init();
+    return _prefs!.getStringList(_keySavedCollectionMen) ?? [];
+  }
+
+  Future<void> addSavedCollectionMan(String agentCodeName) async {
+    await _init();
+    List<String> list = _prefs!.getStringList(_keySavedCollectionMen) ?? [];
+    if (!list.contains(agentCodeName)) {
+      list.add(agentCodeName);
+      await _prefs!.setStringList(_keySavedCollectionMen, list);
+      notifyListeners();
+    }
+  }
+
+  Future<void> removeSavedCollectionMan(String agentCodeName) async {
+    await _init();
+    List<String> list = _prefs!.getStringList(_keySavedCollectionMen) ?? [];
+    list.remove(agentCodeName);
+    await _prefs!.setStringList(_keySavedCollectionMen, list);
+    notifyListeners();
+  }
+
+  // ── Saved Items (Products) ──
+
+  Future<List<String>> getSavedItems() async {
+    await _init();
+    return _prefs!.getStringList(_keySavedItems) ?? [];
+  }
+
+  Future<void> addSavedItem(String itemStr) async {
+    await _init();
+    List<String> list = _prefs!.getStringList(_keySavedItems) ?? [];
+    if (!list.contains(itemStr)) {
+      list.add(itemStr);
+      await _prefs!.setStringList(_keySavedItems, list);
+      notifyListeners();
+    }
+  }
+
+  Future<void> removeSavedItem(String itemStr) async {
+    await _init();
+    List<String> list = _prefs!.getStringList(_keySavedItems) ?? [];
+    list.remove(itemStr);
+    await _prefs!.setStringList(_keySavedItems, list);
+    notifyListeners();
+  }
 }
+

@@ -148,4 +148,22 @@ MQIDAQAB
     await _storage.delete(key: _licenseKeyPref);
     _currentLicenseInfo = null;
   }
+
+  /// Check if application is currently in Demo Mode (unlicensed or expired)
+  Future<bool> isDemoMode() async {
+    bool licensed = await isLicensed();
+    if (!licensed) return true;
+    return isLicenseExpired();
+  }
+
+  /// Maximum number of customers allowed when in Demo Mode
+  int getDemoCustomerLimit() => 50;
+
+  /// Subscription pricing helpers
+  String getMonthlyPlanPrice() => '₹799 / month';
+  String getYearlyPlanPrice() => '₹9,499 / year (12 + 1 Month FREE)';
+  
+  /// IMPORTANT REMINDER: Developer must replace this with active UPI ID before release
+  String getDeveloperUpiId() => '9427698665@paytm';
 }
+

@@ -84,7 +84,62 @@ class Customer {
     );
   }
 
+  factory Customer.fromJson(Map<String, dynamic> json) {
+    return Customer(
+      mobile: json['mobile']?.toString() ?? '',
+      custName: json['custName']?.toString() ?? '',
+      yesNo: json['yesNo']?.toString() ?? '',
+      status: json['status']?.toString() ?? '',
+      imagePath: json['imagePath']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+      vouchDate: json['vouchDate']?.toString() ?? '',
+      custNo: json['custNo']?.toString() ?? '',
+      billNo: json['billNo']?.toString() ?? '',
+      billAmount: json['billAmount']?.toString() ?? '',
+      clBalance: json['clBalance']?.toString() ?? '',
+      cmCode: json['cmCode']?.toString() ?? '',
+      cmName: json['cmName']?.toString() ?? '',
+      monthNm: json['monthNm']?.toString() ?? '',
+      sentTime: json['sentTime']?.toString() ?? '',
+      lastError: json['lastError']?.toString() ?? '',
+      paymentStatus: json['paymentStatus']?.toString() ?? '',
+      amountPaid: json['amountPaid']?.toString() ?? '',
+      transactionId: json['transactionId']?.toString() ?? '',
+      paymentMethod: json['paymentMethod']?.toString() ?? '',
+      receiptStatus: json['receiptStatus']?.toString() ?? '',
+      paymentDate: json['paymentDate']?.toString() ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'mobile': mobile,
+      'custName': custName,
+      'yesNo': yesNo,
+      'status': status,
+      'imagePath': imagePath,
+      'message': message,
+      'vouchDate': vouchDate,
+      'custNo': custNo,
+      'billNo': billNo,
+      'billAmount': billAmount,
+      'clBalance': clBalance,
+      'cmCode': cmCode,
+      'cmName': cmName,
+      'monthNm': monthNm,
+      'sentTime': sentTime,
+      'lastError': lastError,
+      'paymentStatus': paymentStatus,
+      'amountPaid': amountPaid,
+      'transactionId': transactionId,
+      'paymentMethod': paymentMethod,
+      'receiptStatus': receiptStatus,
+      'paymentDate': paymentDate,
+    };
+  }
+
   List<String> toRow() {
+
     return [
       mobile,
       custName,

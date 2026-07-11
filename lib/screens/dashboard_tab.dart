@@ -4,6 +4,8 @@ import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
+import '../services/license_service.dart';
+import '../widgets/subscription_dialog.dart';
 
 class DashboardTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -33,6 +35,7 @@ class _DashboardTabState extends State<DashboardTab> {
   Timer? _cooldownTimer;
   bool _isCooldown = false;
   Duration _remainingCooldown = Duration.zero;
+  bool _isDemoMode = true;
 
   @override
   void dispose() {
@@ -65,10 +68,12 @@ class _DashboardTabState extends State<DashboardTab> {
 
   Future<void> _initPreloadedData() async {
     String? lastName = await widget.settingsService.getLastExcelFileName();
+    bool demo = await LicenseService().isDemoMode();
     if (mounted) {
       setState(() {
         excelFileName = lastName;
         customers = widget.excelService.allCustomers;
+        _isDemoMode = demo;
       });
     }
   }
@@ -156,6 +161,45 @@ class _DashboardTabState extends State<DashboardTab> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_isDemoMode)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.orange.shade900.withValues(alpha: 0.35), const Color(0xFF161B22)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.5)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.workspace_premium, color: Colors.orangeAccent, size: 32),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Demo Trial Active (Max 50 Customers)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                              const SizedBox(height: 3),
+                              Text('Upgrade to Yearly (₹9,499) or Monthly (₹799)', style: TextStyle(color: Colors.grey.shade300, fontSize: 11)),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () => SubscriptionDialog.showPlans(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00E676),
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('Upgrade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        ),
+                      ],
+                    ),
+                  ),
                 // Overall Progress (Compact Linear)
                 Card(
                   child: Padding(

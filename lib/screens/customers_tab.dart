@@ -4,6 +4,8 @@ import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
+import '../services/license_service.dart';
+import 'license_expired_screen.dart';
 
 class CustomersTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -122,6 +124,13 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showAddCustomerDialog(context),
+        backgroundColor: const Color(0xFF00E676),
+        foregroundColor: Colors.black,
+        icon: const Icon(Icons.person_add),
+        label: const Text('Add Customer', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.menu),
@@ -445,6 +454,11 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                   ],
                 ),
               ),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, color: Colors.white54, size: 20),
+                tooltip: 'Edit Customer',
+                onPressed: () => _showAddCustomerDialog(context, customer),
+              ),
               const Icon(Icons.chevron_right, color: Colors.white24),
             ],
           ),
@@ -490,12 +504,32 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Header: Name and Mobile
-              Text(
-                customer.custName.isEmpty ? 'Unknown Contact' : customer.custName,
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          customer.custName.isEmpty ? 'Unknown Contact' : customer.custName,
+                          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(customer.mobile, style: const TextStyle(fontSize: 16, color: Colors.grey)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit, color: Color(0xFF00E676), size: 28),
+                    tooltip: 'Edit Customer Details',
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _showAddCustomerDialog(context, customer);
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(customer.mobile, style: const TextStyle(fontSize: 16, color: Colors.grey)),
               const SizedBox(height: 32),
 
               // Timeline
@@ -762,8 +796,331 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
             );
           }
         );
+  Future<void> _showAddCustomerDialog(BuildContext context, [Customer? existingCustomer]) async {
+    // Check 50 Customer Demo Limit if adding new customer
+    if (existingCustomer == null) {
+      if (await LicenseService().isDemoMode() && widget.excelService.allCustomers.length >= 50) {
+        if (!context.mounted) return;
+        _showDemoLimitExpiredDialog(context);
+        return;
       }
+    }
+
+    final TextEditingController mobileCtrl = TextEditingController(text: existingCustomer?.mobile ?? '');
+    final TextEditingController nameCtrl = TextEditingController(text: existingCustomer?.custName ?? '');
+    final TextEditingController custNoCtrl = TextEditingController(text: existingCustomer?.custNo ?? '');
+    final TextEditingController billNoCtrl = TextEditingController(text: existingCustomer?.billNo ?? '');
+    final TextEditingController billAmountCtrl = TextEditingController(text: existingCustomer?.billAmount ?? '');
+    final TextEditingController clBalanceCtrl = TextEditingController(text: existingCustomer?.clBalance ?? '');
+    final TextEditingController messageCtrl = TextEditingController(text: existingCustomer?.message ?? '');
+
+    // Load available agents (from Excel + Settings)
+    Set<String> agentSet = {'All', 'UNKNOWN'};
+    for (var c in widget.excelService.allCustomers) {
+      if (c.cmName.isNotEmpty) agentSet.add(c.cmName);
+    }
+    List<String> savedAgents = await widget.settingsService.getSavedCollectionMen();
+    for (var a in savedAgents) {
+      agentSet.add(a);
+    }
+    List<String> agentList = agentSet.toList()..sort();
+    String selectedAgent = existingCustomer?.cmName.isNotEmpty == true ? existingCustomer!.cmName : (agentList.length > 1 ? agentList[1] : 'UNKNOWN');
+    if (!agentList.contains(selectedAgent)) {
+      agentList.add(selectedAgent);
+    }
+
+    // Load available items (from Settings)
+    List<String> savedItems = await widget.settingsService.getSavedItems();
+    String selectedItem = 'None';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF161B22),
+              title: Row(
+                children: [
+                  Icon(existingCustomer == null ? Icons.person_add : Icons.edit, color: const Color(0xFF00E676)),
+                  const SizedBox(width: 8),
+                  Text(existingCustomer == null ? 'Add New Customer' : 'Edit Customer', style: const TextStyle(color: Colors.white)),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: mobileCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(labelText: 'Mobile Number *', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    TextField(
+                      controller: nameCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Customer Name *', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    TextField(
+                      controller: custNoCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Customer No', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    TextField(
+                      controller: billNoCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Bill No', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    TextField(
+                      controller: billAmountCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Bill Amount', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    TextField(
+                      controller: clBalanceCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Closing Balance', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // Collection Man (Agent) with inline + Add New Agent
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: selectedAgent,
+                            dropdownColor: const Color(0xFF161B22),
+                            decoration: const InputDecoration(labelText: 'Collection Man / Agent', labelStyle: TextStyle(color: Colors.grey)),
+                            items: agentList.map((a) => DropdownMenuItem(value: a, child: Text(a, style: const TextStyle(color: Colors.white)))).toList(),
+                            onChanged: (val) => setDialogState(() => selectedAgent = val ?? selectedAgent),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle, color: Color(0xFF00E676), size: 28),
+                          tooltip: 'Add New Agent without clearing form',
+                          onPressed: () async {
+                            String? newAgent = await _showAddAgentDialog(context);
+                            if (newAgent != null && newAgent.isNotEmpty) {
+                              await widget.settingsService.addSavedCollectionMan(newAgent);
+                              setDialogState(() {
+                                if (!agentList.contains(newAgent)) {
+                                  agentList.add(newAgent);
+                                }
+                                selectedAgent = newAgent;
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Item Selection with inline + Add New Item
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: selectedItem,
+                            dropdownColor: const Color(0xFF161B22),
+                            decoration: const InputDecoration(labelText: 'Select Item / Product', labelStyle: TextStyle(color: Colors.grey)),
+                            items: ['None', ...savedItems].map((i) => DropdownMenuItem(value: i, child: Text(i, style: const TextStyle(color: Colors.white)))).toList(),
+                            onChanged: (val) {
+                              setDialogState(() {
+                                selectedItem = val ?? 'None';
+                                if (selectedItem != 'None' && selectedItem.contains('|')) {
+                                  final parts = selectedItem.split('|');
+                                  if (parts.length > 1 && billAmountCtrl.text.isEmpty) {
+                                    billAmountCtrl.text = parts[1];
+                                  }
+                                }
+                              });
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.add_shopping_cart, color: Color(0xFF00E676), size: 28),
+                          tooltip: 'Add New Item without clearing form',
+                          onPressed: () async {
+                            String? newItem = await _showAddItemDialog(context);
+                            if (newItem != null && newItem.isNotEmpty) {
+                              await widget.settingsService.addSavedItem(newItem);
+                              setDialogState(() {
+                                if (!savedItems.contains(newItem)) {
+                                  savedItems.add(newItem);
+                                }
+                                selectedItem = newItem;
+                                if (newItem.contains('|')) {
+                                  final parts = newItem.split('|');
+                                  if (parts.length > 1 && billAmountCtrl.text.isEmpty) {
+                                    billAmountCtrl.text = parts[1];
+                                  }
+                                }
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: messageCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Custom Note / Message', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+                  onPressed: () async {
+                    if (mobileCtrl.text.trim().isEmpty || nameCtrl.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mobile number and Customer Name are required')));
+                      return;
+                    }
+
+                    if (existingCustomer != null) {
+                      existingCustomer.mobile = mobileCtrl.text.trim();
+                      existingCustomer.custName = nameCtrl.text.trim();
+                      existingCustomer.custNo = custNoCtrl.text.trim();
+                      existingCustomer.billNo = billNoCtrl.text.trim();
+                      existingCustomer.billAmount = billAmountCtrl.text.trim();
+                      existingCustomer.clBalance = clBalanceCtrl.text.trim();
+                      existingCustomer.cmName = selectedAgent;
+                      existingCustomer.message = messageCtrl.text.trim();
+                    } else {
+                      final newCust = Customer(
+                        mobile: mobileCtrl.text.trim(),
+                        custName: nameCtrl.text.trim(),
+                        custNo: custNoCtrl.text.trim(),
+                        billNo: billNoCtrl.text.trim(),
+                        billAmount: billAmountCtrl.text.trim(),
+                        clBalance: clBalanceCtrl.text.trim(),
+                        cmName: selectedAgent,
+                        message: messageCtrl.text.trim(),
+                        status: 'Pending',
+                        imagePath: '',
+                        sentTime: '',
+                      );
+                      widget.excelService.allCustomers.add(newCust);
+                    }
+
+                    await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                    if (context.mounted) Navigator.pop(context);
+                    setState(() {});
+                  },
+                  child: Text(existingCustomer == null ? 'Add Customer' : 'Save Changes', style: const TextStyle(color: Colors.black)),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
+  Future<String?> _showAddAgentDialog(BuildContext context) async {
+    final TextEditingController nameCtrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161B22),
+          title: const Text('Add New Agent', style: TextStyle(color: Colors.white)),
+          content: TextField(
+            controller: nameCtrl,
+            autofocus: true,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(labelText: 'Agent Name (e.g. Rajesh - C101)', labelStyle: TextStyle(color: Colors.grey)),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+              onPressed: () {
+                if (nameCtrl.text.trim().isNotEmpty) {
+                  Navigator.pop(context, nameCtrl.text.trim());
+                }
+              },
+              child: const Text('Add Agent', style: TextStyle(color: Colors.black)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<String?> _showAddItemDialog(BuildContext context) async {
+    final TextEditingController nameCtrl = TextEditingController();
+    final TextEditingController rateCtrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161B22),
+          title: const Text('Add New Item / Product', style: TextStyle(color: Colors.white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: const InputDecoration(labelText: 'Item Name (e.g. Water Jar 20L)', labelStyle: TextStyle(color: Colors.grey)),
+              ),
+              TextField(
+                controller: rateCtrl,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Price / Rate (₹)', labelStyle: TextStyle(color: Colors.grey)),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+              onPressed: () {
+                if (nameCtrl.text.trim().isNotEmpty) {
+                  String itemStr = "${nameCtrl.text.trim()}|${rateCtrl.text.trim()}";
+                  Navigator.pop(context, itemStr);
+                }
+              },
+              child: const Text('Add Item', style: TextStyle(color: Colors.black)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDemoLimitExpiredDialog(BuildContext context) async {
+    String deviceId = await LicenseService().getDeviceId();
+    if (!context.mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LicenseExpiredScreen(
+          deviceId: deviceId,
+          customerName: LicenseService().getBusinessName(),
+          licenseNumber: 'DEMO-50-LIMIT',
+          expiryDate: 'Limit Reached (50 Max)',
+          onActivateLicense: () async {
+            // Can enter license code right from here
+          },
+        ),
+      ),
+    );
+  }
 }
+

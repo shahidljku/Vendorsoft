@@ -5,6 +5,7 @@ import '../services/license_service.dart';
 import '../services/accessibility_service.dart';
 import 'package:flutter/services.dart';
 import 'pin_lock_screen.dart';
+import '../widgets/subscription_dialog.dart';
 
 class SettingsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -29,6 +30,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   int _sendLimit = 50;
   int _delayBetween = 10000;
   int _delayNext = 10000;
+  String _printerWidth = '58mm';
   
   bool _isLoading = true;
   bool _waitingForAccessibility = false;
@@ -68,6 +70,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     _sendLimit = await widget.settingsService.getDefaultSendLimit();
     _delayBetween = await widget.settingsService.getDelayBetweenCustomers();
     _delayNext = await widget.settingsService.getDelayBeforeNext();
+    _printerWidth = await widget.settingsService.getDefaultPrinterWidth();
 
     setState(() {
       _isLoading = false;
@@ -159,6 +162,30 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 16),
           _buildSettingsGroup(
+            title: 'Printer & Receipts',
+            children: [
+              _buildDropdownItem(
+                icon: Icons.print,
+                title: 'Printer Roll Width',
+                subtitle: 'Continuous auto-height paper size',
+                value: _printerWidth,
+                options: const ['58mm', '80mm', 'a4'],
+                optionLabels: const {
+                  '58mm': '58 mm (Roll)',
+                  '80mm': '80 mm (Roll)',
+                  'a4': 'A4 Page',
+                },
+                onChanged: (val) async {
+                  if (val != null) {
+                    setState(() => _printerWidth = val);
+                    await widget.settingsService.setDefaultPrinterWidth(val);
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildSettingsGroup(
             title: 'Security',
             children: [
               _buildSwitchItem(
@@ -207,8 +234,14 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           ),
 
           _buildSettingsGroup(
-            title: 'About',
+            title: 'About & License',
             children: [
+              _buildSettingItem(
+                icon: Icons.workspace_premium,
+                title: 'Subscription Plans & Upgrade',
+                subtitle: 'View Monthly (₹799) & Yearly (₹9,499) plans',
+                onTap: () => SubscriptionDialog.showPlans(context),
+              ),
               _buildSettingItem(
                 icon: Icons.info_outline,
                 title: 'App Version',
@@ -416,6 +449,50 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
             const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
           ],
         ),
+    );
+  }
+
+  Widget _buildDropdownItem({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String value,
+    required List<String> options,
+    required Map<String, String> optionLabels,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.grey, size: 24),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: TextStyle(color: Colors.grey.withValues(alpha: 0.8), fontSize: 13)),
+              ],
+            ),
+          ),
+          DropdownButton<String>(
+            value: options.contains(value) ? value : options.first,
+            dropdownColor: const Color(0xFF161B22),
+            underline: const SizedBox(),
+            items: options.map((opt) {
+              return DropdownMenuItem<String>(
+                value: opt,
+                child: Text(
+                  optionLabels[opt] ?? opt,
+                  style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+              );
+            }).toList(),
+            onChanged: onChanged,
+          ),
+        ],
       ),
     );
   }
