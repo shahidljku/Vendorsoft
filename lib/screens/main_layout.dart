@@ -278,80 +278,135 @@ class _MainLayoutState extends State<MainLayout> {
   Future<void> _checkFirstLaunch() async {
     bool isFirstLaunch = await widget.settingsService.getIsFirstLaunch();
     if (isFirstLaunch && mounted) {
-      bool hasPermission = false;
-      if (await Permission.storage.request().isGranted) {
-        hasPermission = true;
-      } else if (await Permission.manageExternalStorage.request().isGranted) {
-        hasPermission = true;
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF161B22),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.rocket_launch, color: Color(0xFF00E676)),
+              SizedBox(width: 12),
+              Text('Welcome to VendSoft!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: const SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'To ensure all features work smoothly right out of the box without interruptions later, please allow the following essential permissions on the next prompts:',
+                  style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                ),
+                SizedBox(height: 16),
+                _PermissionInfoRow(icon: Icons.folder_open, title: 'Storage & Files', desc: 'Required to create your "VendSoft" folder, read customer Excel sheets, and save PDF receipts.'),
+                SizedBox(height: 12),
+                _PermissionInfoRow(icon: Icons.notifications_active, title: 'Notifications', desc: 'Required to show real-time status alerts and background message progress.'),
+                SizedBox(height: 12),
+                _PermissionInfoRow(icon: Icons.bluetooth_connected, title: 'Bluetooth', desc: 'Required to scan and connect to your native ESC/POS thermal printers.'),
+              ],
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E676),
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Text('Allow & Get Started', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      if (!mounted) return;
+
+      // Sequentially request all required permissions cleanly
+      await Permission.notification.request();
+      await Permission.storage.request();
+      if (Platform.isAndroid) {
+        await Permission.photos.request();
+        await Permission.manageExternalStorage.request();
+        await Permission.bluetoothScan.request();
+        await Permission.bluetoothConnect.request();
       }
 
+      bool hasStorageAccess = await Permission.storage.isGranted ||
+          await Permission.manageExternalStorage.isGranted ||
+          await Permission.photos.isGranted;
+
       bool created = false;
-      if (hasPermission) {
-        try {
-          final dir = Directory('/storage/emulated/0/VendSoft/images');
-          if (!await dir.exists()) {
-            await dir.create(recursive: true);
-          }
-          
-          final receiptsDir = Directory('/storage/emulated/0/VendSoft/receipts');
-          if (!await receiptsDir.exists()) {
-            await receiptsDir.create(recursive: true);
-          }
-          
-          final excelFile = File('/storage/emulated/0/VendSoft/customers.xlsx');
-          if (!await excelFile.exists()) {
-            var excel = Excel.createExcel();
-            String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
-            if (defaultSheet != 'Sheet1') {
-              excel.rename(defaultSheet, 'Sheet1');
-            }
-            Sheet sheet = excel['Sheet1'];
-            sheet.appendRow([
-              TextCellValue('mobile_no'), TextCellValue('custname'), TextCellValue('YesNo'),
-              TextCellValue('Status'), TextCellValue('jpg_Path'), TextCellValue('message'),
-              TextCellValue('vouch_date'), TextCellValue('cust_no'), TextCellValue('bill_no'),
-              TextCellValue('bill_amount'), TextCellValue('cl_balance'), TextCellValue('cm_code'),
-              TextCellValue('cm_name'), TextCellValue('Month_nm'), TextCellValue('SentTime'),
-              TextCellValue('PaymentStatus'), TextCellValue('AmountPaid'), TextCellValue('TransactionId'),
-              TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'),
-            ]);
-            
-            // Remove other sheets
-            for (String sheetName in excel.tables.keys.toList()) {
-              if (sheetName != 'Sheet1') {
-                excel.delete(sheetName);
-              }
-            }
-            
-            List<int>? bytes = excel.encode();
-            if (bytes != null) {
-              await excelFile.writeAsBytes(bytes);
-            }
-          }
-          
-          created = true;
-        } catch (e) {
-          created = false;
+      try {
+        final dir = Directory('/storage/emulated/0/VendSoft/images');
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
         }
+        
+        final receiptsDir = Directory('/storage/emulated/0/VendSoft/receipts');
+        if (!await receiptsDir.exists()) {
+          await receiptsDir.create(recursive: true);
+        }
+        
+        final excelFile = File('/storage/emulated/0/VendSoft/customers.xlsx');
+        if (!await excelFile.exists()) {
+          var excel = Excel.createExcel();
+          String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
+          if (defaultSheet != 'Sheet1') {
+            excel.rename(defaultSheet, 'Sheet1');
+          }
+          Sheet sheet = excel['Sheet1'];
+          sheet.appendRow([
+            TextCellValue('mobile_no'), TextCellValue('custname'), TextCellValue('YesNo'),
+            TextCellValue('Status'), TextCellValue('jpg_Path'), TextCellValue('message'),
+            TextCellValue('vouch_date'), TextCellValue('cust_no'), TextCellValue('bill_no'),
+            TextCellValue('bill_amount'), TextCellValue('cl_balance'), TextCellValue('cm_code'),
+            TextCellValue('cm_name'), TextCellValue('Month_nm'), TextCellValue('SentTime'),
+            TextCellValue('PaymentStatus'), TextCellValue('AmountPaid'), TextCellValue('TransactionId'),
+            TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'),
+          ]);
+          
+          // Remove other sheets
+          for (String sheetName in excel.tables.keys.toList()) {
+            if (sheetName != 'Sheet1') {
+              excel.delete(sheetName);
+            }
+          }
+          
+          List<int>? bytes = excel.encode();
+          if (bytes != null) {
+            await excelFile.writeAsBytes(bytes);
+          }
+        }
+        
+        created = true;
+      } catch (e) {
+        print('First launch folder setup warning: $e');
+        created = hasStorageAccess;
       }
+
+      await widget.settingsService.setIsFirstLaunch(false);
 
       if (mounted && created) {
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
             backgroundColor: const Color(0xFF161B22),
-            title: const Text('Welcome to VendSoft!', style: TextStyle(color: Colors.white)),
+            title: const Text('Setup Complete!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             content: const Text(
               'A folder named "VendSoft" has been created in your Internal Storage.\n\nInside it, an empty "customers.xlsx" file has been generated for you. You can now add your customers to this file.',
               style: TextStyle(color: Colors.white70),
             ),
             actions: [
               TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  widget.settingsService.setIsFirstLaunch(false);
-                },
-                child: const Text('Got it', style: TextStyle(color: Color(0xFF00E676))),
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Got it', style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold)),
               ),
             ],
           ),
@@ -672,6 +727,35 @@ class _MainLayoutState extends State<MainLayout> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PermissionInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+
+  const _PermissionInfoRow({required this.icon, required this.title, required this.desc});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: const Color(0xFF00E676), size: 22),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              const SizedBox(height: 2),
+              Text(desc, style: const TextStyle(color: Colors.white54, fontSize: 12, height: 1.3)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

@@ -7,6 +7,10 @@ import 'package:flutter/services.dart';
 class AccessibilityService {
   static const _channel = MethodChannel('com.example.image_sender/accessibility');
 
+  /// Tracks active sending mode across the app: 'bill', 'receipt', or 'none'.
+  /// Ensures Bill sending and Receipt sending never cross-talk.
+  static String activeSendingMode = 'none';
+
   static final _messageSentController = StreamController<bool>.broadcast();
   static Stream<bool> get onMessageSent => _messageSentController.stream;
 
@@ -93,15 +97,16 @@ class AccessibilityService {
                 child: const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('⚠️ Android 13+ Notice', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF664D03))),
-                    SizedBox(height: 4),
+                    Text('⚠️ Android 13+ / Samsung One UI Notice', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF664D03))),
+                    SizedBox(height: 6),
                     Text(
-                      'If Vendor Soft says "Restricted setting" or is greyed out:\n\n'
-                      '• Tap "Open App Info" below.\n'
-                      '• Tap the 3 dots (⋮) at top-right.\n'
-                      '• Tap "Allow restricted settings".\n'
-                      '• Come back and Open Accessibility again.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF664D03)),
+                      'If Vendor Soft says "Restricted setting" when toggled ON:\n\n'
+                      '1. Tap OK on the "Restricted setting" popup first (mandatory to unlock hidden menu).\n'
+                      '2. Tap "Open App Info" below (or go to Settings -> Apps -> Vendor Soft).\n'
+                      '3. Tap the 3 dots (⋮) at the top right of App Info and select "Allow restricted settings".\n'
+                      '   *(Note: On some Samsung devices, tap "Permissions" inside App Info first, then tap the 3 dots at top right!)*\n'
+                      '4. Come back and Open Accessibility again—it will now turn ON easily!',
+                      style: TextStyle(fontSize: 12.5, color: Color(0xFF664D03), height: 1.4),
                     ),
                   ],
                 ),

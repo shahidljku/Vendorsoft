@@ -230,6 +230,11 @@ class PrintService {
             pw.Page(
               pageFormat: pageFormat,
               build: (pw.Context context) {
+                double clBal = double.tryParse(customer.clBalance.replaceAll(',', '').trim()) ?? 0.0;
+                double billAmt = double.tryParse(customer.billAmount.replaceAll(',', '').trim()) ?? 0.0;
+                double prevBal = clBal - billAmt;
+                String prevBalStr = prevBal.toStringAsFixed(prevBal.truncateToDouble() == prevBal ? 0 : 2);
+
                 return pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
                   mainAxisSize: pw.MainAxisSize.min,
@@ -287,6 +292,44 @@ class PrintService {
                         pw.Text(customer.mobile, style: const pw.TextStyle(fontSize: 8)),
                       ],
                     ),
+                    if (customer.monthNm.isNotEmpty)
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Month / Period:', style: const pw.TextStyle(fontSize: 8)),
+                          pw.Text(customer.monthNm, style: const pw.TextStyle(fontSize: 8)),
+                        ],
+                      ),
+                    if (customer.message.isNotEmpty && customer.message != 'null') ...[
+                      pw.SizedBox(height: 2),
+                      pw.Row(
+                        children: [
+                          pw.Text('Paper Name:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                        ],
+                      ),
+                      // Split by comma or newline to support multiple paper names
+                      ...customer.message
+                          .split(RegExp(r'[,\n]+'))
+                          .map((p) => p.trim())
+                          .where((p) => p.isNotEmpty && p != 'null')
+                          .toList()
+                          .asMap()
+                          .entries
+                          .map((entry) => pw.Padding(
+                                padding: const pw.EdgeInsets.only(left: 4, top: 1),
+                                child: pw.Row(
+                                  children: [
+                                    pw.Text('${entry.key + 1}. ', style: const pw.TextStyle(fontSize: 8)),
+                                    pw.Expanded(
+                                      child: pw.Text(
+                                        entry.value,
+                                        style: const pw.TextStyle(fontSize: 8),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )),
+                    ],
                     pw.Divider(thickness: 1, height: 8),
 
                     // Amounts Breakdown
@@ -303,7 +346,15 @@ class PrintService {
                         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                         children: [
                           pw.Text('Previous Balance:', style: const pw.TextStyle(fontSize: 8)),
-                          pw.Text('Rs. ${customer.clBalance}', style: const pw.TextStyle(fontSize: 8)),
+                          pw.Text('Rs. $prevBalStr', style: const pw.TextStyle(fontSize: 8)),
+                        ],
+                      ),
+                      pw.SizedBox(height: 2),
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Total Payable:', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                          pw.Text('Rs. ${customer.clBalance}', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
                         ],
                       ),
                     ],

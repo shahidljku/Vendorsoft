@@ -124,6 +124,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      /*
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showAddCustomerDialog(context),
         backgroundColor: const Color(0xFF00E676),
@@ -131,6 +132,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
         icon: const Icon(Icons.person_add),
         label: const Text('Add Customer', style: TextStyle(fontWeight: FontWeight.bold)),
       ),
+      */
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.menu),
@@ -422,10 +424,15 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           child: Row(
             children: [
               SizedBox(
-                width: 24,
-                child: Text(
-                  index.toString(),
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontWeight: FontWeight.bold),
+                width: 44,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    index.toString(),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontWeight: FontWeight.bold, fontSize: 14),
+                    maxLines: 1,
+                  ),
                 ),
               ),
               const CircleAvatar(

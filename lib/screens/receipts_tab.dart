@@ -63,7 +63,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     WidgetsBinding.instance.addObserver(this);
     AccessibilityService.initialize();
     _messageSentSubscription = AccessibilityService.onMessageSent.listen((_) {
-      if (_waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+      if (AccessibilityService.activeSendingMode == 'receipt' && _isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
         _whatsAppCompleter!.complete(true);
       }
@@ -120,26 +120,26 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     if (_isAccessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
+    if (AccessibilityService.activeSendingMode == 'receipt') {
+      AccessibilityService.activeSendingMode = 'none';
+    }
     _tabController.dispose();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkAccessibility();
-      if (_waitingForWhatsApp) {
-        _waitingForWhatsApp = false;
-        if (!_isAccessibilityEnabled) {
-          _showSendConfirmationDialog();
-        } else {
-          if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-            Future.delayed(const Duration(milliseconds: 1500), () {
-              if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
-                _showSendConfirmationDialog();
-              }
-            });
-          }
+    if (state == AppLifecycleState.resumed && AccessibilityService.activeSendingMode == 'receipt' && _isSending && _waitingForWhatsApp) {
+      _waitingForWhatsApp = false;
+      if (!_isAccessibilityEnabled) {
+        _showSendConfirmationDialog();
+      } else {
+        if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+          Future.delayed(const Duration(milliseconds: 1500), () {
+            if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+              _showSendConfirmationDialog();
+            }
+          });
         }
       }
     }
@@ -490,6 +490,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       await dir.create(recursive: true);
     }
 
+    AccessibilityService.activeSendingMode = 'receipt';
     int sentInSession = 0;
 
     while (_currentIndex < _pendingReceipts.length && _isSending && sentInSession < limit) {
@@ -519,6 +520,17 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         await receiptFile.writeAsBytes(imageBytes);
 
         await AccessibilityService.setAutoSendMode(true);
+        _waitingForWhatsApp = true;
+        _whatsAppCompleter = Completer<bool>();
+        final currentCompleter = _whatsAppCompleter!;
+
+        StreamSubscription? sub;
+        sub = AccessibilityService.onMessageSent.listen((_) {
+          if (AccessibilityService.activeSendingMode == 'receipt' && !currentCompleter.isCompleted) {
+            currentCompleter.complete(true);
+          }
+        });
+
         bool whatsAppOpened = await WhatsAppService.sendImage(
           mobile: customer.mobile,
           imagePath: receiptPath,
@@ -526,15 +538,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         );
 
         if (!whatsAppOpened) throw Exception("Could not open WhatsApp");
-
-        _waitingForWhatsApp = true;
-        _whatsAppCompleter = Completer<bool>();
-        final currentCompleter = _whatsAppCompleter!;
-
-        StreamSubscription? sub;
-        sub = AccessibilityService.onMessageSent.listen((_) {
-          if (!currentCompleter.isCompleted) currentCompleter.complete(true);
-        });
 
         // Use a longer timeout or rely on AppLifecycleState
         Timer timeoutTimer = Timer(const Duration(seconds: 45), () {
@@ -545,11 +548,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
         bool sent = await currentCompleter.future;
         timeoutTimer.cancel();
-        await sub.cancel();
+        await sub?.cancel();
         _waitingForWhatsApp = false;
 
         if (sent) {
           customer.receiptStatus = 'Sent';
+          sentInSession++;
           await LogService().writeLog(customer.mobile, "Receipt Sent");
           await CooldownService().recordMessageSent();
           if (await CooldownService().isCooldownActive()) {
@@ -579,7 +583,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
           _currentIndex++;
         });
       }
-      sentInSession++;
       
       if (_currentIndex < _pendingReceipts.length && sentInSession < limit) {
         int delayMs = CooldownService.getJitterDelayMilliseconds();
@@ -594,6 +597,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     if (_isAccessibilityEnabled) {
       await AccessibilityService.setAutoSendMode(false);
     }
+    AccessibilityService.activeSendingMode = 'none';
 
     if (mounted) {
       setState(() {

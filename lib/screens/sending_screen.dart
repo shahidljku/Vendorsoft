@@ -65,7 +65,7 @@ class _SendingScreenState
     WidgetsBinding.instance.addObserver(this);
     AccessibilityService.initialize();
     _messageSentSubscription = AccessibilityService.onMessageSent.listen((_) {
-      if (_waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+      if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
         _whatsAppCompleter!.complete(true);
       }
@@ -89,13 +89,16 @@ class _SendingScreenState
     if (_accessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
+    if (AccessibilityService.activeSendingMode == 'bill') {
+      AccessibilityService.activeSendingMode = 'none';
+    }
     super.dispose();
   }
 
   /// Detects when the app returns to foreground after WhatsApp.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _waitingForWhatsApp) {
+    if (state == AppLifecycleState.resumed && AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp) {
       _waitingForWhatsApp = false;
 
       // The accessibility broadcast receiver should have completed the completer already.
@@ -340,6 +343,7 @@ class _SendingScreenState
       if (_accessibilityEnabled) {
         await AccessibilityService.setAutoSendMode(false);
       }
+      AccessibilityService.activeSendingMode = 'none';
 
       setState(() {
         isSending = false;
@@ -366,6 +370,8 @@ class _SendingScreenState
       return;
     }
 
+    AccessibilityService.activeSendingMode = 'bill';
+
     setState(() {
       isSending = true;
       isPaused = false;
@@ -382,6 +388,7 @@ class _SendingScreenState
     if (_accessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
+    AccessibilityService.activeSendingMode = 'none';
 
     setState(() {
       isSending = false;

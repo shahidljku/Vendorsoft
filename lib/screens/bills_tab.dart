@@ -470,10 +470,15 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           child: Row(
             children: [
               SizedBox(
-                width: 24,
-                child: Text(
-                  index.toString(),
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontWeight: FontWeight.bold),
+                width: 44,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    index.toString(),
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontWeight: FontWeight.bold, fontSize: 14),
+                    maxLines: 1,
+                  ),
                 ),
               ),
               const CircleAvatar(

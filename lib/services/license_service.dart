@@ -77,7 +77,11 @@ MQIDAQAB
 
       if (isValid) {
         if (saveToStorage) {
-          await _storage.write(key: _licenseKeyPref, value: licenseKeyBase64);
+          try {
+            await _storage.write(key: _licenseKeyPref, value: licenseKeyBase64);
+          } catch (e) {
+            print('Storage write error: $e');
+          }
         }
         _cachedLicenseKey = licenseKeyBase64;
         _cachedIsValid = true;
@@ -99,7 +103,20 @@ MQIDAQAB
     if (_cachedIsValid != null && _cachedIsValid == true && _cachedLicenseKey != null) {
       return true;
     }
-    final savedKey = await _storage.read(key: _licenseKeyPref);
+    String? savedKey;
+    try {
+      savedKey = await _storage.read(key: _licenseKeyPref);
+    } catch (e) {
+      print('SecureStorage read error (BAD_DECRYPT handled): $e');
+      try {
+        await _storage.deleteAll();
+      } catch (_) {}
+      _cachedIsValid = false;
+      _cachedLicenseKey = null;
+      _currentLicenseInfo = null;
+      return false;
+    }
+
     if (savedKey == null) {
       _cachedIsValid = false;
       return false;
@@ -128,11 +145,8 @@ MQIDAQAB
         // Only comparing date parts, ignoring time
         final today = DateTime.now();
         final todayDate = DateTime(today.year, today.month, today.day);
-        final expDate = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-        
-        if (todayDate.isAfter(expDate)) {
-          return true; // Expired
-        }
+        final expiryDay = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
+        return todayDate.isAfter(expiryDay);
       }
     }
     
@@ -152,7 +166,13 @@ MQIDAQAB
 
   /// Remove license (deactivate)
   Future<void> removeLicense() async {
-    await _storage.delete(key: _licenseKeyPref);
+    try {
+      await _storage.delete(key: _licenseKeyPref);
+    } catch (_) {
+      try {
+        await _storage.deleteAll();
+      } catch (_) {}
+    }
     _currentLicenseInfo = null;
     _cachedLicenseKey = null;
     _cachedIsValid = false;
