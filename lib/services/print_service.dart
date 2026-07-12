@@ -1,7 +1,11 @@
 // ignore_for_file: avoid_print
+import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
+import 'package:image/image.dart' as img;
 import '../models/customer.dart';
 import 'license_service.dart';
 import 'settings_service.dart';
@@ -24,6 +28,192 @@ class PrintService {
     return const PdfPageFormat(58 * PdfPageFormat.mm, double.infinity, marginAll: 5 * PdfPageFormat.point);
   }
 
+  /// Connect to / select a specific system/network printer in settings
+  Future<void> connectPrinter(Printer printer, SettingsService settingsService) async {
+    await settingsService.setPrinterConnectionType('system');
+    await settingsService.setSelectedPrinterUrl(printer.url);
+    await settingsService.setSelectedPrinterName(printer.name);
+    await settingsService.setDirectPrintEnabled(true);
+  }
+
+  /// Get list of available native Bluetooth ESC/POS printers on the device
+  Future<List<BluetoothInfo>> getAvailableBluetoothPrinters() async {
+    try {
+      final permitted = await PrintBluetoothThermal.isPermissionBluetoothGranted;
+      if (!permitted) return [];
+      return await PrintBluetoothThermal.pairedBluetooths;
+    } catch (e) {
+      print('Error listing Bluetooth printers: $e');
+      return [];
+    }
+  }
+
+  /// Connect to a native Bluetooth ESC/POS printer
+  Future<bool> connectBluetoothPrinter(BluetoothInfo info, SettingsService settingsService) async {
+    try {
+      final connected = await PrintBluetoothThermal.connect(macPrinterAddress: info.macAdress);
+      if (connected) {
+        await settingsService.setPrinterConnectionType('bluetooth');
+        await settingsService.setSelectedBluetoothMac(info.macAdress);
+        await settingsService.setSelectedPrinterName(info.name);
+        await settingsService.setDirectPrintEnabled(true);
+        return true;
+      }
+    } catch (e) {
+      print('Error connecting Bluetooth thermal printer: $e');
+    }
+    return false;
+  }
+
+  /// Send PDF layout directly to Bluetooth ESC/POS Thermal Printer
+  Future<bool> _sendPdfToBluetoothThermal(Uint8List pdfBytes, SettingsService settingsService) async {
+    try {
+      final mac = await settingsService.getSelectedBluetoothMac();
+      if (mac == null || mac.isEmpty) return false;
+
+      bool isConnected = await PrintBluetoothThermal.connectionStatus;
+      if (!isConnected) {
+        isConnected = await PrintBluetoothThermal.connect(macPrinterAddress: mac);
+      }
+      if (!isConnected) return false;
+
+      final widthStr = await settingsService.getDefaultPrinterWidth();
+      final is80mm = widthStr == '80mm';
+      final profile = await CapabilityProfile.load();
+      final generator = Generator(is80mm ? PaperSize.mm80 : PaperSize.mm58, profile);
+
+      List<int> bytes = [];
+      bytes.addAll(generator.reset());
+
+      await for (final page in Printing.raster(pdfBytes, dpi: 200)) {
+        final imgBytes = await page.toPng();
+        final decodedImg = img.decodePng(imgBytes);
+        if (decodedImg != null) {
+          bytes.addAll(generator.imageRaster(decodedImg, align: PosAlign.center));
+        }
+      }
+
+      bytes.addAll(generator.feed(2));
+      bytes.addAll(generator.cut());
+
+      await PrintBluetoothThermal.writeBytes(bytes);
+      return true;
+    } catch (e) {
+      print('Error sending bytes to Bluetooth printer: $e');
+      return false;
+    }
+  }
+
+  /// Disconnect / clear saved thermal printer
+  Future<void> disconnectPrinter(SettingsService settingsService) async {
+    try {
+      await PrintBluetoothThermal.disconnect;
+    } catch (_) {}
+    await settingsService.setSelectedPrinterUrl(null);
+    await settingsService.setSelectedPrinterName(null);
+    await settingsService.setSelectedBluetoothMac(null);
+    await settingsService.setPrinterConnectionType('system');
+    await settingsService.setDirectPrintEnabled(false);
+  }
+
+  /// Get list of available printers on the device
+  Future<List<Printer>> getAvailablePrinters() async {
+    try {
+      return await Printing.listPrinters();
+    } catch (e) {
+      print('Error listing printers: $e');
+      return [];
+    }
+  }
+
+  /// Helper to get the currently connected printer (if any)
+  Future<Printer?> getConnectedPrinter(SettingsService settingsService) async {
+    final url = await settingsService.getSelectedPrinterUrl();
+    final name = await settingsService.getSelectedPrinterName();
+    if (url != null && url.isNotEmpty) {
+      try {
+        final printers = await Printing.listPrinters();
+        for (var p in printers) {
+          if (p.url == url || (name != null && p.name == name)) {
+            return p;
+          }
+        }
+      } catch (_) {}
+      return Printer(url: url, name: name ?? 'Thermal Printer');
+    }
+    return null;
+  }
+
+  /// Runs a test print on the thermal printer
+  Future<bool> testPrint({required SettingsService settingsService}) async {
+    try {
+      final pageFormat = await _getPageFormat(settingsService);
+      final businessName = LicenseService().getBusinessName();
+
+      Future<Uint8List> buildTestLayout(PdfPageFormat format) async {
+        final doc = pw.Document();
+        doc.addPage(
+          pw.Page(
+            pageFormat: pageFormat,
+            build: (pw.Context context) {
+              return pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                mainAxisSize: pw.MainAxisSize.min,
+                children: [
+                  pw.Text(
+                    businessName.isEmpty ? 'VENDSOFT BILLING' : businessName.toUpperCase(),
+                    style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text('THERMAL PRINTER TEST', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                  pw.Divider(thickness: 1, height: 8),
+                  pw.Text('Status: Connected & Working!', style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                  pw.SizedBox(height: 4),
+                  pw.Text('Width: ${pageFormat.width / PdfPageFormat.mm} mm', style: const pw.TextStyle(fontSize: 8)),
+                  pw.Text('Date: ${DateTime.now().toString().substring(0, 16)}', style: const pw.TextStyle(fontSize: 8)),
+                  pw.Divider(thickness: 1, height: 8),
+                  pw.Text('Thank you for choosing VendSoft!', style: const pw.TextStyle(fontSize: 8), textAlign: pw.TextAlign.center),
+                  pw.SizedBox(height: 4),
+                ],
+              );
+            },
+          ),
+        );
+        return doc.save();
+      }
+
+      final directPrint = await settingsService.getDirectPrintEnabled();
+      final connectionType = await settingsService.getPrinterConnectionType();
+
+      if (directPrint && connectionType == 'bluetooth') {
+        final pdfBytes = await buildTestLayout(pageFormat);
+        final btSuccess = await _sendPdfToBluetoothThermal(pdfBytes, settingsService);
+        if (btSuccess) return true;
+      }
+
+      final printer = await getConnectedPrinter(settingsService);
+
+      if (directPrint && printer != null) {
+        final success = await Printing.directPrintPdf(
+          printer: printer,
+          onLayout: buildTestLayout,
+          name: 'VendSoft_Test_Print',
+        );
+        if (success) return true;
+      }
+
+      await Printing.layoutPdf(
+        onLayout: buildTestLayout,
+        name: 'VendSoft_Test_Print',
+      );
+      return true;
+    } catch (e) {
+      print('PrintService testPrint error: $e');
+      return false;
+    }
+  }
+
   /// Prints a Bill document for the customer
   Future<bool> printBill({
     required Customer customer,
@@ -33,11 +223,10 @@ class PrintService {
       final pageFormat = await _getPageFormat(settingsService);
       final businessName = LicenseService().getBusinessName();
 
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async {
-          final doc = pw.Document();
+      Future<Uint8List> buildBillPdf(PdfPageFormat format) async {
+        final doc = pw.Document();
 
-          doc.addPage(
+        doc.addPage(
             pw.Page(
               pageFormat: pageFormat,
               build: (pw.Context context) {
@@ -140,7 +329,30 @@ class PrintService {
           );
 
           return doc.save();
-        },
+      }
+
+      final directPrint = await settingsService.getDirectPrintEnabled();
+      final connectionType = await settingsService.getPrinterConnectionType();
+
+      if (directPrint && connectionType == 'bluetooth') {
+        final pdfBytes = await buildBillPdf(pageFormat);
+        final btSuccess = await _sendPdfToBluetoothThermal(pdfBytes, settingsService);
+        if (btSuccess) return true;
+      }
+
+      final printer = await getConnectedPrinter(settingsService);
+
+      if (directPrint && printer != null) {
+        final success = await Printing.directPrintPdf(
+          printer: printer,
+          onLayout: buildBillPdf,
+          name: 'Bill_${customer.custName.replaceAll(' ', '_')}_${customer.billNo}',
+        );
+        if (success) return true;
+      }
+
+      await Printing.layoutPdf(
+        onLayout: buildBillPdf,
         name: 'Bill_${customer.custName.replaceAll(' ', '_')}_${customer.billNo}',
       );
       return true;
@@ -159,11 +371,10 @@ class PrintService {
       final pageFormat = await _getPageFormat(settingsService);
       final businessName = LicenseService().getBusinessName();
 
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async {
-          final doc = pw.Document();
+      Future<Uint8List> buildReceiptPdf(PdfPageFormat format) async {
+        final doc = pw.Document();
 
-          doc.addPage(
+        doc.addPage(
             pw.Page(
               pageFormat: pageFormat,
               build: (pw.Context context) {
@@ -269,7 +480,30 @@ class PrintService {
           );
 
           return doc.save();
-        },
+      }
+
+      final directPrint = await settingsService.getDirectPrintEnabled();
+      final connectionType = await settingsService.getPrinterConnectionType();
+
+      if (directPrint && connectionType == 'bluetooth') {
+        final pdfBytes = await buildReceiptPdf(pageFormat);
+        final btSuccess = await _sendPdfToBluetoothThermal(pdfBytes, settingsService);
+        if (btSuccess) return true;
+      }
+
+      final printer = await getConnectedPrinter(settingsService);
+
+      if (directPrint && printer != null) {
+        final success = await Printing.directPrintPdf(
+          printer: printer,
+          onLayout: buildReceiptPdf,
+          name: 'Receipt_${customer.custName.replaceAll(' ', '_')}_${customer.billNo}',
+        );
+        if (success) return true;
+      }
+
+      await Printing.layoutPdf(
+        onLayout: buildReceiptPdf,
         name: 'Receipt_${customer.custName.replaceAll(' ', '_')}_${customer.billNo}',
       );
       return true;

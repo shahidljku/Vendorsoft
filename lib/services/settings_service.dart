@@ -20,6 +20,11 @@ class SettingsService extends ChangeNotifier {
   static const _keyLastExcelFileName = 'lastExcelFileName';
   static const _keyIsFirstLaunch = 'isFirstLaunch';
   static const _keyDefaultPrinterWidth = 'defaultPrinterWidth';
+  static const _keySelectedPrinterName = 'selectedPrinterName';
+  static const _keySelectedPrinterUrl = 'selectedPrinterUrl';
+  static const _keyDirectPrintEnabled = 'directPrintEnabled';
+  static const _keySelectedBluetoothMac = 'selectedBluetoothMac';
+  static const _keyPrinterConnectionType = 'printerConnectionType';
   static const _keySavedCollectionMen = 'savedCollectionMen';
   static const _keySavedItems = 'savedItems';
 
@@ -239,6 +244,73 @@ class SettingsService extends ChangeNotifier {
   Future<void> setDefaultPrinterWidth(String value) async {
     await _init();
     await _prefs!.setString(_keyDefaultPrinterWidth, value);
+    notifyListeners();
+  }
+
+  Future<String?> getSelectedPrinterName() async {
+    await _init();
+    return _prefs!.getString(_keySelectedPrinterName);
+  }
+
+  Future<void> setSelectedPrinterName(String? value) async {
+    await _init();
+    if (value == null || value.isEmpty) {
+      await _prefs!.remove(_keySelectedPrinterName);
+    } else {
+      await _prefs!.setString(_keySelectedPrinterName, value);
+    }
+    notifyListeners();
+  }
+
+  Future<String?> getSelectedPrinterUrl() async {
+    await _init();
+    return _prefs!.getString(_keySelectedPrinterUrl);
+  }
+
+  Future<void> setSelectedPrinterUrl(String? value) async {
+    await _init();
+    if (value == null || value.isEmpty) {
+      await _prefs!.remove(_keySelectedPrinterUrl);
+    } else {
+      await _prefs!.setString(_keySelectedPrinterUrl, value);
+    }
+    notifyListeners();
+  }
+
+  Future<bool> getDirectPrintEnabled() async {
+    await _init();
+    return _prefs!.getBool(_keyDirectPrintEnabled) ?? false;
+  }
+
+  Future<void> setDirectPrintEnabled(bool value) async {
+    await _init();
+    await _prefs!.setBool(_keyDirectPrintEnabled, value);
+    notifyListeners();
+  }
+
+  Future<String?> getSelectedBluetoothMac() async {
+    await _init();
+    return _prefs!.getString(_keySelectedBluetoothMac);
+  }
+
+  Future<void> setSelectedBluetoothMac(String? value) async {
+    await _init();
+    if (value == null || value.isEmpty) {
+      await _prefs!.remove(_keySelectedBluetoothMac);
+    } else {
+      await _prefs!.setString(_keySelectedBluetoothMac, value);
+    }
+    notifyListeners();
+  }
+
+  Future<String> getPrinterConnectionType() async {
+    await _init();
+    return _prefs!.getString(_keyPrinterConnectionType) ?? 'system';
+  }
+
+  Future<void> setPrinterConnectionType(String value) async {
+    await _init();
+    await _prefs!.setString(_keyPrinterConnectionType, value);
     notifyListeners();
   }
 

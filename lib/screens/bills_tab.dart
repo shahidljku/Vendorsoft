@@ -5,6 +5,7 @@ import 'sending_screen.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
+import '../services/whatsapp_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/print_service.dart';
@@ -443,10 +444,10 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         child: const Icon(Icons.payment, color: Colors.black, size: 32),
       ),
       secondaryBackground: Container(
-        color: Colors.blue,
+        color: const Color(0xFF25D366),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 24),
-        child: const Icon(Icons.print, color: Colors.white, size: 32),
+        child: const Icon(Icons.send, color: Colors.white, size: 32),
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
@@ -457,7 +458,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           }
           return false;
         } else if (direction == DismissDirection.endToStart) {
-          await PrintService().printBill(customer: customer, settingsService: widget.settingsService);
+          _sendSingleBillToWhatsApp(context, customer);
           return false;
         }
         return false;
@@ -648,22 +649,21 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
               // Actions
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.print, color: Colors.white),
+                  onPressed: () async {
                     Navigator.pop(context);
-                    if (customer.paymentStatus != 'Successful') {
-                      _showPaymentDialog(context, customer);
-                    }
+                    await PrintService().printBill(customer: customer, settingsService: widget.settingsService);
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: customer.paymentStatus == 'Successful' ? Colors.grey.withValues(alpha: 0.2) : const Color(0xFF00E676),
+                    backgroundColor: Colors.blue,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     elevation: 0,
                   ),
-                  child: Text(
-                    customer.paymentStatus == 'Successful' ? 'Payment Completed' : 'Mark as Paid', 
+                  label: const Text(
+                    'Print Bill',
                     style: TextStyle(
-                      color: customer.paymentStatus == 'Successful' ? Colors.white54 : Colors.black,
+                      color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
@@ -674,16 +674,16 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  icon: const Icon(Icons.print, color: Colors.blue),
-                  onPressed: () async {
+                  icon: const Icon(Icons.send, color: Color(0xFF25D366)),
+                  onPressed: () {
                     Navigator.pop(context);
-                    await PrintService().printBill(customer: customer, settingsService: widget.settingsService);
+                    _sendSingleBillToWhatsApp(context, customer);
                   },
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.blue),
+                    side: const BorderSide(color: Color(0xFF25D366)),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  label: const Text('Print Thermal Bill', style: TextStyle(color: Colors.blue, fontWeight: FontWeight.bold, fontSize: 16)),
+                  label: const Text('Send to WhatsApp', style: TextStyle(color: Color(0xFF25D366), fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
               if (customer.status == 'Failed') ...[
@@ -713,6 +713,67 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         );
       },
     );
+  }
+
+  void _sendSingleBillToWhatsApp(BuildContext context, Customer customer) async {
+    // Validate phone number
+    if (customer.mobile.isEmpty || customer.mobile.length < 10) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid or missing phone number for this customer.')),
+        );
+      }
+      return;
+    }
+
+    // Validate image exists
+    String imagePath = customer.resolvedImagePath;
+    bool imageExists = false;
+    if (imagePath.isNotEmpty) {
+      try {
+        imageExists = File(imagePath).existsSync();
+      } catch (_) {}
+    }
+
+    if (!imageExists) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bill image not found for this customer.')),
+        );
+      }
+      return;
+    }
+
+    // Capture messenger before async gap to satisfy lint
+    final messenger = ScaffoldMessenger.of(context);
+
+    // Check WhatsApp preference
+    bool useBusinessApp = await widget.settingsService.getUseWhatsAppBusiness();
+
+    try {
+      await WhatsAppService.sendImage(
+        mobile: customer.mobile,
+        imagePath: imagePath,
+        useBusinessApp: useBusinessApp,
+      );
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Bill sent to WhatsApp for ${customer.custName.isNotEmpty ? customer.custName : customer.mobile}')),
+        );
+      }
+    } on WhatsAppException catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('WhatsApp error: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Failed to send: $e')),
+        );
+      }
+    }
   }
 
   Widget _buildTimelineNode({required String title, required String status, required bool isSuccess, required bool isFailed}) {

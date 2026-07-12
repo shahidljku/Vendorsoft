@@ -5,6 +5,7 @@ import '../services/license_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/excel_service.dart';
 import '../services/backup_service.dart';
+import '../services/print_service.dart';
 import 'package:flutter/services.dart';
 import 'pin_lock_screen.dart';
 import '../widgets/subscription_dialog.dart';
@@ -35,6 +36,8 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   int _delayBetween = 10000;
   int _delayNext = 10000;
   String _printerWidth = '58mm';
+  String? _selectedPrinterName;
+  bool _directPrintEnabled = false;
   
   bool _isLoading = true;
   bool _waitingForAccessibility = false;
@@ -75,6 +78,8 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     _delayBetween = await widget.settingsService.getDelayBetweenCustomers();
     _delayNext = await widget.settingsService.getDelayBeforeNext();
     _printerWidth = await widget.settingsService.getDefaultPrinterWidth();
+    _selectedPrinterName = await widget.settingsService.getSelectedPrinterName();
+    _directPrintEnabled = await widget.settingsService.getDirectPrintEnabled();
 
     setState(() {
       _isLoading = false;
@@ -168,8 +173,35 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           _buildSettingsGroup(
             title: 'Printer & Receipts',
             children: [
+              _buildSettingItem(
+                icon: _selectedPrinterName != null ? Icons.print : Icons.print_disabled,
+                title: _selectedPrinterName != null ? 'Connected Printer' : 'Connect Thermal Printer',
+                subtitle: _selectedPrinterName ?? 'Tap to select system/Bluetooth printer',
+                onTap: () => _showConnectOrManagePrinterDialog(),
+              ),
+              if (_selectedPrinterName != null) ...[
+                _buildSwitchItem(
+                  icon: Icons.flash_on,
+                  title: 'Direct Thermal Print',
+                  subtitle: 'Print instantly without showing OS print dialog',
+                  value: _directPrintEnabled,
+                  onChanged: (val) async {
+                    setState(() => _directPrintEnabled = val);
+                    await widget.settingsService.setDirectPrintEnabled(val);
+                  },
+                ),
+                _buildSettingItem(
+                  icon: Icons.play_circle_fill,
+                  title: 'Run Test Print',
+                  subtitle: 'Verify thermal printer layout & connection',
+                  onTap: () async {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sending test print...')));
+                    await PrintService().testPrint(settingsService: widget.settingsService);
+                  },
+                ),
+              ],
               _buildDropdownItem(
-                icon: Icons.print,
+                icon: Icons.receipt_long,
                 title: 'Printer Roll Width',
                 subtitle: 'Continuous auto-height paper size',
                 value: _printerWidth,
@@ -345,6 +377,145 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 32),
         ],
+      ),
+    );
+  }
+
+  Future<void> _showConnectOrManagePrinterDialog() async {
+    if (_selectedPrinterName != null) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF161B22),
+          title: Row(
+            children: [
+              const Icon(Icons.print, color: Color(0xFF00E676)),
+              const SizedBox(width: 10),
+              Expanded(child: Text(_selectedPrinterName!, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.play_circle_fill, color: Color(0xFF00E676)),
+                title: const Text('Test Print', style: TextStyle(color: Colors.white)),
+                onTap: () async {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sending test print...')));
+                  await PrintService().testPrint(settingsService: widget.settingsService);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.print_disabled, color: Colors.redAccent),
+                title: const Text('Disconnect Printer', style: TextStyle(color: Colors.white)),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await PrintService().disconnectPrinter(widget.settingsService);
+                  await _loadSettings();
+                  if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Printer disconnected')));
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+    );
+    final btPrinters = await PrintService().getAvailableBluetoothPrinters();
+    final sysPrinters = await PrintService().getAvailablePrinters();
+    if (!mounted) return;
+    Navigator.pop(context);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Connect Thermal Printer', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.bluetooth, color: Colors.blueAccent, size: 18),
+                      SizedBox(width: 6),
+                      Text('Bluetooth ESC/POS Printers', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+                    ],
+                  ),
+                ),
+                if (btPrinters.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 24, top: 4, bottom: 12),
+                    child: Text('No paired Bluetooth printers.\nPair your thermal printer in Android Settings first.', style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.3)),
+                  )
+                else
+                  ...btPrinters.map((p) => Card(
+                        color: const Color(0xFF0B1014),
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        child: ListTile(
+                          leading: const Icon(Icons.bluetooth_connected, color: Colors.blueAccent),
+                          title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          subtitle: Text('MAC: ${p.macAdress}', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                          onTap: () async {
+                            Navigator.pop(context);
+                            showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.blueAccent)));
+                            final success = await PrintService().connectBluetoothPrinter(p, widget.settingsService);
+                            if (mounted) Navigator.pop(context);
+                            await _loadSettings();
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(success ? 'Connected: ${p.name}' : 'Failed to connect via Bluetooth'), backgroundColor: success ? const Color(0xFF00E676) : Colors.redAccent));
+                          },
+                        ),
+                      )),
+                const SizedBox(height: 12),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 6),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.print, color: Color(0xFF00E676), size: 18),
+                      SizedBox(width: 6),
+                      Text('System / Network Printers', style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 14)),
+                    ],
+                  ),
+                ),
+                if (sysPrinters.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 24, top: 4, bottom: 8),
+                    child: Text('No system print services found.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  )
+                else
+                  ...sysPrinters.map((p) => Card(
+                        color: const Color(0xFF0B1014),
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        child: ListTile(
+                          leading: const Icon(Icons.print, color: Color(0xFF00E676)),
+                          title: Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          subtitle: Text(p.location ?? p.model ?? '', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                          onTap: () async {
+                            Navigator.pop(context);
+                            await PrintService().connectPrinter(p, widget.settingsService);
+                            await _loadSettings();
+                            if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Connected to: ${p.name}'), backgroundColor: const Color(0xFF00E676)));
+                          },
+                        ),
+                      )),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
