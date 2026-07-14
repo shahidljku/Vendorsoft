@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/customer.dart';
@@ -48,7 +49,6 @@ class RemindersModal extends StatefulWidget {
 }
 
 class _RemindersModalState extends State<RemindersModal> {
-  int _filterMode = 0; // 0: Sent 5+ Days, 1: Sent 15+ Days, 2: Any Unpaid 5+ Days, 3: All Unpaid & Sent
   List<Customer> _eligibleCustomers = [];
   final Set<String> _selectedMobiles = {};
   String _template = '';
@@ -59,10 +59,15 @@ class _RemindersModalState extends State<RemindersModal> {
   StreamSubscription<bool>? _messageSentSubscription;
   bool _isAccessibilityEnabled = false;
 
+  Timer? _cooldownTimer;
+  Duration _remainingCooldown = Duration.zero;
+  bool get _isCooldownActive => _remainingCooldown.inSeconds > 0;
+
   @override
   void initState() {
     super.initState();
     _loadTemplateAndCheck();
+    _checkCooldownTicker();
     _messageSentSubscription = AccessibilityService.onMessageSent.listen((_) {
       if (AccessibilityService.activeSendingMode == 'reminder' && _isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
@@ -71,8 +76,52 @@ class _RemindersModalState extends State<RemindersModal> {
     });
   }
 
+  Future<void> _checkCooldownTicker() async {
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (mounted) {
+      setState(() {
+        _remainingCooldown = remaining;
+      });
+      _startCooldownTicker();
+    }
+  }
+
+  void _startCooldownTicker() {
+    _cooldownTimer?.cancel();
+    if (_remainingCooldown.inSeconds > 0) {
+      _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        if (_remainingCooldown.inSeconds <= 1) {
+          timer.cancel();
+          setState(() {
+            _remainingCooldown = Duration.zero;
+          });
+        } else {
+          setState(() {
+            _remainingCooldown = _remainingCooldown - const Duration(seconds: 1);
+          });
+        }
+      });
+    }
+  }
+
+  String _formatCooldown(Duration d) {
+    int h = d.inHours;
+    int m = d.inMinutes.remainder(60);
+    int s = d.inSeconds.remainder(60);
+    if (h > 0) {
+      return 'Rest: ${h}h ${m}m ${s}s';
+    } else {
+      return 'Rest: ${m}m ${s}s';
+    }
+  }
+
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     _messageSentSubscription?.cancel();
     if (AccessibilityService.activeSendingMode == 'reminder') {
       AccessibilityService.activeSendingMode = 'none';
@@ -161,28 +210,9 @@ class _RemindersModalState extends State<RemindersModal> {
       bool isSentStatus = st == 'sent' || st == 'message sent';
       int? days = getDaysSinceReference(c);
 
-      if (_filterMode == 0) {
-        // Sent Bills (5+ Days Ago)
-        if (isSentStatus) {
-          if (days == null || days >= 5) {
-            filtered.add(c);
-          }
-        }
-      } else if (_filterMode == 1) {
-        // Sent Bills (15+ Days Ago)
-        if (isSentStatus) {
-          if (days != null && days >= 15) {
-            filtered.add(c);
-          }
-        }
-      } else if (_filterMode == 2) {
-        // Any Unpaid Bill (5+ Days Ago)
-        if (days == null || days >= 5) {
-          filtered.add(c);
-        }
-      } else if (_filterMode == 3) {
-        // All Unpaid & Sent Bills
-        if (isSentStatus) {
+      // Simple 15-day rule: Unpaid bills sent 15+ days ago (or sent status without explicit date)
+      if (isSentStatus) {
+        if (days == null || days >= 15) {
           filtered.add(c);
         }
       }
@@ -191,11 +221,20 @@ class _RemindersModalState extends State<RemindersModal> {
     setState(() {
       _eligibleCustomers = filtered;
       _selectedMobiles.clear();
+      // Auto-select ALL unpaid users sent 15+ days ago right away
       for (Customer c in filtered) {
-        // If customer yesNo is 'No' or stopped taking newspaper, unselect by default to prevent angering them!
-        if (c.yesNo.trim().toLowerCase() != 'no') {
-          _selectedMobiles.add(c.mobile);
-        }
+        _selectedMobiles.add(c.mobile);
+      }
+    });
+  }
+
+  void _toggleSelection(Customer c) {
+    if (_isSending) return;
+    setState(() {
+      if (_selectedMobiles.contains(c.mobile)) {
+        _selectedMobiles.remove(c.mobile);
+      } else {
+        _selectedMobiles.add(c.mobile);
       }
     });
   }
@@ -265,7 +304,16 @@ class _RemindersModalState extends State<RemindersModal> {
     String name = c.custName.isNotEmpty ? c.custName : c.mobile;
     String billNo = c.billNo.isNotEmpty ? c.billNo : 'N/A';
     String bal = c.clBalance.isNotEmpty ? c.clBalance : (c.billAmount.isNotEmpty ? c.billAmount : '0');
-    String month = c.monthNm.isNotEmpty ? c.monthNm : 'Current Month';
+    
+    String month;
+    if (c.monthNm.isNotEmpty && c.monthNm != 'null' && c.monthNm != '-') {
+      month = c.monthNm;
+    } else {
+      DateTime? dt = _parseDateStr(c.vouchDate) ?? _parseDateStr(c.sentTime) ?? DateTime.now();
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      month = '${months[dt.month - 1]}-${dt.year}';
+    }
+
     String bizName = LicenseService().getBusinessName();
 
     return _template
@@ -277,6 +325,38 @@ class _RemindersModalState extends State<RemindersModal> {
   }
 
   Future<void> _startSendingReminders() async {
+    if (await CooldownService().isCooldownActive()) {
+      Duration remaining = await CooldownService().getRemainingCooldown();
+      int mins = remaining.inMinutes + 1;
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF2C2C2C),
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+                SizedBox(width: 10),
+                Text('WhatsApp Rest Active', style: TextStyle(color: Colors.white)),
+              ],
+            ),
+            content: Text(
+              'Batch limit reached (30 messages in the last hour).\n\nTo protect your free WhatsApp account from being banned, automatic sending is paused. Please wait $mins minutes before sending the next batch.',
+              style: const TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(ctx),
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+                child: const Text('OK', style: TextStyle(color: Colors.black)),
+              ),
+            ],
+          ),
+        );
+      }
+      return;
+    }
+
     List<Customer> toSend = _eligibleCustomers.where((c) => _selectedMobiles.contains(c.mobile)).toList();
     if (toSend.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No customers selected!')));
@@ -351,8 +431,31 @@ class _RemindersModalState extends State<RemindersModal> {
 
         if (sent) {
           sentCount++;
+          // 1. Mark customer status so they never get spammed in future sessions
+          c.status = 'Reminder Sent';
           await LogService().writeLog(c.mobile, "Payment Reminder Sent ($msg)");
           await CooldownService().recordMessageSent();
+
+          // 2. Remove customer from the active list right away
+          if (mounted) {
+            setState(() {
+              _selectedMobiles.remove(c.mobile);
+              _eligibleCustomers.removeWhere((item) => item.mobile == c.mobile);
+            });
+          }
+
+          // 3. Stop immediately if batch limit of 30 messages has been hit
+          if (await CooldownService().isCooldownActive()) {
+            await _checkCooldownTicker();
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Batch limit of 30 reached! Pausing automatically for 1 hour rest to prevent WhatsApp ban.'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 5),
+              ));
+            }
+            break;
+          }
         }
       } catch (e) {
         await LogService().writeLog(c.mobile, "Payment Reminder Failed - $e");
@@ -366,7 +469,12 @@ class _RemindersModalState extends State<RemindersModal> {
 
       if (_currentIndex < toSend.length) {
         int delayMs = await widget.settingsService.getDelayBetweenCustomers();
-        int remainingSec = (delayMs / 1000).round();
+        int baseSec = (delayMs / 1000).round();
+        // Minimal safe base delay: at least 4 seconds so WhatsApp does not flag speed
+        if (baseSec < 4) baseSec = 4;
+        // Jitter: add 0 to 3 seconds of randomized variation to avoid robotic pattern detection
+        int jitterSec = Random().nextInt(4);
+        int remainingSec = baseSec + jitterSec;
         while (remainingSec > 0 && _isSending) {
           await Future.delayed(const Duration(seconds: 1));
           remainingSec--;
@@ -378,6 +486,9 @@ class _RemindersModalState extends State<RemindersModal> {
       await AccessibilityService.setAutoSendMode(false);
     }
     AccessibilityService.activeSendingMode = 'none';
+
+    // Save all updated statuses ('Reminder Sent') back to Excel immediately
+    await widget.excelService.saveCustomers();
 
     if (mounted) {
       setState(() {
@@ -421,55 +532,18 @@ class _RemindersModalState extends State<RemindersModal> {
           ),
         ),
 
-        // Safety Banner
+        // Simple Info & Instructions Banner
         Container(
-          padding: const EdgeInsets.all(12),
-          color: const Color(0xFF3E2723),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          color: const Color(0xFF161B22),
           child: const Row(
             children: [
-              Icon(Icons.shield, color: Colors.amberAccent),
+              Icon(Icons.info_outline, color: Color(0xFF00E676), size: 20),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Safety Rule: Customers who have paid or who stopped newspaper (Yes/No = No) are ignored by default. Uncheck any customer below before sending if needed.',
-                  style: TextStyle(color: Colors.amberAccent, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // Filter Bar
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          color: const Color(0xFF2C2C2C),
-          child: Row(
-            children: [
-              const Icon(Icons.filter_list, color: Colors.grey, size: 20),
-              const SizedBox(width: 8),
-              const Text('Filter: ', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: DropdownButton<int>(
-                  value: _filterMode,
-                  dropdownColor: const Color(0xFF2C2C2C),
-                  isExpanded: true,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  underline: const SizedBox(),
-                  onChanged: _isSending
-                      ? null
-                      : (val) {
-                          if (val != null) {
-                            setState(() => _filterMode = val);
-                            _applyFilter();
-                          }
-                        },
-                  items: const [
-                    DropdownMenuItem(value: 0, child: Text('Sent Bills (Min 5 Days Ago)')),
-                    DropdownMenuItem(value: 1, child: Text('Sent Bills (Min 15 Days Ago)')),
-                    DropdownMenuItem(value: 2, child: Text('Any Unpaid Bill (Min 5 Days Ago)')),
-                    DropdownMenuItem(value: 3, child: Text('All Unpaid & Sent Bills')),
-                  ],
+                  'Simple 15-Day Rule: Unpaid bills sent 15+ days ago are auto-selected below.\n• Tap or long press any user to deselect them if needed.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.3),
                 ),
               ),
             ],
@@ -502,8 +576,8 @@ class _RemindersModalState extends State<RemindersModal> {
           child: _eligibleCustomers.isEmpty
               ? const Center(
                   child: Text(
-                    'No unpaid customers match this filter.',
-                    style: TextStyle(color: Colors.grey, fontSize: 16),
+                    'No unpaid customers sent bills 15+ days ago.',
+                    style: TextStyle(color: Colors.grey, fontSize: 15),
                   ),
                 )
               : ListView.builder(
@@ -519,60 +593,75 @@ class _RemindersModalState extends State<RemindersModal> {
                       decoration: BoxDecoration(
                         color: _isSending && index == _currentIndex
                             ? Colors.blue.withValues(alpha: 0.2)
-                            : (isStopped ? Colors.red.withValues(alpha: 0.15) : const Color(0xFF2A2A2A)),
+                            : (isChecked
+                                ? (isStopped ? Colors.red.withValues(alpha: 0.15) : const Color(0xFF2A2A2A))
+                                : const Color(0xFF1A1A1A)),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: isChecked ? const Color(0xFF00E676) : Colors.transparent,
+                          color: isChecked ? const Color(0xFF00E676) : Colors.white12,
+                          width: isChecked ? 1.5 : 1,
                         ),
                       ),
-                      child: CheckboxListTile(
-                        value: isChecked,
-                        activeColor: const Color(0xFF00E676),
-                        checkColor: Colors.black,
-                        onChanged: _isSending || isStopped
-                            ? null
-                            : (val) {
-                                setState(() {
-                                  if (val == true) {
-                                    _selectedMobiles.add(c.mobile);
-                                  } else {
-                                    _selectedMobiles.remove(c.mobile);
-                                  }
-                                });
-                              },
-                        title: Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                c.custName.isNotEmpty ? c.custName : c.mobile,
-                                style: TextStyle(
-                                  color: isStopped ? Colors.redAccent : Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            if (isStopped)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.red,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text('Stopped / No', style: TextStyle(color: Colors.white, fontSize: 10)),
-                              ),
-                          ],
-                        ),
-                        subtitle: Padding(
-                          padding: const EdgeInsets.only(top: 4),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: _isSending ? null : () => _toggleSelection(c),
+                        onLongPress: _isSending ? null : () => _toggleSelection(c),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                           child: Row(
                             children: [
-                              Text('Due: ₹${c.clBalance.isNotEmpty ? c.clBalance : c.billAmount}', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w600)),
-                              const SizedBox(width: 12),
-                              Text('Bill #${c.billNo.isNotEmpty ? c.billNo : "N/A"}', style: const TextStyle(color: Colors.grey)),
-                              const Spacer(),
-                              Text(
-                                days != null ? '$days days since bill' : 'Bill Sent',
-                                style: TextStyle(color: days != null && days >= 15 ? Colors.redAccent : Colors.lightBlueAccent, fontSize: 12),
+                              Icon(
+                                isChecked ? Icons.check_circle : Icons.radio_button_unchecked,
+                                color: isChecked ? const Color(0xFF00E676) : Colors.grey,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            c.custName.isNotEmpty ? c.custName : c.mobile,
+                                            style: TextStyle(
+                                              color: !isChecked
+                                                  ? Colors.grey
+                                                  : (isStopped ? Colors.redAccent : Colors.white),
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 15,
+                                              decoration: !isChecked ? TextDecoration.lineThrough : null,
+                                            ),
+                                          ),
+                                        ),
+                                        if (isStopped)
+                                          Container(
+                                            margin: const EdgeInsets.only(left: 6),
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.red,
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: const Text('Stopped / No', style: TextStyle(color: Colors.white, fontSize: 10)),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Text('Due: ₹${c.clBalance.isNotEmpty ? c.clBalance : c.billAmount}', style: TextStyle(color: isChecked ? Colors.orangeAccent : Colors.grey, fontWeight: FontWeight.w600, fontSize: 13)),
+                                        const SizedBox(width: 12),
+                                        Text('Bill #${c.billNo.isNotEmpty ? c.billNo : "N/A"}', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                                        const Spacer(),
+                                        Text(
+                                          days != null ? '$days days ago' : '15+ days ago',
+                                          style: TextStyle(color: isChecked ? Colors.redAccent : Colors.grey, fontSize: 12, fontWeight: FontWeight.w500),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
@@ -610,40 +699,30 @@ class _RemindersModalState extends State<RemindersModal> {
                 )
               : Row(
                   children: [
-                    TextButton(
-                      onPressed: () {
-                        setState(() {
-                          if (_selectedMobiles.length == _eligibleCustomers.where((c) => c.yesNo.trim().toLowerCase() != 'no').length) {
-                            _selectedMobiles.clear();
-                          } else {
-                            for (var c in _eligibleCustomers) {
-                              if (c.yesNo.trim().toLowerCase() != 'no') {
-                                _selectedMobiles.add(c.mobile);
-                              }
-                            }
-                          }
-                        });
-                      },
+                    const Icon(Icons.check_circle, color: Color(0xFF00E676), size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
                       child: Text(
-                        _selectedMobiles.length == _eligibleCustomers.where((c) => c.yesNo.trim().toLowerCase() != 'no').length ? 'Deselect All' : 'Select All',
-                        style: const TextStyle(color: Colors.lightBlueAccent),
+                        'Selected: ${_selectedMobiles.length} of ${_eligibleCustomers.length} eligible',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const Spacer(),
-                    Text(
-                      'Selected: ${_selectedMobiles.length}',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
-                    const SizedBox(width: 16),
+                    const SizedBox(width: 12),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00E676),
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        backgroundColor: _isCooldownActive ? Colors.orangeAccent : const Color(0xFF00E676),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: _selectedMobiles.isEmpty ? null : _startSendingReminders,
-                      icon: const Icon(Icons.send, color: Colors.black),
-                      label: const Text('Send Reminders', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+                      onPressed: (_selectedMobiles.isEmpty && !_isCooldownActive)
+                          ? null
+                          : _startSendingReminders,
+                      icon: Icon(_isCooldownActive ? Icons.timer : Icons.send, color: Colors.black, size: 18),
+                      label: Text(
+                        _isCooldownActive ? _formatCooldown(_remainingCooldown) : 'Send Reminders',
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
                     ),
                   ],
                 ),

@@ -230,6 +230,24 @@ class PrintService {
     return stripped;
   }
 
+  /// Returns a safe fallback display string for Paper Name when cleanPapers list is empty.
+  /// Skips Yes/No subscription flags and route codes.
+  static String _getFallbackPaperDisplay(Customer customer) {
+    // Try message first
+    if (customer.message.isNotEmpty && customer.message != 'null' && customer.message != '-') {
+      return customer.message;
+    }
+    // Try yesNo, but skip if it's just a subscription flag
+    if (customer.yesNo.isNotEmpty && customer.yesNo != 'null' && customer.yesNo != '-') {
+      String yesNoLower = customer.yesNo.trim().toLowerCase();
+      bool isJustFlag = const {'yes', 'no', 'y', 'n', 'haa', 'ha', 'na', 'nahi', 'naa', 'true', 'false', '1', '0'}.contains(yesNoLower);
+      if (!isJustFlag) {
+        return customer.yesNo;
+      }
+    }
+    return '-';
+  }
+
   /// Prints a Bill document for the customer
   Future<bool> printBill({
     required Customer customer,
@@ -257,18 +275,29 @@ class PrintService {
           .where((p) => p.isNotEmpty)
           .toList();
 
+      // Fallback to yesNo ONLY if it contains actual paper names (not just Yes/No flags)
       if (cleanPapers.isEmpty && customer.yesNo.isNotEmpty && customer.yesNo != '-' && customer.yesNo != 'null') {
-        cleanPapers = customer.yesNo
-            .split(RegExp(r'[,;\n+&/]'))
-            .map((p) => _cleanPaperName(p))
-            .where((p) => p.isNotEmpty)
-            .toList();
+        // Skip if yesNo is just a subscription flag (Yes/No/Y/N/Haa/Na etc.)
+        String yesNoLower = customer.yesNo.trim().toLowerCase();
+        bool isJustFlag = const {'yes', 'no', 'y', 'n', 'haa', 'ha', 'na', 'nahi', 'naa', 'true', 'false', '1', '0'}.contains(yesNoLower);
+        if (!isJustFlag) {
+          cleanPapers = customer.yesNo
+              .split(RegExp(r'[,;\n+&/]'))
+              .map((p) => _cleanPaperName(p))
+              .where((p) => p.isNotEmpty)
+              .toList();
+        }
       }
 
       if (cleanPapers.isEmpty) {
         final match = RegExp(r'\(\s*([^\)]+)\s*\)').firstMatch(customer.custName);
         if (match != null && match.group(1) != null && match.group(1)!.trim().isNotEmpty) {
-          cleanPapers = [_cleanPaperName(match.group(1)!.trim())].where((p) => p.isNotEmpty).toList();
+          String extracted = match.group(1)!.trim();
+          // Skip if parenthesized value is just a route/area code like "A:12", "26", "B-5"
+          bool isRouteCode = RegExp(r'^[A-Za-z]?\s*[:\-]?\s*\d+$').hasMatch(extracted);
+          if (!isRouteCode) {
+            cleanPapers = [_cleanPaperName(extracted)].where((p) => p.isNotEmpty).toList();
+          }
         }
       }
 
@@ -369,11 +398,7 @@ class PrintService {
                           pw.Text('Paper Name:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                           pw.Expanded(
                             child: pw.Text(
-                              (customer.message.isNotEmpty && customer.message != 'null' && customer.message != '-')
-                                  ? customer.message
-                                  : ((customer.yesNo.isNotEmpty && customer.yesNo != 'null' && customer.yesNo != '-')
-                                      ? customer.yesNo
-                                      : '-'),
+                              _getFallbackPaperDisplay(customer),
                               style: const pw.TextStyle(fontSize: 8),
                               textAlign: pw.TextAlign.right,
                             ),

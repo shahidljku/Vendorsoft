@@ -13,6 +13,7 @@ import 'bills_tab.dart';
 import 'settings_tab.dart';
 import 'receipts_tab.dart';
 import 'reports_tab.dart';
+import 'reminders_modal.dart';
 
 class MainLayout extends StatefulWidget {
   final SettingsService settingsService;
@@ -594,13 +595,14 @@ class _MainLayoutState extends State<MainLayout> {
                 },
               ),
               const Divider(color: Colors.white24),
+              // Payment Reminders
               ListTile(
-                leading: const Icon(Icons.insert_drive_file, color: Color(0xFF00E676)),
-                title: Text(_excelFileName ?? 'No file selected', style: const TextStyle(color: Colors.white)),
-                subtitle: const Text('Tap to change Excel File', style: TextStyle(color: Colors.white54)),
+                leading: const Icon(Icons.notifications_active, color: Colors.amberAccent),
+                title: const Text('Payment Reminders (યાદી)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text('Send Gujarati payment reminders', style: TextStyle(color: Colors.amberAccent, fontSize: 12)),
                 onTap: () {
-                  Navigator.pop(context); // Close drawer
-                  _importExcel();
+                  Navigator.pop(context);
+                  RemindersModal.show(context, _excelService, widget.settingsService);
                 },
               ),
               const Divider(color: Colors.white24),

@@ -88,7 +88,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       case 'light':
         return ThemeMode.light;
       case 'dark':
-        return ThemeMode.dark;
+        return ThemeMode.dark;  
       default:
         return ThemeMode.system;
     }
