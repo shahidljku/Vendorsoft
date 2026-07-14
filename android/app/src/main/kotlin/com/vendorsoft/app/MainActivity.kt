@@ -1,4 +1,4 @@
-package com.example.image_sender
+package com.vendorsoft.app
 
 import android.app.Activity
 import android.content.ComponentName
@@ -50,13 +50,13 @@ class MainActivity : FlutterActivity() {
         // ── Accessibility Message Sent Receiver ──
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == "com.example.image_sender.MESSAGE_SENT") {
+                if (intent?.action == "com.vendorsoft.app.MESSAGE_SENT") {
                     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
                         .invokeMethod("messageSent", null)
                 }
             }
         }
-        val filter = IntentFilter("com.example.image_sender.MESSAGE_SENT")
+        val filter = IntentFilter("com.vendorsoft.app.MESSAGE_SENT")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {

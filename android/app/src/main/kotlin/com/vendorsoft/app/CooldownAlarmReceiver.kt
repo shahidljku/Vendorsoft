@@ -1,4 +1,4 @@
-package com.example.image_sender
+package com.vendorsoft.app
 
 import android.app.NotificationManager
 import android.app.PendingIntent

@@ -1,4 +1,4 @@
-package com.example.image_sender
+package com.vendorsoft.app
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
@@ -49,7 +49,7 @@ class ImageSenderAccessibilityService : AccessibilityService() {
 
                 // Wait briefly then return to Image Sender
                 android.os.Handler(mainLooper).postDelayed({
-                    val broadcastIntent = Intent("com.example.image_sender.MESSAGE_SENT")
+                    val broadcastIntent = Intent("com.vendorsoft.app.MESSAGE_SENT")
                     broadcastIntent.setPackage(applicationContext.packageName)
                     sendBroadcast(broadcastIntent)
                     returnToImageSender()
