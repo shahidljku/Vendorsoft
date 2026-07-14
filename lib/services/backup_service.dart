@@ -285,6 +285,7 @@ class BackupService {
         TextCellValue('PaymentMethod'),
         TextCellValue('ReceiptStatus'),
         TextCellValue('PaymentDate'),
+        TextCellValue('ReceiptNo'),
       ]);
       for (Customer c in excelService.allCustomers) {
         sheet.appendRow([
@@ -309,6 +310,7 @@ class BackupService {
           TextCellValue(c.paymentMethod),
           TextCellValue(c.receiptStatus),
           TextCellValue(c.paymentDate),
+          TextCellValue(c.receiptNo),
         ]);
       }
       for (String sheetName in excel.tables.keys.toList()) {

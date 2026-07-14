@@ -172,12 +172,19 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   void _refreshQueue() {
     setState(() {
-      _pendingReceipts = widget.excelService.allCustomers
-          .where((c) => c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent')
-          .toList();
-      _submittedReceipts = widget.excelService.allCustomers
-          .where((c) => c.paymentStatus == 'Successful' && c.receiptStatus == 'Sent')
-          .toList();
+      _pendingReceipts = widget.excelService.allCustomers.where((c) {
+        String pst = c.paymentStatus.trim().toLowerCase();
+        String rst = c.receiptStatus.trim().toLowerCase();
+        return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+               (rst != 'sent' && rst != 'message sent');
+      }).toList();
+
+      _submittedReceipts = widget.excelService.allCustomers.where((c) {
+        String pst = c.paymentStatus.trim().toLowerCase();
+        String rst = c.receiptStatus.trim().toLowerCase();
+        return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+               (rst == 'sent' || rst == 'message sent');
+      }).toList();
     });
   }
 
@@ -217,6 +224,8 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 _buildReceiptRow(Icons.business, Colors.blue, 'Party Name', customer.custName.isNotEmpty ? customer.custName : customer.mobile),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                 _buildReceiptRow(Icons.calendar_month, Colors.green, 'Date', customer.paymentDate.isNotEmpty ? customer.paymentDate : _getCurrentDateFormatted()),
+                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
+                _buildReceiptRow(Icons.receipt, Colors.teal, 'Receipt No.', customer.receiptNo.isNotEmpty ? customer.receiptNo : (customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'N/A')),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                 _buildReceiptRow(Icons.receipt_long, Colors.orange, 'Bill No.', customer.billNo.isNotEmpty ? customer.billNo : 'N/A'),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
@@ -612,6 +621,10 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   void _showEditPaymentDialog(BuildContext context, Customer customer) {
     TextEditingController amountCtrl = TextEditingController(text: customer.amountPaid.isNotEmpty ? customer.amountPaid : customer.billAmount);
     TextEditingController txCtrl = TextEditingController(text: customer.transactionId);
+    if (customer.receiptNo.isEmpty) {
+      customer.receiptNo = customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'REC-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+    }
+    TextEditingController receiptNoCtrl = TextEditingController(text: customer.receiptNo);
     String paymentMethod = customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online';
     String paymentStatus = 'Successful';
     DateTime paymentDate = DateTime.now();
@@ -636,6 +649,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    TextField(
+                      controller: receiptNoCtrl,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(labelText: 'Receipt No.', labelStyle: TextStyle(color: Colors.grey)),
+                    ),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: amountCtrl,
                       keyboardType: TextInputType.number,
@@ -696,38 +715,59 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.print, color: Colors.blue, size: 18),
-                  style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.blue)),
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    await PrintService().printReceipt(customer: customer, settingsService: widget.settingsService);
-                  },
-                  label: const Text('Print', style: TextStyle(color: Colors.blue)),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
-                  onPressed: () async {
-                    setState(() {
-                      if (paymentStatus == 'Unpaid') {
-                        customer.paymentStatus = 'Pending';
-                      } else {
-                        customer.paymentStatus = 'Successful';
-                      }
-                      customer.amountPaid = amountCtrl.text;
-                      customer.transactionId = txCtrl.text;
-                      customer.paymentMethod = paymentMethod;
-                      customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
-                    });
-                    await widget.excelService.saveCustomers(widget.excelService.allCustomers);
-                    _refreshQueue();
-                    if (context.mounted) Navigator.pop(context);
-                  },
-                  child: const Text('Save', style: TextStyle(color: Colors.black)),
+                SizedBox(
+                  width: double.maxFinite,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.print, color: Colors.blue, size: 16),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Colors.blue),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            ),
+                            onPressed: () async {
+                              Navigator.pop(context);
+                              await PrintService().printReceipt(customer: customer, settingsService: widget.settingsService);
+                            },
+                            label: const Text('Print', style: TextStyle(color: Colors.blue)),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF00E676),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                            ),
+                            onPressed: () async {
+                              setState(() {
+                                if (paymentStatus == 'Unpaid') {
+                                  customer.paymentStatus = 'Pending';
+                                } else {
+                                  customer.paymentStatus = 'Successful';
+                                }
+                                customer.receiptNo = receiptNoCtrl.text.trim();
+                                customer.amountPaid = amountCtrl.text;
+                                customer.transactionId = txCtrl.text;
+                                customer.paymentMethod = paymentMethod;
+                                customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
+                              });
+                              await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                              _refreshQueue();
+                              if (context.mounted) Navigator.pop(context);
+                            },
+                            child: const Text('Save', style: TextStyle(color: Colors.black)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             );

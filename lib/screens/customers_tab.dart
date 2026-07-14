@@ -192,8 +192,16 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           int pendingBillsCount = widget.excelService.allCustomers.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').length;
           int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Failed').length;
           int sentBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Sent' || c.status == 'Message Sent').length;
-          int unpaidCount = widget.excelService.allCustomers.where((c) => c.paymentStatus != 'Successful').length;
-          int receiptPendingCount = widget.excelService.allCustomers.where((c) => c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent').length;
+          int unpaidCount = widget.excelService.allCustomers.where((c) {
+            String pst = c.paymentStatus.trim().toLowerCase();
+            return pst != 'successful' && !pst.contains('success') && pst != 'paid';
+          }).length;
+          int receiptPendingCount = widget.excelService.allCustomers.where((c) {
+            String pst = c.paymentStatus.trim().toLowerCase();
+            String rst = c.receiptStatus.trim().toLowerCase();
+            return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+                   (rst != 'sent' && rst != 'message sent');
+          }).length;
 
           // Compute unique collection men
           Set<String> cmNames = {'All'};
@@ -843,6 +851,15 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     // Load available items (from Settings)
     List<String> savedItems = await widget.settingsService.getSavedItems();
     String selectedItem = 'None';
+    if (existingCustomer != null && existingCustomer.message.isNotEmpty) {
+      for (var item in savedItems) {
+        String cleanItem = item.contains('|') ? item.split('|')[0].trim() : item.trim();
+        if (cleanItem.toLowerCase() == existingCustomer.message.trim().toLowerCase() || item.trim().toLowerCase() == existingCustomer.message.trim().toLowerCase()) {
+          selectedItem = item;
+          break;
+        }
+      }
+    }
 
     showDialog(
       context: context,
@@ -945,10 +962,16 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                             onChanged: (val) {
                               setDialogState(() {
                                 selectedItem = val ?? 'None';
-                                if (selectedItem != 'None' && selectedItem.contains('|')) {
-                                  final parts = selectedItem.split('|');
-                                  if (parts.length > 1 && billAmountCtrl.text.isEmpty) {
-                                    billAmountCtrl.text = parts[1];
+                                if (selectedItem != 'None') {
+                                  String cleanName = selectedItem.contains('|') ? selectedItem.split('|')[0].trim() : selectedItem.trim();
+                                  if (messageCtrl.text.isEmpty) {
+                                    messageCtrl.text = cleanName;
+                                  }
+                                  if (selectedItem.contains('|')) {
+                                    final parts = selectedItem.split('|');
+                                    if (parts.length > 1 && billAmountCtrl.text.isEmpty) {
+                                      billAmountCtrl.text = parts[1];
+                                    }
                                   }
                                 }
                               });
@@ -1002,6 +1025,11 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       return;
                     }
 
+                    String finalMsg = messageCtrl.text.trim();
+                    if (finalMsg.isEmpty && selectedItem != 'None') {
+                      finalMsg = selectedItem.contains('|') ? selectedItem.split('|')[0].trim() : selectedItem.trim();
+                    }
+
                     if (existingCustomer != null) {
                       existingCustomer.mobile = mobileCtrl.text.trim();
                       existingCustomer.custName = nameCtrl.text.trim();
@@ -1010,7 +1038,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       existingCustomer.billAmount = billAmountCtrl.text.trim();
                       existingCustomer.clBalance = clBalanceCtrl.text.trim();
                       existingCustomer.cmName = selectedAgent;
-                      existingCustomer.message = messageCtrl.text.trim();
+                      existingCustomer.message = finalMsg;
                     } else {
                       final newCust = Customer(
                         mobile: mobileCtrl.text.trim(),
@@ -1020,7 +1048,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                         billAmount: billAmountCtrl.text.trim(),
                         clBalance: clBalanceCtrl.text.trim(),
                         cmName: selectedAgent,
-                        message: messageCtrl.text.trim(),
+                        message: finalMsg,
                         status: 'Pending',
                         imagePath: '',
                         sentTime: '',

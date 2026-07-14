@@ -214,6 +214,22 @@ class PrintService {
     }
   }
 
+  /// Automatically cleans numeric paper codes (e.g. "101 - TOI", "TOI [Code 101]", "TOI | 150") from raw paper names
+  static String _cleanPaperName(String raw) {
+    String cleaned = raw.trim();
+    if (cleaned.isEmpty || cleaned == 'null' || cleaned == '-') return '';
+    if (cleaned.contains('|')) {
+      cleaned = cleaned.split('|')[0].trim();
+    }
+    String stripped = cleaned.replaceAll(RegExp(r'^(?:[cC]ode[\s#:-]*)?#?\d+[\.\s-:]+'), '');
+    stripped = stripped.replaceAll(RegExp(r'^(?:[cC]ode[\s#:-]*)?#?\d+\s+'), '');
+    stripped = stripped.replaceAll(RegExp(r'[\s-:]+(?:[cC]ode[\s#:-]*)?#?\d+$'), '');
+    stripped = stripped.replaceAll(RegExp(r'\s*[\(\[](?:[cC]ode[\s#:-]*)?#?\d+[\)\]]\s*$'), '');
+    stripped = stripped.trim();
+    if (stripped.isEmpty) return cleaned;
+    return stripped;
+  }
+
   /// Prints a Bill document for the customer
   Future<bool> printBill({
     required Customer customer,
@@ -234,6 +250,27 @@ class PrintService {
                 double billAmt = double.tryParse(customer.billAmount.replaceAll(',', '').trim()) ?? 0.0;
                 double prevBal = clBal - billAmt;
                 String prevBalStr = prevBal.toStringAsFixed(prevBal.truncateToDouble() == prevBal ? 0 : 2);
+
+                List<String> cleanPapers = customer.message
+          .split(RegExp(r'[,;\n+&/]'))
+          .map((p) => _cleanPaperName(p))
+          .where((p) => p.isNotEmpty)
+          .toList();
+
+      if (cleanPapers.isEmpty && customer.yesNo.isNotEmpty && customer.yesNo != '-' && customer.yesNo != 'null') {
+        cleanPapers = customer.yesNo
+            .split(RegExp(r'[,;\n+&/]'))
+            .map((p) => _cleanPaperName(p))
+            .where((p) => p.isNotEmpty)
+            .toList();
+      }
+
+      if (cleanPapers.isEmpty) {
+        final match = RegExp(r'\(\s*([^\)]+)\s*\)').firstMatch(customer.custName);
+        if (match != null && match.group(1) != null && match.group(1)!.trim().isNotEmpty) {
+          cleanPapers = [_cleanPaperName(match.group(1)!.trim())].where((p) => p.isNotEmpty).toList();
+        }
+      }
 
                 return pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
@@ -265,14 +302,15 @@ class PrintService {
                       ],
                     ),
                     pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text('Customer:', style: const pw.TextStyle(fontSize: 8)),
+                        pw.Text('Customer: ', style: const pw.TextStyle(fontSize: 8)),
                         pw.Expanded(
                           child: pw.Text(
                             customer.custName.isNotEmpty ? customer.custName : customer.mobile,
                             style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
                             textAlign: pw.TextAlign.right,
+                            maxLines: 3,
                           ),
                         ),
                       ],
@@ -300,19 +338,14 @@ class PrintService {
                           pw.Text(customer.monthNm, style: const pw.TextStyle(fontSize: 8)),
                         ],
                       ),
-                    if (customer.message.isNotEmpty && customer.message != 'null') ...[
-                      pw.SizedBox(height: 2),
+                    pw.SizedBox(height: 2),
+                    if (cleanPapers.isNotEmpty) ...[
                       pw.Row(
                         children: [
                           pw.Text('Paper Name:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                         ],
                       ),
-                      // Split by comma or newline to support multiple paper names
-                      ...customer.message
-                          .split(RegExp(r'[,\n]+'))
-                          .map((p) => p.trim())
-                          .where((p) => p.isNotEmpty && p != 'null')
-                          .toList()
+                      ...cleanPapers
                           .asMap()
                           .entries
                           .map((entry) => pw.Padding(
@@ -329,6 +362,24 @@ class PrintService {
                                   ],
                                 ),
                               )),
+                    ] else ...[
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('Paper Name:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                          pw.Expanded(
+                            child: pw.Text(
+                              (customer.message.isNotEmpty && customer.message != 'null' && customer.message != '-')
+                                  ? customer.message
+                                  : ((customer.yesNo.isNotEmpty && customer.yesNo != 'null' && customer.yesNo != '-')
+                                      ? customer.yesNo
+                                      : '-'),
+                              style: const pw.TextStyle(fontSize: 8),
+                              textAlign: pw.TextAlign.right,
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                     pw.Divider(thickness: 1, height: 8),
 
@@ -361,10 +412,17 @@ class PrintService {
                     if (customer.cmName.isNotEmpty) ...[
                       pw.SizedBox(height: 2),
                       pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
                         children: [
-                          pw.Text('Agent:', style: const pw.TextStyle(fontSize: 8)),
-                          pw.Text(customer.cmName, style: const pw.TextStyle(fontSize: 8)),
+                          pw.Text('Agent: ', style: const pw.TextStyle(fontSize: 8)),
+                          pw.Expanded(
+                            child: pw.Text(
+                              customer.cmName,
+                              style: const pw.TextStyle(fontSize: 8),
+                              textAlign: pw.TextAlign.right,
+                              maxLines: 2,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -447,8 +505,15 @@ class PrintService {
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
-                        pw.Text('Receipt For:', style: const pw.TextStyle(fontSize: 8)),
-                        pw.Text(customer.billNo.isNotEmpty ? 'Bill #${customer.billNo}' : 'Payment', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                        pw.Text('Receipt No:', style: const pw.TextStyle(fontSize: 8)),
+                        pw.Text(customer.receiptNo.isNotEmpty ? customer.receiptNo : (customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'N/A'), style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                      ],
+                    ),
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Text('Bill No:', style: const pw.TextStyle(fontSize: 8)),
+                        pw.Text(customer.billNo.isNotEmpty ? customer.billNo : 'N/A', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                       ],
                     ),
                     pw.Row(
@@ -459,14 +524,15 @@ class PrintService {
                       ],
                     ),
                     pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text('Received From:', style: const pw.TextStyle(fontSize: 8)),
+                        pw.Text('Received From: ', style: const pw.TextStyle(fontSize: 8)),
                         pw.Expanded(
                           child: pw.Text(
                             customer.custName.isNotEmpty ? customer.custName : customer.mobile,
                             style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
                             textAlign: pw.TextAlign.right,
+                            maxLines: 3,
                           ),
                         ),
                       ],

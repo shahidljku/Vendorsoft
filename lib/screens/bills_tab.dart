@@ -9,6 +9,7 @@ import '../services/whatsapp_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/print_service.dart';
+import 'reminders_modal.dart';
 
 class BillsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -320,21 +321,36 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         ],
       );
     }),
-    floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isCooldown ? () {
-          _showCooldownDialog(context);
-        } : (_isAccessibilityEnabled ? () {
-          _runPreflightChecks(context);
-        } : () async {
-          await AccessibilityService.showGuidanceDialog(context);
-          bool check = await AccessibilityService.isEnabled();
-          if (mounted) setState(() { _isAccessibilityEnabled = check; });
-        }),
-        backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
-        foregroundColor: Colors.black,
-        icon: Icon(_isCooldown ? Icons.timer : Icons.send),
-        label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills'),
-      ),
+    floatingActionButton: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FloatingActionButton.extended(
+          heroTag: 'send_bills_btn',
+          onPressed: _isCooldown ? () {
+            _showCooldownDialog(context);
+          } : (_isAccessibilityEnabled ? () {
+            _runPreflightChecks(context);
+          } : () async {
+            await AccessibilityService.showGuidanceDialog(context);
+            bool check = await AccessibilityService.isEnabled();
+            if (mounted) setState(() { _isAccessibilityEnabled = check; });
+          }),
+          backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
+          foregroundColor: Colors.black,
+          icon: Icon(_isCooldown ? Icons.timer : Icons.send),
+          label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills'),
+        ),
+        const SizedBox(width: 10),
+        FloatingActionButton.extended(
+          heroTag: 'send_reminders_btn',
+          onPressed: () => RemindersModal.show(context, widget.excelService, widget.settingsService),
+          backgroundColor: Colors.amberAccent,
+          foregroundColor: Colors.black,
+          icon: const Icon(Icons.notifications_active),
+          label: const Text('Reminders (યાદી)', style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
+      ],
+    ),
     );
   }
 

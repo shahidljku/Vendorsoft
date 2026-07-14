@@ -6,6 +6,7 @@ import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/license_service.dart';
 import '../widgets/subscription_dialog.dart';
+import 'reminders_modal.dart';
 
 class DashboardTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -243,7 +244,12 @@ class _DashboardTabState extends State<DashboardTab> {
                     Expanded(
                       child: _buildStatCard(
                         'Pending Receipts', 
-                        currentCustomers.where((c) => c.paymentStatus == 'Successful' && c.receiptStatus != 'Sent').length.toString(), 
+                        currentCustomers.where((c) {
+                          String pst = c.paymentStatus.trim().toLowerCase();
+                          String rst = c.receiptStatus.trim().toLowerCase();
+                          return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+                                 (rst != 'sent' && rst != 'message sent');
+                        }).length.toString(), 
                         Icons.receipt, 
                         Colors.purple, 
                         onTap: () => widget.onNavigateToReceipts('Pending'),
@@ -253,7 +259,12 @@ class _DashboardTabState extends State<DashboardTab> {
                     Expanded(
                       child: _buildStatCard(
                         'Sent Receipts', 
-                        currentCustomers.where((c) => c.paymentStatus == 'Successful' && c.receiptStatus == 'Sent').length.toString(), 
+                        currentCustomers.where((c) {
+                          String pst = c.paymentStatus.trim().toLowerCase();
+                          String rst = c.receiptStatus.trim().toLowerCase();
+                          return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+                                 (rst == 'sent' || rst == 'message sent');
+                        }).length.toString(), 
                         Icons.check_circle, 
                         const Color(0xFF00E676), 
                         onTap: () => widget.onNavigateToReceipts('Sent'),
@@ -283,6 +294,19 @@ class _DashboardTabState extends State<DashboardTab> {
                         _isCooldown ? Icons.timer : Icons.receipt_long,
                         _isCooldown ? Colors.orange : Colors.blue,
                         _isCooldown ? () => _showCooldownDialog(context) : () => widget.onNavigateToReceipts('Pending'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildQuickAction(
+                        _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Payment Reminders (યાદી)',
+                        _isCooldown ? Icons.timer : Icons.notifications_active,
+                        _isCooldown ? Colors.orange : const Color(0xFF00E676),
+                        _isCooldown ? () => _showCooldownDialog(context) : () => RemindersModal.show(context, widget.excelService, widget.settingsService),
                       ),
                     ),
                   ],

@@ -369,7 +369,7 @@ class _MainLayoutState extends State<MainLayout> {
             TextCellValue('bill_amount'), TextCellValue('cl_balance'), TextCellValue('cm_code'),
             TextCellValue('cm_name'), TextCellValue('Month_nm'), TextCellValue('SentTime'),
             TextCellValue('PaymentStatus'), TextCellValue('AmountPaid'), TextCellValue('TransactionId'),
-            TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'),
+            TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'), TextCellValue('ReceiptNo'),
           ]);
           
           // Remove other sheets

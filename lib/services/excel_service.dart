@@ -106,6 +106,7 @@ class ExcelService extends ChangeNotifier {
             paymentMethod: row.length > 18 ? _cellToString(row[18]) : '',
             receiptStatus: row.length > 19 ? _cellToString(row[19]) : '',
             paymentDate: row.length > 20 ? _cellToString(row[20], '', true) : '',
+            receiptNo: row.length > 21 ? _cellToString(row[21]) : '',
           ),
         );
       }
@@ -243,6 +244,7 @@ class ExcelService extends ChangeNotifier {
         TextCellValue('PaymentMethod'),
         TextCellValue('ReceiptStatus'),
         TextCellValue('PaymentDate'),
+        TextCellValue('ReceiptNo'),
       ]);
 
       // Write all customer data
@@ -269,6 +271,7 @@ class ExcelService extends ChangeNotifier {
           TextCellValue(c.paymentMethod),
           TextCellValue(c.receiptStatus),
           TextCellValue(c.paymentDate),
+          TextCellValue(c.receiptNo),
         ]);
       }
 

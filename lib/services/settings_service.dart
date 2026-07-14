@@ -363,5 +363,37 @@ class SettingsService extends ChangeNotifier {
     await _prefs!.setStringList(_keySavedItems, list);
     notifyListeners();
   }
+
+  // ── Payment Reminder Template (Gujarati) ──
+
+  static const _keyReminderTemplate = 'reminderTemplate';
+
+  static const String defaultGujaratiReminderTemplate = '''🙏 સાદર પ્રણામ / નમસ્તે 🙏
+
+પ્રિય ગ્રાહક: *{custName}*
+આપના ન્યૂઝપેપર / બિલની ચૂકવણી અંગેની આ એક નમ્ર યાદી (Gentle Reminder) છે.
+
+📄 *બિલ વિગતો:*
+• બિલ નં.: *{billNo}*
+• મહિનો: *{monthNm}*
+• બાકી રકમ: *₹{balance}*
+
+કૃપા કરીને વહેલી તકે બાકી રકમની ચૂકવણી કરવા વિનંતી છે.
+
+⚠️ *ખાસ નોંધ:* જો તમે આ બિલની રકમ પહેલેથી જ ચૂકવી દીધી હોય, તો કૃપા કરીને આ મેસેજને અવગણશો (Ignore). આપના સહકાર બદલ ખૂબ ખૂબ આભાર.
+
+આભાર સહિત,
+*{businessName}*''';
+
+  Future<String> getReminderTemplate() async {
+    await _init();
+    return _prefs!.getString(_keyReminderTemplate) ?? defaultGujaratiReminderTemplate;
+  }
+
+  Future<void> setReminderTemplate(String value) async {
+    await _init();
+    await _prefs!.setString(_keyReminderTemplate, value);
+    notifyListeners();
+  }
 }
 

@@ -23,6 +23,7 @@ class Customer {
   String paymentMethod;
   String receiptStatus;
   String paymentDate;
+  String receiptNo;
 
   String get resolvedImagePath {
     if (imagePath.isEmpty) return '';
@@ -56,6 +57,7 @@ class Customer {
     this.paymentMethod = '',
     this.receiptStatus = '',
     this.paymentDate = '',
+    this.receiptNo = '',
   });
 
   static String _extractCellString(dynamic cell) {
@@ -100,6 +102,7 @@ class Customer {
       paymentMethod: row.length > 18 ? _extractCellString(row[18]) : '',
       receiptStatus: row.length > 19 ? _extractCellString(row[19]) : '',
       paymentDate: row.length > 20 ? _extractCellString(row[20]) : '',
+      receiptNo: row.length > 21 ? _extractCellString(row[21]) : '',
     );
   }
 
@@ -127,6 +130,7 @@ class Customer {
       paymentMethod: json['paymentMethod']?.toString() ?? '',
       receiptStatus: json['receiptStatus']?.toString() ?? '',
       paymentDate: json['paymentDate']?.toString() ?? '',
+      receiptNo: json['receiptNo']?.toString() ?? '',
     );
   }
 
@@ -154,6 +158,7 @@ class Customer {
       'paymentMethod': paymentMethod,
       'receiptStatus': receiptStatus,
       'paymentDate': paymentDate,
+      'receiptNo': receiptNo,
     };
   }
 
@@ -181,6 +186,7 @@ class Customer {
       paymentMethod,
       receiptStatus,
       paymentDate,
+      receiptNo,
     ];
   }
 }
