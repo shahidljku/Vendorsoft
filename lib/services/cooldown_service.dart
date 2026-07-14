@@ -48,6 +48,14 @@ class CooldownService {
     return diff;
   }
 
+  /// Returns the number of messages sent (out of 30) in the current 1h10m window.
+  Future<int> getUsedQuota() async {
+    if (await isCooldownActive()) return _maxQuota;
+    await _pruneOldTimestamps();
+    final timestamps = _getTimestamps();
+    return timestamps.length > _maxQuota ? _maxQuota : timestamps.length;
+  }
+
   /// Returns the remaining available quota (out of 30) in the current 1h10m window.
   Future<int> getRemainingQuota() async {
     if (await isCooldownActive()) return 0;

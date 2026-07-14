@@ -284,18 +284,15 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     return;
                   }
                   final file = await BackupService().createExcelBackup(widget.excelService!);
+                  if (!context.mounted) return;
                   if (file != null) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Excel Backup created:\n${file.path}')),
-                      );
-                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Excel Backup created:\n${file.path}')),
+                    );
                   } else {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Failed to create Excel backup.')),
-                      );
-                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Failed to create Excel backup.')),
+                    );
                   }
                 },
               ),
@@ -311,16 +308,15 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     return;
                   }
                   bool success = await BackupService().restoreFromExcel(excelService: widget.excelService!);
-                  if (mounted) {
-                    if (success) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Restored ${widget.excelService!.allCustomers.length} customers successfully!')),
-                      );
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Restore cancelled or failed.')),
-                      );
-                    }
+                  if (!context.mounted) return;
+                  if (success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Restored ${widget.excelService!.allCustomers.length} customers successfully!')),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Restore cancelled or failed.')),
+                    );
                   }
                 },
               ),

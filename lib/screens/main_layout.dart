@@ -388,7 +388,7 @@ class _MainLayoutState extends State<MainLayout> {
         
         created = true;
       } catch (e) {
-        print('First launch folder setup warning: $e');
+        debugPrint('First launch folder setup warning: $e');
         created = hasStorageAccess;
       }
 

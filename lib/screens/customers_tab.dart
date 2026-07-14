@@ -861,6 +861,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
       }
     }
 
+    if (!context.mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,

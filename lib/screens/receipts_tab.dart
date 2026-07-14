@@ -557,7 +557,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
         bool sent = await currentCompleter.future;
         timeoutTimer.cancel();
-        await sub?.cancel();
+        await sub.cancel();
         _waitingForWhatsApp = false;
 
         if (sent) {

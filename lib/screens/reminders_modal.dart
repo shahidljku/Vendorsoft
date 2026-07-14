@@ -61,6 +61,7 @@ class _RemindersModalState extends State<RemindersModal> {
 
   Timer? _cooldownTimer;
   Duration _remainingCooldown = Duration.zero;
+  int _usedQuota = 0;
   bool get _isCooldownActive => _remainingCooldown.inSeconds > 0;
 
   @override
@@ -78,9 +79,11 @@ class _RemindersModalState extends State<RemindersModal> {
 
   Future<void> _checkCooldownTicker() async {
     Duration remaining = await CooldownService().getRemainingCooldown();
+    int used = await CooldownService().getUsedQuota();
     if (mounted) {
       setState(() {
         _remainingCooldown = remaining;
+        _usedQuota = used;
       });
       _startCooldownTicker();
     }
@@ -88,36 +91,42 @@ class _RemindersModalState extends State<RemindersModal> {
 
   void _startCooldownTicker() {
     _cooldownTimer?.cancel();
-    if (_remainingCooldown.inSeconds > 0) {
-      _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        if (_remainingCooldown.inSeconds <= 1) {
-          timer.cancel();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_remainingCooldown.inSeconds <= 1 && _remainingCooldown.inSeconds > 0) {
+        Duration remaining = await CooldownService().getRemainingCooldown();
+        int used = await CooldownService().getUsedQuota();
+        if (mounted) {
           setState(() {
-            _remainingCooldown = Duration.zero;
+            _remainingCooldown = remaining;
+            _usedQuota = used;
           });
-        } else {
+        }
+      } else if (_remainingCooldown.inSeconds > 1) {
+        if (mounted) {
           setState(() {
             _remainingCooldown = _remainingCooldown - const Duration(seconds: 1);
           });
         }
-      });
-    }
+      } else {
+        if (timer.tick % 3 == 0) {
+          int used = await CooldownService().getUsedQuota();
+          Duration remaining = await CooldownService().getRemainingCooldown();
+          if (mounted && (used != _usedQuota || remaining != _remainingCooldown)) {
+            setState(() {
+              _usedQuota = used;
+              _remainingCooldown = remaining;
+            });
+          }
+        }
+      }
+    });
   }
 
-  String _formatCooldown(Duration d) {
-    int h = d.inHours;
-    int m = d.inMinutes.remainder(60);
-    int s = d.inSeconds.remainder(60);
-    if (h > 0) {
-      return 'Rest: ${h}h ${m}m ${s}s';
-    } else {
-      return 'Rest: ${m}m ${s}s';
-    }
-  }
+
 
   @override
   void dispose() {
@@ -359,11 +368,13 @@ class _RemindersModalState extends State<RemindersModal> {
 
     List<Customer> toSend = _eligibleCustomers.where((c) => _selectedMobiles.contains(c.mobile)).toList();
     if (toSend.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No customers selected!')));
       return;
     }
 
     if (!_isAccessibilityEnabled) {
+      if (!mounted) return;
       bool? proceed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -720,7 +731,7 @@ class _RemindersModalState extends State<RemindersModal> {
                           : _startSendingReminders,
                       icon: Icon(_isCooldownActive ? Icons.timer : Icons.send, color: Colors.black, size: 18),
                       label: Text(
-                        _isCooldownActive ? _formatCooldown(_remainingCooldown) : 'Send Reminders',
+                        _isCooldownActive ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Reminders ($_usedQuota/30)',
                         style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
                       ),
                     ),
