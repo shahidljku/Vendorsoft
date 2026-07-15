@@ -98,6 +98,16 @@ class MainActivity : FlutterActivity() {
                             result.error("INVALID_ARGS", "Content is required", null)
                         }
                     }
+                    "openDialer" -> {
+                        val phone = call.argument<String>("phone") ?: ""
+                        try {
+                            val intent = Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$phone"))
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("DIAL_ERROR", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }

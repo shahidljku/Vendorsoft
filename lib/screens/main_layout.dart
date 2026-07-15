@@ -19,12 +19,18 @@ class MainLayout extends StatefulWidget {
   final SettingsService settingsService;
   final ExcelService excelService;
   final VoidCallback onThemeChanged;
+  final bool isTrialActive;
+  final int trialDaysRemaining;
+  final VoidCallback? onActivateRequested;
 
   const MainLayout({
     super.key,
     required this.settingsService,
     required this.excelService,
     required this.onThemeChanged,
+    this.isTrialActive = false,
+    this.trialDaysRemaining = 0,
+    this.onActivateRequested,
   });
 
   @override
@@ -443,7 +449,7 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   Widget _buildBody() {
-    return IndexedStack(
+    final stack = IndexedStack(
       index: _currentIndex,
       children: [
         DashboardTab(
@@ -480,6 +486,46 @@ class _MainLayoutState extends State<MainLayout> {
           onThemeChanged: widget.onThemeChanged,
           excelService: _excelService,
         ),
+      ],
+    );
+
+    if (!widget.isTrialActive) {
+      return stack;
+    }
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          color: const Color(0xFF1B3C2B), // Dark green highlight
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.timer_outlined, color: Color(0xFF00E676), size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'First-Install Trial Active (${widget.trialDaysRemaining} days left • 50-Customer Demo Limit)',
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (widget.onActivateRequested != null)
+                TextButton(
+                  onPressed: widget.onActivateRequested,
+                  style: TextButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E676),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text('Upgrade', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+            ],
+          ),
+        ),
+        Expanded(child: stack),
       ],
     );
   }

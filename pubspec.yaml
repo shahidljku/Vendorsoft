@@ -51,6 +51,8 @@ dependencies:
   print_bluetooth_thermal: ^1.2.2
   esc_pos_utils_plus: ^2.0.4
   image: ^4.3.0
+  package_info_plus: ^9.0.1
+  device_info_plus: ^12.4.0
 
 dev_dependencies:
   flutter_test:

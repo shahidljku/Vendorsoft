@@ -123,6 +123,8 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     if (AccessibilityService.activeSendingMode == 'receipt') {
       AccessibilityService.activeSendingMode = 'none';
     }
+    _cooldownTimer?.cancel();
+    _messageSentSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }

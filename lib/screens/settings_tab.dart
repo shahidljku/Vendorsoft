@@ -9,6 +9,10 @@ import '../services/print_service.dart';
 import 'package:flutter/services.dart';
 import 'pin_lock_screen.dart';
 import '../widgets/subscription_dialog.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import '../widgets/system_diagnostics_modal.dart';
+import '../widgets/settings_auxiliary_modals.dart';
+import 'help_and_faq_screen.dart';
 
 class SettingsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -41,6 +45,8 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   
   bool _isLoading = true;
   bool _waitingForAccessibility = false;
+  String _dynamicVersion = '';
+  String _dynamicAppName = '';
 
   @override
   void initState() {
@@ -57,13 +63,25 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
+  void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _waitingForAccessibility) {
-      _waitingForAccessibility = false;
-      bool isAccessible = await AccessibilityService.isEnabled();
-      if (isAccessible && mounted) {
-        setState(() => _autoSendEnabled = true);
-        await widget.settingsService.setAutoSendEnabled(true);
+      _checkAccessibilityAfterReturn();
+    }
+  }
+
+  Future<void> _checkAccessibilityAfterReturn() async {
+    _waitingForAccessibility = false;
+    final enabled = await AccessibilityService.isEnabled();
+    if (enabled) {
+      await widget.settingsService.setAutoSendEnabled(true);
+      setState(() => _autoSendEnabled = true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Accessibility enabled! Auto Send is ON.'),
+            backgroundColor: Color(0xFF00E676),
+          ),
+        );
       }
     }
   }
@@ -80,6 +98,10 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     _printerWidth = await widget.settingsService.getDefaultPrinterWidth();
     _selectedPrinterName = await widget.settingsService.getSelectedPrinterName();
     _directPrintEnabled = await widget.settingsService.getDirectPrintEnabled();
+
+    final packageInfo = await PackageInfo.fromPlatform();
+    _dynamicVersion = '${packageInfo.version} (Build ${packageInfo.buildNumber})';
+    _dynamicAppName = packageInfo.appName;
 
     setState(() {
       _isLoading = false;
@@ -335,12 +357,18 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
               _buildSettingItem(
                 icon: Icons.info_outline,
                 title: 'App Version',
-                subtitle: '1.0.0',
+                subtitle: _dynamicVersion.isNotEmpty ? _dynamicVersion : 'Loading...',
                 onTap: () {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('You are on the latest version.')),
+                    SnackBar(content: Text('Current Version: $_dynamicVersion')),
                   );
                 },
+              ),
+              _buildSettingItem(
+                icon: Icons.health_and_safety_outlined,
+                title: 'System Diagnostics',
+                subtitle: 'Live runtime check (Device, Storage, License, Printer)',
+                onTap: () => SystemDiagnosticsModal.show(context, widget.settingsService),
               ),
               _buildSettingItem(
                 icon: Icons.key_off_outlined,
@@ -368,6 +396,58 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                     SystemNavigator.pop();
                   }
                 },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildSettingsGroup(
+            title: 'Support & Legal Compliance',
+            children: [
+              _buildSettingItem(
+                icon: Icons.menu_book,
+                title: 'User Guide & FAQs',
+                subtitle: 'Complete offline guide for newspaper vendors',
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HelpAndFaqScreen())),
+              ),
+              _buildSettingItem(
+                icon: Icons.support_agent,
+                title: 'Contact Support',
+                subtitle: 'WhatsApp, Phone Helpline, & Device ID copying',
+                onTap: () => SettingsAuxiliaryModals.showContactSupport(context, widget.settingsService),
+              ),
+              _buildSettingItem(
+                icon: Icons.privacy_tip_outlined,
+                title: 'Privacy & Data Policy',
+                subtitle: 'Offline-first & local storage guarantee',
+                onTap: () => SettingsAuxiliaryModals.showPrivacyDialog(context),
+              ),
+              _buildSettingItem(
+                icon: Icons.gavel_outlined,
+                title: 'Terms & Conditions',
+                subtitle: 'Newspaper vendor operational terms',
+                onTap: () => SettingsAuxiliaryModals.showTermsDialog(context),
+              ),
+              _buildSettingItem(
+                icon: Icons.security_outlined,
+                title: 'Permissions Used',
+                subtitle: 'Storage, Accessibility, Alarms & Battery rationale',
+                onTap: () => SettingsAuxiliaryModals.showPermissionsDialog(context),
+              ),
+              _buildSettingItem(
+                icon: Icons.timer_outlined,
+                title: 'Why Sending Pauses',
+                subtitle: '30-message batch cooldown safety explanation',
+                onTap: () => SettingsAuxiliaryModals.showWhySendingPausesDialog(context),
+              ),
+              _buildSettingItem(
+                icon: Icons.code_outlined,
+                title: 'Open Source Licenses',
+                subtitle: 'View third-party software licenses',
+                onTap: () => showLicensePage(
+                  context: context,
+                  applicationName: _dynamicAppName.isNotEmpty ? _dynamicAppName : 'VendorSoft',
+                  applicationVersion: _dynamicVersion,
+                ),
               ),
             ],
           ),

@@ -4,10 +4,13 @@ import 'screens/main_layout.dart';
 import 'screens/pin_lock_screen.dart';
 import 'screens/activation_screen.dart';
 import 'screens/license_expired_screen.dart';
+import 'screens/time_discrepancy_screen.dart';
 import 'services/settings_service.dart';
 import 'services/security_service.dart';
 import 'services/license_service.dart';
 import 'services/excel_service.dart';
+import 'services/clock_guard_service.dart';
+import 'services/trial_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +30,8 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   final SettingsService _settingsService = SettingsService();
   final LicenseService _licenseService = LicenseService();
   final ExcelService _excelService = ExcelService();
+  final ClockGuardService _clockGuardService = ClockGuardService();
+  final TrialService _trialService = TrialService();
   late final SecurityService _securityService;
 
   ThemeMode _themeMode = ThemeMode.system;
@@ -37,6 +42,8 @@ class _ImageSenderAppState extends State<ImageSenderApp>
 
   bool _isLicensed = false;
   bool _isExpired = false;
+  bool _isClockTrustworthy = true;
+  bool _isTrialActive = false;
 
   @override
   void initState() {
@@ -57,6 +64,13 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     if (state == AppLifecycleState.resumed) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: SystemUiOverlay.values);
+      _clockGuardService.checkClockIntegrity().then((ok) {
+        if (mounted && ok != _isClockTrustworthy) {
+          setState(() {
+            _isClockTrustworthy = ok;
+          });
+        }
+      });
     }
   }
 
@@ -65,11 +79,23 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     _pinEnabled = await _securityService.isPinEnabled();
     _hasPinSet = await _securityService.hasPinSet();
 
+    // 1. Evaluate Valid Paid License first (Priority Rule #1)
     _isLicensed = await _licenseService.isLicensed();
     if (_isLicensed) {
       _isExpired = _licenseService.isLicenseExpired();
     }
-    
+
+    // Check system clock integrity independently
+    _isClockTrustworthy = await _clockGuardService.checkClockIntegrity();
+
+    // 2. If unlicensed (and not expired paid key), check 30-Day First-Install Trial (Priority Rule #2)
+    if (!_isLicensed && _isClockTrustworthy) {
+      _isTrialActive = await _trialService.checkTrialState();
+      if (_trialService.isClockDiscrepancy) {
+        _isClockTrustworthy = false;
+      }
+    }
+
     String? lastUri = await _settingsService.getLastExcelUri();
     String? lastName = await _settingsService.getLastExcelFileName();
     if (lastUri != null && lastUri.isNotEmpty && lastName != null) {
@@ -116,6 +142,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
         setState(() {
           _isLicensed = false;
           _isExpired = false;
+          _isTrialActive = false;
         });
       },
     );
@@ -213,29 +240,60 @@ class _ImageSenderAppState extends State<ImageSenderApp>
           ),
         ),
       ),
-      home: !_isLicensed
-          ? ActivationScreen(
-              licenseService: _licenseService,
-              onActivated: () {
-                setState(() {
-                  _isLicensed = true;
-                  _isExpired = _licenseService.isLicenseExpired();
-                });
+      home: !_isClockTrustworthy
+          ? TimeDiscrepancyScreen(
+              isRtcReset: _clockGuardService.isRtcResetDetected,
+              isForwardJump: _clockGuardService.isForwardJumpDetected,
+              isRollback: _clockGuardService.isRollbackDetected || _trialService.isClockDiscrepancy,
+              onRetry: () async {
+                setState(() { _isLoading = true; });
+                await _loadSettings();
               },
             )
-          : _isExpired
-              ? _buildLicenseExpiredScreen()
-              : _isLocked
-                  ? PinLockScreen(
-                      securityService: _securityService,
-                      isSetup: !_hasPinSet,
-                      onSuccess: _onPinSuccess,
-                    )
-                  : MainLayout(
-                      settingsService: _settingsService,
-                      excelService: _excelService,
-                      onThemeChanged: _onThemeChanged,
-                    ),
+          : (!_isLicensed && !_isTrialActive)
+              ? ActivationScreen(
+                  licenseService: _licenseService,
+                  onActivated: () {
+                    setState(() {
+                      _isLicensed = true;
+                      _isExpired = _licenseService.isLicenseExpired();
+                      _isTrialActive = false;
+                    });
+                  },
+                )
+              : (_isLicensed && _isExpired)
+                  ? _buildLicenseExpiredScreen()
+                  : _isLocked
+                      ? PinLockScreen(
+                          securityService: _securityService,
+                          isSetup: !_hasPinSet,
+                          onSuccess: _onPinSuccess,
+                        )
+                      : MainLayout(
+                          settingsService: _settingsService,
+                          excelService: _excelService,
+                          onThemeChanged: _onThemeChanged,
+                          isTrialActive: !_isLicensed && _isTrialActive,
+                          trialDaysRemaining: _trialService.daysRemaining,
+                          onActivateRequested: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ActivationScreen(
+                                  licenseService: _licenseService,
+                                  onActivated: () {
+                                    Navigator.pop(context);
+                                    setState(() {
+                                      _isLicensed = true;
+                                      _isExpired = _licenseService.isLicenseExpired();
+                                      _isTrialActive = false;
+                                    });
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
     );
   }
 }

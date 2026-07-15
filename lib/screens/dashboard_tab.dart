@@ -37,9 +37,13 @@ class _DashboardTabState extends State<DashboardTab> {
   Duration _remainingCooldown = Duration.zero;
   bool _isDemoMode = true;
 
+  final TextEditingController _cmSearchController = TextEditingController();
+  String _cmTimeFilter = 'All Time';
+
   @override
   void dispose() {
     _cooldownTimer?.cancel();
+    _cmSearchController.dispose();
     super.dispose();
   }
 
@@ -273,6 +277,7 @@ class _DashboardTabState extends State<DashboardTab> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                _buildCollectionManSection(currentCustomers),
                 
                 // Quick Actions
                 const Text(' Quick Actions', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
@@ -413,4 +418,245 @@ class _DashboardTabState extends State<DashboardTab> {
       ),
     );
   }
+
+  Widget _buildCollectionManSection(List<Customer> currentCustomers) {
+    if (currentCustomers.isEmpty) return const SizedBox.shrink();
+
+    // 1. Compute aggregate statistics
+    final Map<String, _CmStat> statsMap = {};
+    for (var c in currentCustomers) {
+      String name = c.cmName.trim();
+      String code = c.cmCode.trim();
+      if (name.isEmpty && code.isEmpty) {
+        name = 'Unassigned Route';
+      } else if (name.isEmpty) {
+        name = 'Route Code: $code';
+      }
+      String key = name.toLowerCase();
+
+      final stat = statsMap.putIfAbsent(key, () => _CmStat(cmCode: code, cmName: name));
+      stat.assignedCount++;
+
+      double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
+      double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
+      String pst = c.paymentStatus.trim().toLowerCase();
+      bool isPaid = pst == 'successful' || pst.contains('success') || pst == 'paid';
+      if (paid == 0.0 && isPaid && bill > 0.0) {
+        paid = bill;
+      }
+
+      // Apply time filter
+      bool includeInMoneyStats = true;
+      if (_cmTimeFilter == 'Pending Only' && (isPaid && paid >= bill)) {
+        includeInMoneyStats = false;
+      } else if (_cmTimeFilter == 'This Month') {
+        final now = DateTime.now();
+        String monthPrefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+        if (!c.paymentDate.contains(monthPrefix) && !c.vouchDate.contains(monthPrefix)) {
+          includeInMoneyStats = false;
+        }
+      }
+
+      if (includeInMoneyStats) {
+        stat.totalBill += bill;
+        stat.collected += paid;
+        stat.pending += (bill - paid).clamp(0.0, double.infinity);
+      }
+    }
+
+    // 2. Filter by search query
+    String query = _cmSearchController.text.trim().toLowerCase();
+    List<_CmStat> filteredStats = statsMap.values.where((s) {
+      if (query.isEmpty) return true;
+      return s.cmName.toLowerCase().contains(query) || s.cmCode.toLowerCase().contains(query);
+    }).toList();
+
+    filteredStats.sort((a, b) => b.assignedCount.compareTo(a.assignedCount));
+
+    double totalCollectedAll = statsMap.values.fold(0.0, (sum, item) => sum + item.collected);
+    double totalBillAll = statsMap.values.fold(0.0, (sum, item) => sum + item.totalBill);
+    double overallRecovery = totalBillAll > 0 ? ((totalCollectedAll / totalBillAll) * 100).clamp(0.0, 100.0) : 0.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          child: Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              initiallyExpanded: false,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.support_agent, color: Color(0xFF00E676), size: 22),
+              ),
+              title: const Text(
+                'Collection Man (CM) Analytics',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              subtitle: Text(
+                '${statsMap.length} Active Agents • ₹${totalCollectedAll.toStringAsFixed(0)} Collected (${overallRecovery.toStringAsFixed(0)}% recovery)',
+                style: const TextStyle(color: Color(0xFF00E676), fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Search & Filter Row
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _cmSearchController,
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
+                              decoration: InputDecoration(
+                                hintText: 'Search Agent Name or Code...',
+                                hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                                prefixIcon: const Icon(Icons.search, color: Colors.grey, size: 18),
+                                suffixIcon: _cmSearchController.text.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear, color: Colors.grey, size: 18),
+                                        onPressed: () => setState(() => _cmSearchController.clear()),
+                                      )
+                                    : null,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          DropdownButtonHideUnderline(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.05),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: DropdownButton<String>(
+                                value: _cmTimeFilter,
+                                dropdownColor: const Color(0xFF161B22),
+                                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                                icon: const Icon(Icons.filter_list, color: Color(0xFF00E676), size: 18),
+                                items: ['All Time', 'This Month', 'Pending Only'].map((filter) {
+                                  return DropdownMenuItem<String>(
+                                    value: filter,
+                                    child: Text(filter),
+                                  );
+                                }).toList(),
+                                onChanged: (val) {
+                                  if (val != null && val != _cmTimeFilter) {
+                                    setState(() => _cmTimeFilter = val);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (filteredStats.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 20),
+                          child: Center(
+                            child: Text('No Collection Agents found matching search.', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                          ),
+                        )
+                      else
+                        ListView.separated(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: filteredStats.length,
+                          separatorBuilder: (context, _) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final stat = filteredStats[index];
+                            double rec = stat.totalBill > 0 ? ((stat.collected / stat.totalBill) * 100).clamp(0.0, 100.0) : 0.0;
+                            return Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.03),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(stat.cmName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                                            if (stat.cmCode.isNotEmpty && stat.cmName != 'Route Code: ${stat.cmCode}')
+                                              Text('Code: ${stat.cmCode}', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                          ],
+                                        ),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () => widget.onNavigateToCustomers(stat.cmName.isNotEmpty && stat.cmName != 'Unassigned Route' ? stat.cmName : 'All'),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(6),
+                                          ),
+                                          child: const Text('Filter Route', style: TextStyle(color: Color(0xFF00E676), fontSize: 11, fontWeight: FontWeight.bold)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text('Assigned: ${stat.assignedCount} customers', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                                      Text('Collected: ₹${stat.collected.toStringAsFixed(0)} / ₹${stat.totalBill.toStringAsFixed(0)} (${rec.toStringAsFixed(0)}%)',
+                                          style: TextStyle(color: rec >= 80 ? const Color(0xFF00E676) : (rec >= 50 ? Colors.orangeAccent : Colors.redAccent), fontSize: 12, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(3),
+                                    child: LinearProgressIndicator(
+                                      value: stat.totalBill > 0 ? (stat.collected / stat.totalBill).clamp(0.0, 1.0) : 0.0,
+                                      minHeight: 5,
+                                      backgroundColor: Colors.white12,
+                                      valueColor: AlwaysStoppedAnimation<Color>(rec >= 80 ? const Color(0xFF00E676) : (rec >= 50 ? Colors.orangeAccent : Colors.redAccent)),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+class _CmStat {
+  final String cmCode;
+  final String cmName;
+  int assignedCount = 0;
+  double totalBill = 0.0;
+  double collected = 0.0;
+  double pending = 0.0;
+
+  _CmStat({required this.cmCode, required this.cmName});
 }
