@@ -192,4 +192,52 @@ You do not need to keep the screen on or tap anything during a cooldown pause. O
       ),
     );
   }
+
+  static void showOpenSourceLicensesExplanation(BuildContext context, String appName, String appVersion) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+        title: const Row(
+          children: [
+            Icon(Icons.code_outlined, color: Color(0xFF00E676)),
+            SizedBox(width: 10),
+            Expanded(child: Text('Open Source Licenses', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: const SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Text(
+              'VendorSoft is developed using professional open-source software packages and frameworks distributed under permissive licenses (MIT, Apache 2.0, BSD).\n\nThese high-performance libraries power local database storage, receipt printing, device diagnostics, and secure offline operations. We gratefully acknowledge the global developer community for their open-source contributions.',
+              style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E676),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              showLicensePage(
+                context: context,
+                applicationName: appName.isNotEmpty ? appName : 'VendorSoft',
+                applicationVersion: appVersion,
+              );
+            },
+            child: const Text('View Open Source Licenses', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -11,6 +12,7 @@ class ClockGuardService {
 
   static const String _storageKey = 'clock_guard_last_verified';
   static const String _prefsKey = 'clock_guard_last_verified_prefs';
+  static const MethodChannel _securityChannel = MethodChannel('com.example.image_sender/security');
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
   int? _lastVerifiedTimestampMillis;
@@ -24,6 +26,15 @@ class ClockGuardService {
   bool get isForwardJumpDetected => _isForwardJumpDetected;
   bool get isRtcResetDetected => _isRtcResetDetected;
   int? get lastVerifiedTimestamp => _lastVerifiedTimestampMillis;
+
+  Future<bool> _isNetworkTimeEnabled() async {
+    try {
+      final bool? enabled = await _securityChannel.invokeMethod<bool>('isNetworkTimeEnabled');
+      return enabled ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Check clock integrity across secure storage, shared preferences, and external directory anchor.
   Future<bool> checkClockIntegrity() async {
@@ -55,6 +66,19 @@ class ClockGuardService {
     if (maxKnownMillis > 0) {
       // Check Clock Rollback (allowing 5 minutes / 300,000 ms tolerance for minor NTP drift)
       if (nowUtc < (maxKnownMillis - 300000)) {
+        // Recovery path: if the user has restored Automatic Date & Time (network time),
+        // refresh the high-water mark and allow recovery without reinstall or clearing data.
+        final bool isAutoTime = await _isNetworkTimeEnabled();
+
+        if (isAutoTime) {
+          print('ClockGuardService: Automatic Date & Time recovery detected ($maxKnownMillis -> $nowUtc). Refreshing high-water mark.');
+          _isRollbackDetected = false;
+          _isClockTrustworthy = true;
+          _lastVerifiedTimestampMillis = nowUtc;
+          await _saveVerifiedTimestamp(nowUtc);
+          return true;
+        }
+
         _isRollbackDetected = true;
         _isClockTrustworthy = false;
         return false;

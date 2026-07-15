@@ -469,11 +469,13 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                   ],
                 ),
               ),
+              /*
               IconButton(
                 icon: const Icon(Icons.edit_outlined, color: Colors.white54, size: 20),
                 tooltip: 'Edit Customer',
                 onPressed: () => _showAddCustomerDialog(context, customer),
               ),
+              */
               const Icon(Icons.chevron_right, color: Colors.white24),
             ],
           ),
@@ -535,6 +537,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       ],
                     ),
                   ),
+                  /*
                   IconButton(
                     icon: const Icon(Icons.edit, color: Color(0xFF00E676), size: 28),
                     tooltip: 'Edit Customer Details',
@@ -543,6 +546,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       _showAddCustomerDialog(context, customer);
                     },
                   ),
+                  */
                 ],
               ),
               const SizedBox(height: 32),
@@ -815,6 +819,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     );
   }
 
+  // ignore: unused_element
   Future<void> _showAddCustomerDialog(BuildContext context, [Customer? existingCustomer]) async {
     // Check 50 Customer Demo Limit if adding new customer
     if (existingCustomer == null) {

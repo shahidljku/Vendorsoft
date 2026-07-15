@@ -5,6 +5,7 @@ import 'screens/pin_lock_screen.dart';
 import 'screens/activation_screen.dart';
 import 'screens/license_expired_screen.dart';
 import 'screens/time_discrepancy_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'services/settings_service.dart';
 import 'services/security_service.dart';
 import 'services/license_service.dart';
@@ -39,6 +40,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   bool _isLoading = true;
   bool _pinEnabled = false;
   bool _hasPinSet = false;
+  bool _hasAcceptedTerms = false;
 
   bool _isLicensed = false;
   bool _isExpired = false;
@@ -78,6 +80,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     String themeStr = await _settingsService.getThemeMode();
     _pinEnabled = await _securityService.isPinEnabled();
     _hasPinSet = await _securityService.hasPinSet();
+    _hasAcceptedTerms = await _settingsService.getHasAcceptedTerms();
 
     // 1. Evaluate Valid Paid License first (Priority Rule #1)
     _isLicensed = await _licenseService.isLicensed();
@@ -176,29 +179,15 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                         height: 1.1,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Newspaper Seller App',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
                   ],
                 ),
               ),
-              Positioned(
-                bottom: 80,
-                left: 60,
-                right: 60,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: const LinearProgressIndicator(
-                    backgroundColor: Colors.white24,
-                    color: Colors.white,
-                    minHeight: 6,
-                  ),
+              const Positioned(
+                left: 0,
+                right: 0,
+                bottom: 40,
+                child: Center(
+                  child: CircularProgressIndicator(color: Color(0xFF00E676)),
                 ),
               ),
             ],
@@ -208,15 +197,21 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     }
 
     return MaterialApp(
+      title: 'VendorSoft',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,
       theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF00E676), // Neon green
-        useMaterial3: true,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF0F4F8),
+        primaryColor: const Color(0xFF00E676),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF00E676), brightness: Brightness.light),
+      ),
+      darkTheme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0B1014), // Very dark BG
+        scaffoldBackgroundColor: const Color(0xFF0B1014), // Pure dark
+        primaryColor: const Color(0xFF00E676),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF00E676), brightness: Brightness.dark),
         appBarTheme: const AppBarTheme(
-          centerTitle: true, 
           elevation: 0, 
           backgroundColor: Color(0xFF0B1014),
           foregroundColor: Colors.white,
@@ -240,7 +235,16 @@ class _ImageSenderAppState extends State<ImageSenderApp>
           ),
         ),
       ),
-      home: !_isClockTrustworthy
+      home: !_hasAcceptedTerms
+          ? OnboardingScreen(
+              settingsService: _settingsService,
+              onCompleted: () {
+                setState(() {
+                  _hasAcceptedTerms = true;
+                });
+              },
+            )
+          : !_isClockTrustworthy
           ? TimeDiscrepancyScreen(
               isRtcReset: _clockGuardService.isRtcResetDetected,
               isForwardJump: _clockGuardService.isForwardJumpDetected,

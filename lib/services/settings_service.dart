@@ -27,11 +27,23 @@ class SettingsService extends ChangeNotifier {
   static const _keyPrinterConnectionType = 'printerConnectionType';
   static const _keySavedCollectionMen = 'savedCollectionMen';
   static const _keySavedItems = 'savedItems';
+  static const _keyHasAcceptedTerms = 'hasAcceptedTerms';
 
   SharedPreferences? _prefs;
 
   Future<void> _init() async {
     _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  Future<bool> getHasAcceptedTerms() async {
+    await _init();
+    return _prefs!.getBool(_keyHasAcceptedTerms) ?? false;
+  }
+
+  Future<void> setHasAcceptedTerms(bool value) async {
+    await _init();
+    await _prefs!.setBool(_keyHasAcceptedTerms, value);
+    notifyListeners();
   }
 
   // ── Send Limit ──

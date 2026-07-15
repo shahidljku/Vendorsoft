@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 class SupportConfig {
-  // ── USER CONFIGURATION REQUIRED BEFORE RELEASE ──
-  // Configure the real distributor/support phone number and WhatsApp number below.
-  // Example format: '+919876543210' or '919876543210'
+  // Distributor helpline contact numbers (configure before release)
   static const String supportWhatsAppNumber = '';
   static const String supportPhoneNumber = '';
   static const String supportEmail = 'support@vendorsoft.com';
@@ -13,7 +11,7 @@ class SupportConfig {
     if (supportWhatsAppNumber.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Support WhatsApp number is not configured by the distributor yet.')),
+          const SnackBar(content: Text('Support contact has not been configured.')),
         );
       }
       return;
@@ -29,7 +27,7 @@ class SupportConfig {
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open WhatsApp. Please contact: $supportWhatsAppNumber')),
+          SnackBar(content: Text('Could not open WhatsApp. Please contact: $supportWhatsAppNumber')),
         );
       }
     }
@@ -39,7 +37,7 @@ class SupportConfig {
     if (supportPhoneNumber.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Support phone number is not configured by the distributor yet.')),
+          const SnackBar(content: Text('Support contact has not been configured.')),
         );
       }
       return;
@@ -52,7 +50,7 @@ class SupportConfig {
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open Phone Dialer. Please call: $supportPhoneNumber')),
+          SnackBar(content: Text('Could not open Phone Dialer. Please call: $supportPhoneNumber')),
         );
       }
     }

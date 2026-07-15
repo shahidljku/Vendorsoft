@@ -189,6 +189,22 @@ class MainActivity : FlutterActivity() {
                         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
                     }
                     result.success(null)
+                } else if (call.method == "isNetworkTimeEnabled") {
+                    try {
+                        val autoTime = android.provider.Settings.Global.getInt(
+                            contentResolver,
+                            android.provider.Settings.Global.AUTO_TIME,
+                            0
+                        ) == 1
+                        val autoTimeZone = android.provider.Settings.Global.getInt(
+                            contentResolver,
+                            android.provider.Settings.Global.AUTO_TIME_ZONE,
+                            0
+                        ) == 1
+                        result.success(autoTime || autoTimeZone)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
                 } else {
                     result.notImplemented()
                 }
@@ -429,11 +445,10 @@ class MainActivity : FlutterActivity() {
                 cleanNumber = "91$cleanNumber"
             }
 
-            val intent = Intent(Intent.ACTION_SEND).apply {
+            val uriString = "whatsapp://send?phone=$cleanNumber&text=${android.net.Uri.encode(message)}"
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uriString)).apply {
                 setPackage(packageName)
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, message)
-                putExtra("jid", "$cleanNumber@s.whatsapp.net")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
             startActivity(intent)

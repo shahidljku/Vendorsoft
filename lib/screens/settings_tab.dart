@@ -443,11 +443,7 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                 icon: Icons.code_outlined,
                 title: 'Open Source Licenses',
                 subtitle: 'View third-party software licenses',
-                onTap: () => showLicensePage(
-                  context: context,
-                  applicationName: _dynamicAppName.isNotEmpty ? _dynamicAppName : 'VendorSoft',
-                  applicationVersion: _dynamicVersion,
-                ),
+                onTap: () => SettingsAuxiliaryModals.showOpenSourceLicensesExplanation(context, _dynamicAppName, _dynamicVersion),
               ),
             ],
           ),
