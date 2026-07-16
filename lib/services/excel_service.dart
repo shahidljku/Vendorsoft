@@ -4,6 +4,7 @@ import '../models/customer.dart';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';
 import 'file_access_service.dart';
+// ignore: unused_import
 import 'license_service.dart';
 
 class ExcelService extends ChangeNotifier {
@@ -74,7 +75,7 @@ class ExcelService extends ChangeNotifier {
         if (row.isEmpty) continue;
 
         String mobile = _cellToString(row[0]);
-        if (mobile.isEmpty || mobile == 'mobile_no') continue;
+        if (mobile == 'mobile_no') continue;
 
         String status = row.length > 3 ? _cellToString(row[3]) : 'Pending';
 
@@ -112,13 +113,14 @@ class ExcelService extends ChangeNotifier {
       }
     }
 
-    if (await LicenseService().isDemoMode()) {
-      int limit = LicenseService().getDemoCustomerLimit();
-      if (customers.length > limit) {
-        print('Demo Mode: Truncating loaded customers to $limit');
-        customers = customers.sublist(0, limit);
-      }
-    }
+    // DEMO LIMIT DISABLED — uncomment to restore 50-customer cap
+    // if (await LicenseService().isDemoMode()) {
+    //   int limit = LicenseService().getDemoCustomerLimit();
+    //   if (customers.length > limit) {
+    //     print('Demo Mode: Truncating loaded customers to $limit');
+    //     customers = customers.sublist(0, limit);
+    //   }
+    // }
 
     allCustomers = customers;
     notifyListeners();

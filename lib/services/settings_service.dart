@@ -108,7 +108,7 @@ class SettingsService extends ChangeNotifier {
 
   Future<bool> getAutoSendEnabled() async {
     await _init();
-    return _prefs!.getBool(_keyAutoSendEnabled) ?? false;
+    return _prefs!.getBool(_keyAutoSendEnabled) ?? true;
   }
 
   Future<void> setAutoSendEnabled(bool value) async {

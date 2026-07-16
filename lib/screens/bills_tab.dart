@@ -726,7 +726,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     if (customer.mobile.isEmpty || customer.mobile.length < 10) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid or missing phone number for this customer.')),
+          const SnackBar(content: Text('No phone number — this customer is cash-only. Use "Mark Payment" to record payment directly.')),
         );
       }
       return;

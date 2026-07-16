@@ -335,14 +335,46 @@ class _MainLayoutState extends State<MainLayout> {
 
       if (!mounted) return;
 
-      // Sequentially request all required permissions cleanly
-      await Permission.notification.request();
-      await Permission.storage.request();
+      // Helper to cleanly request normal popup permissions sequentially with small delay between system dialogs
+      Future<void> requestPopupPerm(Permission perm) async {
+        try {
+          if (!await perm.isGranted) {
+            await perm.request();
+            await Future.delayed(const Duration(milliseconds: 400));
+          }
+        } catch (e) {
+          debugPrint('Permission request error for $perm: $e');
+        }
+      }
+
+      // 1. Notification permission
+      await requestPopupPerm(Permission.notification);
+
+      // 2. Photos / Media permission (Android 13+) & Storage permission (Android 12 and below)
       if (Platform.isAndroid) {
-        await Permission.photos.request();
-        await Permission.manageExternalStorage.request();
-        await Permission.bluetoothScan.request();
-        await Permission.bluetoothConnect.request();
+        await requestPopupPerm(Permission.photos);
+      }
+      await requestPopupPerm(Permission.storage);
+
+      // 3. Bluetooth & Location permissions for ESC/POS thermal printers (while app is in foreground)
+      if (Platform.isAndroid) {
+        await requestPopupPerm(Permission.bluetoothScan);
+        await requestPopupPerm(Permission.bluetoothConnect);
+        await requestPopupPerm(Permission.location);
+      }
+
+      // 4. Manage External Storage (All Files Access - Android 11+)
+      // Requested LAST because on Android 11+ this opens the system Settings screen,
+      // moving our app to the background where further popup requests would be blocked.
+      if (Platform.isAndroid) {
+        try {
+          if (!await Permission.manageExternalStorage.isGranted) {
+            await Permission.manageExternalStorage.request();
+            await Future.delayed(const Duration(milliseconds: 400));
+          }
+        } catch (e) {
+          debugPrint('Manage external storage permission request error: $e');
+        }
       }
 
       bool hasStorageAccess = await Permission.storage.isGranted ||

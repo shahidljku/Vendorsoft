@@ -821,14 +821,14 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
 
   // ignore: unused_element
   Future<void> _showAddCustomerDialog(BuildContext context, [Customer? existingCustomer]) async {
-    // Check 50 Customer Demo Limit if adding new customer
-    if (existingCustomer == null) {
-      if (await LicenseService().isDemoMode() && widget.excelService.allCustomers.length >= 50) {
-        if (!context.mounted) return;
-        _showDemoLimitExpiredDialog(context);
-        return;
-      }
-    }
+    // DEMO LIMIT DISABLED — uncomment to restore 50-customer cap
+    // if (existingCustomer == null) {
+    //   if (await LicenseService().isDemoMode() && widget.excelService.allCustomers.length >= 50) {
+    //     if (!context.mounted) return;
+    //     _showDemoLimitExpiredDialog(context);
+    //     return;
+    //   }
+    // }
 
     final TextEditingController mobileCtrl = TextEditingController(text: existingCustomer?.mobile ?? '');
     final TextEditingController nameCtrl = TextEditingController(text: existingCustomer?.custName ?? '');
@@ -890,7 +890,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       controller: mobileCtrl,
                       style: const TextStyle(color: Colors.white),
                       keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(labelText: 'Mobile Number *', labelStyle: TextStyle(color: Colors.grey)),
+                      decoration: const InputDecoration(labelText: 'Mobile Number', labelStyle: TextStyle(color: Colors.grey)),
                     ),
                     TextField(
                       controller: nameCtrl,
@@ -1026,8 +1026,8 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
                   onPressed: () async {
-                    if (mobileCtrl.text.trim().isEmpty || nameCtrl.text.trim().isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mobile number and Customer Name are required')));
+                    if (nameCtrl.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Customer Name is required')));
                       return;
                     }
 
@@ -1151,6 +1151,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     );
   }
 
+  // ignore: unused_element
   void _showDemoLimitExpiredDialog(BuildContext context) async {
     String deviceId = await LicenseService().getDeviceId();
     if (!context.mounted) return;

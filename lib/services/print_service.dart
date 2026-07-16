@@ -554,7 +554,7 @@ class PrintService {
                         pw.Text('Received From: ', style: const pw.TextStyle(fontSize: 8)),
                         pw.Expanded(
                           child: pw.Text(
-                            customer.custName.isNotEmpty ? customer.custName : customer.mobile,
+                            customer.custName.isNotEmpty ? customer.custName : (customer.mobile.isNotEmpty ? customer.mobile : 'Cash Customer'),
                             style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
                             textAlign: pw.TextAlign.right,
                             maxLines: 3,
@@ -566,7 +566,7 @@ class PrintService {
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
                         pw.Text('Mobile:', style: const pw.TextStyle(fontSize: 8)),
-                        pw.Text(customer.mobile, style: const pw.TextStyle(fontSize: 8)),
+                        pw.Text(customer.mobile.isNotEmpty ? customer.mobile : 'N/A', style: const pw.TextStyle(fontSize: 8)),
                       ],
                     ),
                     if (customer.paymentMethod.isNotEmpty)
