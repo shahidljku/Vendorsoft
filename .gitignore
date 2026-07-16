@@ -51,3 +51,18 @@ android/app/*.keystore
 
 # Local Android SDK configuration
 android/local.properties
+
+# Security & Secrets Exclusions
+private.pem
+public.pem
+firebase-service-account.json
+android/app/google-services.json
+*.pem
+*.p12
+*.pfx
+*.key
+VendorSoft_Secrets/
+git_security_report.txt
+tracked_files.txt
+keygen_source.txt
+license_generator_source.txt

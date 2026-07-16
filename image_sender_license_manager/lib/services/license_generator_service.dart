@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:encrypt/encrypt.dart';
 // ignore: depend_on_referenced_packages
 import 'package:pointycastle/asymmetric/api.dart';
@@ -9,9 +10,42 @@ class LicenseGeneratorService {
   factory LicenseGeneratorService() => _instance;
   LicenseGeneratorService._internal();
 
-  static const String privateKeyString = '''
-[REDACTED_RSA_PRIVATE_KEY]
-''';
+  /// Configurable external path to the RSA private key PEM file.
+  static String? customPrivateKeyPath;
+
+  /// Configurable raw private key string if loaded or injected externally.
+  static String? customPrivateKeyString;
+
+  Future<String> _getPrivateKeyString() async {
+    if (customPrivateKeyString != null && customPrivateKeyString!.isNotEmpty) {
+      return customPrivateKeyString!;
+    }
+    if (Platform.environment['RSA_PRIVATE_KEY'] != null &&
+        Platform.environment['RSA_PRIVATE_KEY']!.isNotEmpty) {
+      return Platform.environment['RSA_PRIVATE_KEY']!;
+    }
+
+    final possiblePaths = <String>[
+      if (customPrivateKeyPath != null && customPrivateKeyPath!.isNotEmpty) customPrivateKeyPath!,
+      if (Platform.environment['RSA_PRIVATE_KEY_PATH'] != null && Platform.environment['RSA_PRIVATE_KEY_PATH']!.isNotEmpty)
+        Platform.environment['RSA_PRIVATE_KEY_PATH']!,
+      if (Platform.environment['PRIVATE_KEY_PATH'] != null && Platform.environment['PRIVATE_KEY_PATH']!.isNotEmpty)
+        Platform.environment['PRIVATE_KEY_PATH']!,
+      r'D:\VendorSoft_Secrets\RSA Keys\private.pem',
+    ];
+
+    for (final path in possiblePaths) {
+      final file = File(path);
+      if (await file.exists()) {
+        return await file.readAsString();
+      }
+    }
+
+    throw Exception(
+        'RSA private key file not found. Searched paths: ${possiblePaths.join(', ')}. '
+        'Please specify the path to the external PEM file via LicenseGeneratorService.customPrivateKeyPath '
+        'or set the RSA_PRIVATE_KEY_PATH environment variable.');
+  }
 
   static const String _historyKey = 'license_history';
 
@@ -46,8 +80,9 @@ class LicenseGeneratorService {
 
     final payloadStr = jsonEncode(payload);
 
+    final privateKeyStr = await _getPrivateKeyString();
     final parser = RSAKeyParser();
-    final privateKey = parser.parse(privateKeyString) as RSAPrivateKey;
+    final privateKey = parser.parse(privateKeyStr) as RSAPrivateKey;
     
     final signer = Signer(RSASigner(RSASignDigest.SHA256, privateKey: privateKey));
     final signature = signer.sign(payloadStr);
