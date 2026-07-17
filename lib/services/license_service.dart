@@ -168,7 +168,7 @@ MQIDAQAB
 
   /// Phase 5 Grace Support: Automatically migrates a valid historical RSA offline_license_key
   /// into a modern Cloudflare composite device lease (`POST /v1/migrate/legacy-key`).
-  Future<bool> migrateLegacyLicenseToServer(String idToken, {String baseUrl = 'https://api.vendsoft.app/v1'}) async {
+  Future<bool> migrateLegacyLicenseToServer(String idToken, {String baseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/v1'}) async {
     try {
       final savedKey = await getSavedLegacyKey();
       if (savedKey == null || savedKey.isEmpty) return false;

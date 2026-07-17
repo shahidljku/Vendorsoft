@@ -10,7 +10,7 @@ class TransferService {
   factory TransferService() => _instance;
   TransferService._internal();
 
-  String baseUrl = 'https://api.vendsoft.app/api/v1';
+  String baseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1';
 
   Future<Map<String, String>> _buildHeaders() async {
     final deviceId = await LicenseService().getDeviceId();

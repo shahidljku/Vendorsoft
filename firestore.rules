@@ -33,10 +33,10 @@ service cloud.firestore {
     // 3. CUSTOMERS COLLECTION: Read-only by verified customer account owner
     // -------------------------------------------------------------------------
     match /customers/{customerId} {
-      allow read: if isAuthenticated() && (
-        exists(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])) &&
-        get(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])).data.customerId == customerId
-      );
+      // It is impossible to securely map a UID to a customerId without a direct reference 
+      // in the document or a Custom Claim. Clients should rely on Cloudflare Workers 
+      // (e.g. GET /v1/customers/profile) for customer data rather than direct SDK reads.
+      allow read: if false; 
       allow write: if false; // Only Cloudflare Workers can modify
     }
 
@@ -52,10 +52,7 @@ service cloud.firestore {
     // 5. SUBSCRIPTIONS COLLECTION: Read-only by authorized active installation
     // -------------------------------------------------------------------------
     match /subscriptions/{subscriptionId} {
-      allow read: if isAuthenticated() && (
-        resource.data.activeInstallationId == request.headers['x-installation-id'] ||
-        isOwnerOfInstallation(resource.data.activeInstallationId)
-      );
+      allow read: if isAuthenticated() && isOwnerOfInstallation(resource.data.activeInstallationId);
       allow write: if false; // Only Cloudflare Workers can modify
     }
 

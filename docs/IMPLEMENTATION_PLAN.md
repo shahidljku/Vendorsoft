@@ -46,8 +46,13 @@ gantt
 - **Rollback Plan**: Run `wrangler rollback` to instantly restore previous edge deployment if routing errors occur.
 - **Completion Checklist**:
   - [x] Cloudflare Worker project initialized with TypeScript and `wrangler.toml`.
-  - [x] Google Cloud Service Account credentials stored in Worker secrets (`wrangler secret put FIRESTORE_SA_KEY`).
-  - [x] `firestore.rules` and `firestore.indexes.json` deployed to production Firebase project.
+  - [x] Create Cloudflare Worker securely using Wrangler secrets:
+  - `FIRESTORE_SA_KEY` (Firebase Service Account JSON)
+  - `RSA_PRIVATE_KEY`
+  - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (temp values)
+  - `ADMIN_SECRET`
+  - [x] Deploy the Worker to a `.workers.dev` subdomain and copy the URL.
+  - [x] Update the Flutter app `baseUrl` to point to the Cloudflare Worker instead of the original placeholder domain.
   - [x] `plans` collection populated with `DEMO_FREE`, `PRO_MONTHLY`, and `PRO_YEARLY` documents.
   - [x] `system_configs/global` document seeded with `allowRegistrations: true`, `allowPayments: true`, `allowTransfers: true`, `maintenanceMode: false`.
 

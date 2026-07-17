@@ -68,10 +68,7 @@ service cloud.firestore {
     // 3. CUSTOMERS COLLECTION: Read-only by verified customer account owner
     // -------------------------------------------------------------------------
     match /customers/{customerId} {
-      allow read: if isAuthenticated() && (
-        exists(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])) &&
-        get(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])).data.customerId == customerId
-      );
+      allow read: if false; // Clients rely on Cloudflare Workers for customer data
       allow write: if false; // Only Cloudflare Workers can modify
     }
 
@@ -87,10 +84,7 @@ service cloud.firestore {
     // 5. SUBSCRIPTIONS COLLECTION: Read-only by authorized active installation
     // -------------------------------------------------------------------------
     match /subscriptions/{subscriptionId} {
-      allow read: if isAuthenticated() && (
-        resource.data.activeInstallationId == request.headers['x-installation-id'] ||
-        isOwnerOfInstallation(resource.data.activeInstallationId)
-      );
+      allow read: if isAuthenticated() && isOwnerOfInstallation(resource.data.activeInstallationId);
       allow write: if false; // Only Cloudflare Workers can modify
     }
 

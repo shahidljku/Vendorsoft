@@ -12,7 +12,7 @@ class PaymentService {
   factory PaymentService() => _instance;
   PaymentService._internal();
 
-  String baseUrl = 'https://api.vendsoft.app/api/v1';
+  String baseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1';
 
   Razorpay? _razorpay;
   Function(bool success, String? message)? _currentCallback;
