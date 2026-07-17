@@ -21,11 +21,24 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
     }
 
     const body = await request.json() as any;
-    const customerId = body.customerId || identity.customerId;
+    let customerId = body.customerId || identity.customerId;
     const subscriptionId = body.subscriptionId;
+    const mobileNumber = body.mobileNumber;
 
-    if (!customerId && !subscriptionId) {
-      return createErrorResponse(400, 'MISSING_PARAMETERS', 'Must provide customerId or subscriptionId.');
+    if (!customerId && !subscriptionId && !mobileNumber) {
+      return createErrorResponse(400, 'MISSING_PARAMETERS', 'Must provide customerId, subscriptionId, or mobileNumber.');
+    }
+
+    // Lookup customer by mobile number if customerId is not directly provided
+    if (!customerId && !subscriptionId && mobileNumber) {
+      const customers = await queryCollection(env, 'customers', [
+        { field: 'mobileNumber', op: 'EQUAL', value: mobileNumber }
+      ]);
+      if (customers && customers.length > 0) {
+        customerId = customers[0].customerId;
+      } else {
+        return createErrorResponse(404, 'NO_CUSTOMER_FOUND', 'No account found with this mobile number.');
+      }
     }
 
     // 2. Locate target subscription

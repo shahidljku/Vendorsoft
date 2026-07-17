@@ -1,5 +1,6 @@
 import { Env } from './types';
 import { handleGetSystemConfig } from './routes/config';
+import { handleGetPlans } from './routes/plans';
 import { handleCustomerRegistration } from './routes/customers';
 import { handleGetSubscriptionStatus } from './routes/subscriptions';
 import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer } from './routes/transfers';
@@ -37,9 +38,14 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
   // ---------------------------------------------------------------------------
   // PUBLIC ENDPOINTS (No authentication or composite headers required)
   // ---------------------------------------------------------------------------
-  if (normalizedPath === '/v1/config/system') {
-    return handleGetSystemConfig(request, env);
-  }
+    // === PUBLIC CONFIG ENDPOINTS ===
+    if (normalizedPath === '/v1/config/system') {
+      return await handleGetSystemConfig(request, env);
+    }
+    
+    if (normalizedPath === '/v1/plans') {
+      return await handleGetPlans(request, env);
+    }
 
   // Phase 3: Razorpay Webhook Receiver (`POST /v1/webhooks/razorpay`)
   if (normalizedPath === '/v1/webhooks/razorpay' && request.method === 'POST') {

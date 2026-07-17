@@ -3,16 +3,48 @@
  * Communicates with Cloudflare Workers `/api/v1/admin/*` endpoints.
  */
 
-let apiBaseUrl = 'http://127.0.0.1:8788/api/v1';
+let apiBaseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1';
+let adminSecret = ''; // Will be populated by prompt for production
 const authHeaders = {
-  'x-admin-secret': 'admin_secret_mock',
+  'x-admin-secret': 'admin_secret_mock', // Default for local dev
   'Content-Type': 'application/json'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Prompt for production password on load
+  const requirePassword = () => {
+    if (apiBaseUrl.includes('vendsoft-api-worker.vendorproapk.workers.dev')) {
+      adminSecret = sessionStorage.getItem('vendsoft_admin_secret') || prompt('Enter Admin Password for Production:');
+      if (adminSecret) {
+        sessionStorage.setItem('vendsoft_admin_secret', adminSecret);
+        authHeaders['x-admin-secret'] = adminSecret;
+      }
+    } else {
+      authHeaders['x-admin-secret'] = 'admin_secret_mock';
+    }
+  };
+
+  // Sync API URL from dropdown
+  const urlSelect = document.getElementById('apiBaseUrl');
+  if (urlSelect) {
+    apiBaseUrl = urlSelect.value;
+    requirePassword();
+    
+    urlSelect.addEventListener('change', (e) => {
+      apiBaseUrl = e.target.value;
+      requirePassword();
+      document.getElementById('adminStatusText').textContent = apiBaseUrl.includes('127.0.0.1') ? 'Auth: Dev Mock (admin_secret_mock)' : 'Auth: Production Secret';
+      // Reload all data for the new target
+      loadCustomers();
+      loadPendingTransfers();
+      loadSystemConfigs();
+      loadAuditLogs();
+    });
+  } else {
+    requirePassword();
+  }
   setupNavigation();
   setupEventListeners();
-  // Load initial tab data
   loadCustomers();
   loadPendingTransfers();
   loadSystemConfigs();
@@ -125,15 +157,22 @@ async function loadCustomers() {
         ? `<span class="badge success">Plan: ${activeSub.planId || 'ACTIVE'}</span>` 
         : '<span class="badge danger">No Active Plan</span>';
 
+      const statusBadge = cust.status === 'DEACTIVATED' 
+        ? '<span class="badge danger" style="margin-left: 8px;">DEACTIVATED</span>'
+        : '<span class="badge success" style="margin-left: 8px;">ACTIVE</span>';
+
       const card = document.createElement('div');
-      card.className = `customer-card glass ${activeSub ? 'active-sub' : 'expired-sub'}`;
+      card.className = `customer-card glass ${activeSub ? 'active-sub' : 'expired-sub'} ${cust.status === 'DEACTIVATED' ? 'deactivated' : ''}`;
       card.innerHTML = `
         <div class="card-header">
           <div>
             <h3>${cust.businessName || 'Unnamed Business'}</h3>
             <span>ID: ${cust.customerId}</span>
           </div>
-          ${subBadge}
+          <div style="display: flex; gap: 4px;">
+            ${subBadge}
+            ${statusBadge}
+          </div>
         </div>
         <div class="card-body">
           <div class="info-item">
@@ -155,6 +194,9 @@ async function loadCustomers() {
         </div>
         <div class="card-actions">
           <button class="btn secondary" onclick="openEditCustomer('${cust.customerId}', '${encodeURIComponent(cust.businessName || '')}', '${encodeURIComponent(cust.ownerName || '')}', '${encodeURIComponent(cust.mobileNumber || '')}', '${encodeURIComponent(cust.city || '')}')">Edit Profile</button>
+          <button class="btn ${cust.status === 'DEACTIVATED' ? 'primary' : 'danger'}" onclick="toggleCustomerStatus('${cust.customerId}', '${cust.status === 'DEACTIVATED' ? 'ACTIVE' : 'DEACTIVATED'}')">
+            ${cust.status === 'DEACTIVATED' ? 'Activate' : 'Deactivate'}
+          </button>
         </div>
       `;
       listContainer.appendChild(card);
@@ -171,6 +213,26 @@ function openEditCustomer(id, bName, oName, mobile, city) {
   document.getElementById('editMobileNumber').value = decodeURIComponent(mobile);
   document.getElementById('editCity').value = decodeURIComponent(city);
   document.getElementById('editCustomerModal').classList.add('active');
+}
+
+async function toggleCustomerStatus(customerId, newStatus) {
+  if (!confirm(`Are you sure you want to ${newStatus === 'DEACTIVATED' ? 'DEACTIVATE' : 'ACTIVATE'} this customer?`)) return;
+  try {
+    const resp = await fetch(`${apiBaseUrl}/admin/customers/${customerId}`, {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ status: newStatus })
+    });
+    const resJson = await resp.json();
+    if (resJson.success) {
+      loadCustomers();
+      loadAuditLogs();
+    } else {
+      alert(`Status update failed: ${resJson.error?.message || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Network Error: ${err.message}`);
+  }
 }
 
 /**

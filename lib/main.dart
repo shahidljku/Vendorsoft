@@ -12,9 +12,14 @@ import 'services/license_service.dart';
 import 'services/excel_service.dart';
 import 'services/clock_guard_service.dart';
 import 'services/trial_service.dart';
+import 'services/firebase_installation_service.dart';
+import 'services/config_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   runApp(const ImageSenderApp());
 }
 
@@ -52,6 +57,11 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     super.initState();
     _securityService = SecurityService(_settingsService);
     WidgetsBinding.instance.addObserver(this);
+    _licenseService.onLicenseRevoked.listen((_) {
+      if (mounted) {
+        _loadSettings();
+      }
+    });
     _loadSettings();
   }
 
@@ -81,6 +91,29 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     _pinEnabled = await _securityService.isPinEnabled();
     _hasPinSet = await _securityService.hasPinSet();
     _hasAcceptedTerms = await _settingsService.getHasAcceptedTerms();
+
+    // Fetch remote global system config
+    await ConfigService().fetchSystemConfig();
+
+    // Silently login to Firebase anonymously to get CustomerId / Device ID token
+    try {
+      await FirebaseInstallationService().registerInstallationIfNeeded();
+    } catch (e) {
+      debugPrint('Firebase init error (offline?): $e');
+    }
+
+    // Try to silently migrate legacy RSA license to Cloudflare backend
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final token = await user.getIdToken();
+        if (token != null) {
+          await _licenseService.migrateLegacyLicenseToServer(token);
+        }
+      }
+    } catch (e) {
+      debugPrint('Legacy migration warning: $e');
+    }
 
     // 1. Evaluate Valid Paid License first (Priority Rule #1)
     _isLicensed = await _licenseService.isLicensed();
@@ -238,7 +271,9 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       home: !_hasAcceptedTerms
           ? OnboardingScreen(
               settingsService: _settingsService,
-              onCompleted: () {
+              onCompleted: () async {
+                setState(() => _isLoading = true);
+                await _loadSettings();
                 setState(() {
                   _hasAcceptedTerms = true;
                 });

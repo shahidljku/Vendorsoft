@@ -96,9 +96,9 @@ class PaymentService {
       final url = Uri.parse('$baseUrl/orders/verify');
       final body = jsonEncode({
         'razorpayOrderId': razorpayOrderId,
-        'razorpayPaymentId':? razorpayPaymentId,
-        'razorpaySignature':? razorpaySignature,
-        'errorCode':? errorCode
+        if (razorpayPaymentId != null) 'razorpayPaymentId': razorpayPaymentId,
+        if (razorpaySignature != null) 'razorpaySignature': razorpaySignature,
+        if (errorCode != null) 'errorCode': errorCode
       });
 
       final response = await http.post(url, headers: headers, body: body);

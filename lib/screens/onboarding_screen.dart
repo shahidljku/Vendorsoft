@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
+import '../services/registration_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onCompleted;
@@ -20,9 +21,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
   bool _termsAccepted = false;
+  bool _isRegistering = false;
+
+  final TextEditingController _businessNameCtrl = TextEditingController();
+  final TextEditingController _ownerNameCtrl = TextEditingController();
+  final TextEditingController _mobileNumberCtrl = TextEditingController();
 
   void _nextPage() {
-    if (_currentPage < 2) {
+    if (_currentPage < 3) {
       _pageController.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut);
     } else {
       _finishOnboarding();
@@ -30,6 +36,42 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _finishOnboarding() async {
+    final businessName = _businessNameCtrl.text.trim();
+    final ownerName = _ownerNameCtrl.text.trim();
+    final mobileNumber = _mobileNumberCtrl.text.trim();
+
+    if (businessName.isEmpty || ownerName.isEmpty || mobileNumber.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill all registration fields'), backgroundColor: Colors.redAccent)
+      );
+      return;
+    }
+
+    setState(() => _isRegistering = true);
+
+    try {
+      final success = await RegistrationService().registerCustomer(
+        businessName: businessName,
+        ownerName: ownerName,
+        mobileNumber: mobileNumber,
+      );
+
+      setState(() => _isRegistering = false);
+
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Registration failed. No lease token returned.'), backgroundColor: Colors.redAccent)
+        );
+        return;
+      }
+    } catch (e) {
+      setState(() => _isRegistering = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed: ${e.toString().replaceAll('Exception: ', '')}'), backgroundColor: Colors.redAccent)
+      );
+      return;
+    }
+
     // Step 5: Automatically create VendorSoft folders if missing without requesting permissions
     try {
       final baseDir = Directory('/storage/emulated/0/VendSoft');
@@ -41,7 +83,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         backupDir.createSync(recursive: true);
       }
     } catch (e) {
-      // If storage permission is not yet granted, folders will be created automatically later when permission is requested on first save/read.
+      // If storage permission is not yet granted, folders will be created automatically later.
     }
 
     // Step 6: Save acceptance and continue into app
@@ -66,7 +108,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               child: Row(
-                children: List.generate(3, (index) {
+                children: List.generate(4, (index) {
                   final isActive = index == _currentPage;
                   final isPassed = index < _currentPage;
                   return Expanded(
@@ -96,6 +138,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   _buildWelcomeSlide(),
                   _buildTermsSlide(),
                   _buildPrivacySlide(),
+                  _buildRegistrationSlide(),
                 ],
               ),
             ),
@@ -124,11 +167,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    onPressed: (_currentPage == 1 && !_termsAccepted) ? null : _nextPage,
-                    child: Text(
-                      _currentPage == 2 ? 'Get Started & Enter App' : (_currentPage == 1 ? 'Accept & Continue' : 'Next'),
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
+                    onPressed: (_currentPage == 1 && !_termsAccepted) || _isRegistering ? null : _nextPage,
+                    child: _isRegistering
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                        : Text(
+                            _currentPage == 3 ? 'Register & Enter App' : (_currentPage == 1 ? 'Accept & Continue' : 'Next'),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
                   ),
                 ],
               ),
@@ -320,6 +365,60 @@ VendorSoft provides automated calculation and printing utilities. The software d
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildRegistrationSlide() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF00E676).withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.person_add_alt_1_outlined, size: 64, color: Color(0xFF00E676)),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Create Your Account',
+            style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Register to activate your 30-Day Free Trial. Your device will be securely bound to this account.',
+            style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.4),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 32),
+          _buildTextField('Business Name (Agency)', Icons.business, _businessNameCtrl),
+          const SizedBox(height: 16),
+          _buildTextField('Owner Name', Icons.person, _ownerNameCtrl),
+          const SizedBox(height: 16),
+          _buildTextField('Mobile Number', Icons.phone, _mobileNumberCtrl, keyboardType: TextInputType.phone),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextField(String label, IconData icon, TextEditingController controller, {TextInputType? keyboardType}) {
+    return TextField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white),
+      keyboardType: keyboardType,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.grey),
+        prefixIcon: Icon(icon, color: Colors.grey),
+        enabledBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.white24), borderRadius: BorderRadius.circular(12)),
+        focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFF00E676)), borderRadius: BorderRadius.circular(12)),
+        filled: true,
+        fillColor: const Color(0xFF161B22),
       ),
     );
   }

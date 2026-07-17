@@ -14,6 +14,8 @@ import 'settings_tab.dart';
 import 'receipts_tab.dart';
 import 'reports_tab.dart';
 import 'reminders_modal.dart';
+import '../services/transfer_service.dart';
+import '../services/license_service.dart';
 
 class MainLayout extends StatefulWidget {
   final SettingsService settingsService;
@@ -37,7 +39,7 @@ class MainLayout extends StatefulWidget {
   State<MainLayout> createState() => _MainLayoutState();
 }
 
-class _MainLayoutState extends State<MainLayout> {
+class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   int _currentIndex = 0;
   late final ExcelService _excelService = widget.excelService;
   String _queueInitialFilter = 'All';
@@ -46,12 +48,106 @@ class _MainLayoutState extends State<MainLayout> {
   String? _connectedPrinterName;
   bool _directPrintEnabled = false;
 
+  bool _isPollingTransfers = false;
+
   @override
   void initState() {
     super.initState();
-    _checkFirstLaunch();
+    WidgetsBinding.instance.addObserver(this);
+    _checkPermissions(isStartup: true);
     _loadFileName();
     _loadPrinterStatus();
+    _pollTransfers();
+    LicenseService().startBackgroundPolling();
+  }
+
+  @override
+  void dispose() {
+    LicenseService().stopBackgroundPolling();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _pollTransfers();
+      LicenseService().pollOnlineSubscriptionStatus();
+    }
+  }
+
+  Future<void> _pollTransfers() async {
+    if (_isPollingTransfers || widget.isTrialActive) return;
+    _isPollingTransfers = true;
+    try {
+      final transfers = await TransferService().pollPendingTransfers();
+      if (transfers.isNotEmpty && mounted) {
+        _showTransferApprovalModal(transfers.first);
+      }
+    } catch (e) {
+      debugPrint('Poll transfers error: $e');
+    }
+    _isPollingTransfers = false;
+  }
+
+  void _showTransferApprovalModal(Map<String, dynamic> transfer) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Device Transfer Request', style: TextStyle(color: Colors.orange)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Another device is trying to claim your active VendSoft license.',
+              style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            Text('New Device: ${transfer['deviceModel']}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            const Text(
+              'If you approve this, your current device will be instantly deactivated. Do not approve unless you initiated this transfer on your new phone.',
+              style: TextStyle(color: Colors.redAccent, fontSize: 13, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await TransferService().rejectTransfer(transfer['transferId']);
+            },
+            child: const Text('Reject (Keep License Here)', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.black),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.orange)));
+              try {
+                await TransferService().approveTransfer(transfer['transferId']);
+                if (mounted) {
+                  Navigator.pop(context); // close loading
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transfer approved. Your license was moved.')));
+                  if (widget.onActivateRequested != null) {
+                    widget.onActivateRequested!(); // Will trigger refresh and lock them out
+                  }
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red));
+                }
+              }
+            },
+            child: const Text('APPROVE TRANSFER', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadFileName() async {
@@ -282,8 +378,18 @@ class _MainLayoutState extends State<MainLayout> {
     }
   }
 
-  Future<void> _checkFirstLaunch() async {
+  Future<void> _checkPermissions({required bool isStartup}) async {
     bool isFirstLaunch = await widget.settingsService.getIsFirstLaunch();
+    
+    // Check if essential permissions are granted
+    bool hasStorage = await Permission.storage.isGranted || await Permission.manageExternalStorage.isGranted || await Permission.photos.isGranted;
+    bool hasNotification = await Permission.notification.isGranted;
+    bool needsPermission = !hasStorage || !hasNotification;
+
+    if (!isFirstLaunch && !needsPermission) {
+      return; // All good
+    }
+
     if (isFirstLaunch && mounted) {
       await showDialog(
         context: context,
@@ -332,104 +438,89 @@ class _MainLayoutState extends State<MainLayout> {
           ],
         ),
       );
+    } else if (needsPermission && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Requesting missing essential permissions...')),
+      );
+    }
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      // Helper to cleanly request normal popup permissions sequentially with small delay between system dialogs
-      Future<void> requestPopupPerm(Permission perm) async {
-        try {
-          if (!await perm.isGranted) {
-            await perm.request();
-            await Future.delayed(const Duration(milliseconds: 400));
-          }
-        } catch (e) {
-          debugPrint('Permission request error for $perm: $e');
+    try {
+      if (Platform.isAndroid) {
+        // Grouped native Android permission requests
+        await [
+          Permission.notification,
+          Permission.photos,
+          Permission.storage,
+          Permission.bluetoothScan,
+          Permission.bluetoothConnect,
+          Permission.location
+        ].request();
+
+        // Request manage external storage separately as it opens settings
+        if (!await Permission.manageExternalStorage.isGranted) {
+          await Permission.manageExternalStorage.request();
         }
       }
+    } catch (e) {
+      debugPrint('Permission request error: $e');
+    }
 
-      // 1. Notification permission
-      await requestPopupPerm(Permission.notification);
+    bool finalHasStorage = await Permission.storage.isGranted ||
+        await Permission.manageExternalStorage.isGranted ||
+        await Permission.photos.isGranted;
 
-      // 2. Photos / Media permission (Android 13+) & Storage permission (Android 12 and below)
-      if (Platform.isAndroid) {
-        await requestPopupPerm(Permission.photos);
+    bool created = false;
+    try {
+      final dir = Directory('/storage/emulated/0/VendSoft/images');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
       }
-      await requestPopupPerm(Permission.storage);
-
-      // 3. Bluetooth & Location permissions for ESC/POS thermal printers (while app is in foreground)
-      if (Platform.isAndroid) {
-        await requestPopupPerm(Permission.bluetoothScan);
-        await requestPopupPerm(Permission.bluetoothConnect);
-        await requestPopupPerm(Permission.location);
+      
+      final receiptsDir = Directory('/storage/emulated/0/VendSoft/receipts');
+      if (!await receiptsDir.exists()) {
+        await receiptsDir.create(recursive: true);
       }
-
-      // 4. Manage External Storage (All Files Access - Android 11+)
-      // Requested LAST because on Android 11+ this opens the system Settings screen,
-      // moving our app to the background where further popup requests would be blocked.
-      if (Platform.isAndroid) {
-        try {
-          if (!await Permission.manageExternalStorage.isGranted) {
-            await Permission.manageExternalStorage.request();
-            await Future.delayed(const Duration(milliseconds: 400));
-          }
-        } catch (e) {
-          debugPrint('Manage external storage permission request error: $e');
+      
+      final excelFile = File('/storage/emulated/0/VendSoft/customers.xlsx');
+      if (!await excelFile.exists()) {
+        var excel = Excel.createExcel();
+        String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
+        if (defaultSheet != 'Sheet1') {
+          excel.rename(defaultSheet, 'Sheet1');
         }
-      }
-
-      bool hasStorageAccess = await Permission.storage.isGranted ||
-          await Permission.manageExternalStorage.isGranted ||
-          await Permission.photos.isGranted;
-
-      bool created = false;
-      try {
-        final dir = Directory('/storage/emulated/0/VendSoft/images');
-        if (!await dir.exists()) {
-          await dir.create(recursive: true);
-        }
+        Sheet sheet = excel['Sheet1'];
+        sheet.appendRow([
+          TextCellValue('mobile_no'), TextCellValue('custname'), TextCellValue('YesNo'),
+          TextCellValue('Status'), TextCellValue('jpg_Path'), TextCellValue('message'),
+          TextCellValue('vouch_date'), TextCellValue('cust_no'), TextCellValue('bill_no'),
+          TextCellValue('bill_amount'), TextCellValue('cl_balance'), TextCellValue('cm_code'),
+          TextCellValue('cm_name'), TextCellValue('Month_nm'), TextCellValue('SentTime'),
+          TextCellValue('PaymentStatus'), TextCellValue('AmountPaid'), TextCellValue('TransactionId'),
+          TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'), TextCellValue('ReceiptNo'),
+        ]);
         
-        final receiptsDir = Directory('/storage/emulated/0/VendSoft/receipts');
-        if (!await receiptsDir.exists()) {
-          await receiptsDir.create(recursive: true);
-        }
-        
-        final excelFile = File('/storage/emulated/0/VendSoft/customers.xlsx');
-        if (!await excelFile.exists()) {
-          var excel = Excel.createExcel();
-          String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
-          if (defaultSheet != 'Sheet1') {
-            excel.rename(defaultSheet, 'Sheet1');
-          }
-          Sheet sheet = excel['Sheet1'];
-          sheet.appendRow([
-            TextCellValue('mobile_no'), TextCellValue('custname'), TextCellValue('YesNo'),
-            TextCellValue('Status'), TextCellValue('jpg_Path'), TextCellValue('message'),
-            TextCellValue('vouch_date'), TextCellValue('cust_no'), TextCellValue('bill_no'),
-            TextCellValue('bill_amount'), TextCellValue('cl_balance'), TextCellValue('cm_code'),
-            TextCellValue('cm_name'), TextCellValue('Month_nm'), TextCellValue('SentTime'),
-            TextCellValue('PaymentStatus'), TextCellValue('AmountPaid'), TextCellValue('TransactionId'),
-            TextCellValue('PaymentMethod'), TextCellValue('ReceiptStatus'), TextCellValue('PaymentDate'), TextCellValue('ReceiptNo'),
-          ]);
-          
-          // Remove other sheets
-          for (String sheetName in excel.tables.keys.toList()) {
-            if (sheetName != 'Sheet1') {
-              excel.delete(sheetName);
-            }
-          }
-          
-          List<int>? bytes = excel.encode();
-          if (bytes != null) {
-            await excelFile.writeAsBytes(bytes);
+        // Remove other sheets
+        for (String sheetName in excel.tables.keys.toList()) {
+          if (sheetName != 'Sheet1') {
+            excel.delete(sheetName);
           }
         }
         
-        created = true;
-      } catch (e) {
-        debugPrint('First launch folder setup warning: $e');
-        created = hasStorageAccess;
+        List<int>? bytes = excel.encode();
+        if (bytes != null) {
+          await excelFile.writeAsBytes(bytes);
+        }
       }
+      
+      created = true;
+    } catch (e) {
+      debugPrint('Folder setup warning: $e');
+      created = finalHasStorage;
+    }
 
+    if (isFirstLaunch) {
       await widget.settingsService.setIsFirstLaunch(false);
 
       if (mounted && created) {

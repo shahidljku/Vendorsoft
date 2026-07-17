@@ -8,7 +8,9 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "google-auth-library": "^10.9.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240712.0",
     "typescript": "^5.5.3",

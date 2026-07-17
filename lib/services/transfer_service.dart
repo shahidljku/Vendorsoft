@@ -24,26 +24,35 @@ class TransferService {
       print('Failed to get Firebase token for TransferService: $e');
     }
 
-    return {
+    final Map<String, String> headers = {
       'Content-Type': 'application/json',
-      'Authorization':? idToken != null ? 'Bearer $idToken' : null,
       'x-installation-uuid': deviceId,
       'x-hardware-id': deviceId,
       'x-platform': Platform.operatingSystem,
       'x-app-version': '1.0.0'
     };
+    
+    if (idToken != null) {
+      headers['Authorization'] = 'Bearer $idToken';
+    }
+    
+    return headers;
   }
 
   /// Requests a peer-to-peer transfer to claim an active subscription (`Phase 2.2`).
-  Future<Map<String, dynamic>> requestTransfer({required String customerId, String? subscriptionId}) async {
+  Future<Map<String, dynamic>> requestTransfer({String? customerId, String? subscriptionId, String? mobileNumber}) async {
     try {
       final headers = await _buildHeaders();
       final url = Uri.parse('$baseUrl/transfers/request');
-      final body = jsonEncode({
-        'customerId': customerId,
-        'subscriptionId':? subscriptionId,
+      
+      final Map<String, dynamic> bodyMap = {
         'deviceModel': Platform.operatingSystem
-      });
+      };
+      if (customerId != null) bodyMap['customerId'] = customerId;
+      if (subscriptionId != null) bodyMap['subscriptionId'] = subscriptionId;
+      if (mobileNumber != null) bodyMap['mobileNumber'] = mobileNumber;
+
+      final body = jsonEncode(bodyMap);
 
       final response = await http.post(url, headers: headers, body: body);
       if (response.statusCode == 200 || response.statusCode == 202) {

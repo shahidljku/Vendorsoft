@@ -7,7 +7,9 @@ import 'package:android_id/android_id.dart';
 // ignore: depend_on_referenced_packages
 import 'package:pointycastle/asymmetric/api.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io';
+import 'dart:async';
 class LicenseService {
   static final LicenseService _instance = LicenseService._internal();
   factory LicenseService() => _instance;
@@ -35,6 +37,9 @@ MQIDAQAB
   Map<String, dynamic>? _currentLicenseInfo;
   String? _cachedLicenseKey;
   bool? _cachedIsValid;
+
+  final StreamController<void> _revocationController = StreamController<void>.broadcast();
+  Stream<void> get onLicenseRevoked => _revocationController.stream;
 
   /// Generate a stable, short Device ID.
   Future<String> getDeviceId() async {
@@ -217,7 +222,11 @@ MQIDAQAB
       final savedLeaseToken = await _storage.read(key: _signedLeaseTokenPref);
       if (savedLeaseToken != null && savedLeaseToken.isNotEmpty) {
         final isValidLease = await verifySignedLeaseToken(savedLeaseToken, saveToStorage: false);
-        if (isValidLease) return true;
+        if (isValidLease) {
+          // Asynchronously poll the backend to ensure device hasn't been remotely superseded
+          _pollOnlineSubscriptionStatus();
+          return true;
+        }
         await _storage.delete(key: _signedLeaseTokenPref);
       }
     } catch (e) {
@@ -325,5 +334,63 @@ MQIDAQAB
   
   /// IMPORTANT REMINDER: Developer must replace this with active UPI ID before release
   String getDeveloperUpiId() => '9427698665@paytm';
+
+  Timer? _pollingTimer;
+
+  void startBackgroundPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      pollOnlineSubscriptionStatus();
+    });
+  }
+
+  void stopBackgroundPolling() {
+    _pollingTimer?.cancel();
+  }
+
+  /// Periodically checks the backend to enforce the "One Active Device" rule.
+  /// If the server returns 403 INSTALLATION_SUPERSEDED, this device was revoked.
+  Future<void> pollOnlineSubscriptionStatus() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final token = user != null ? await user.getIdToken() : '';
+      if (token == null || token.isEmpty) return;
+
+      final deviceId = await getDeviceId();
+      final url = Uri.parse('https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1/subscriptions/status');
+      
+      final response = await http.get(url, headers: {
+        'Authorization': 'Bearer $token',
+        'x-installation-uuid': deviceId,
+        'x-installation-id': deviceId,
+        'x-hardware-id': deviceId,
+        'x-app-version': '1.0.0',
+        'x-platform': Platform.operatingSystem,
+      });
+
+      if (response.statusCode == 403) {
+        final data = jsonDecode(response.body);
+        final errorCode = data['error']?['code'];
+        if (errorCode == 'INSTALLATION_SUPERSEDED') {
+          print('CRITICAL: This installation was superseded. Removing license.');
+          await removeLicense();
+          _revocationController.add(null);
+        } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
+          print('CRITICAL: Customer deactivated by admin. Signing out.');
+          await removeLicense();
+          await FirebaseAuth.instance.signOut();
+          _revocationController.add(null);
+        }
+      } else if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['success'] == true && data['data']?['signedLeaseToken'] != null) {
+          // Update the locally cached lease token if the backend has a fresher one
+          await verifySignedLeaseToken(data['data']['signedLeaseToken'], saveToStorage: true);
+        }
+      }
+    } catch (e) {
+      print('Online subscription status polling failed (offline?): $e');
+    }
+  }
 }
 

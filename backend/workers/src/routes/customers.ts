@@ -85,14 +85,76 @@ export async function handleCustomerRegistration(
     );
   }
 
-  // 4. Generate immutable entity keys (`cus_xxxxxxxxx`, `inst_xxxxxxxxx`, `sub_xxxxxxxxx`)
+  // 4. Strict One-Device Limit: Check by Mobile Number FIRST
   const now = Date.now();
+  let expiresAtEpochMs = now + (30 * 86400000); // 30 calendar days
+  const inputMobileNumber = body.mobileNumber.trim();
+
+  try {
+    const existingCustomers = await queryCollection(env, 'customers', [
+      { field: 'mobileNumber', op: 'EQUAL', value: inputMobileNumber }
+    ]);
+
+    if (existingCustomers && existingCustomers.length > 0) {
+      const oldCust = existingCustomers[0];
+
+      if (oldCust.status === 'DEACTIVATED') {
+        return createErrorResponse(403, 'CUSTOMER_DEACTIVATED', 'This account has been deactivated by the administrator.');
+      }
+
+      // Check their active subscription
+      const subs = await queryCollection(env, 'subscriptions', [
+        { field: 'customerId', op: 'EQUAL', value: oldCust.customerId },
+        { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
+      ]);
+
+      if (subs && subs.length > 0) {
+        const activeSub = subs[0];
+        
+        // If they are on the SAME hardware device, just recover their account
+        if (activeSub.activeInstallationId === identity.hardwareId || activeSub.activeInstallationId === identity.installationId) {
+          const cachedData = {
+            customerId: oldCust.customerId,
+            installationId: activeSub.activeInstallationId,
+            subscriptionId: activeSub.subscriptionId,
+            planId: activeSub.planId,
+            activeInstallationId: activeSub.activeInstallationId,
+            status: activeSub.status,
+            expiresAtEpochMs: activeSub.expiresAtEpochMs,
+            signedLeaseToken: activeSub.signedLeaseToken
+          };
+          return new Response(JSON.stringify({ success: true, data: cachedData, message: 'Account recovered successfully.' }), {
+            status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        } else {
+          // DIFFERENT DEVICE: STRICT BLOCK!
+          return createErrorResponse(403, 'DEVICE_LIMIT_REACHED', 'This phone number is already active on another device. Please use the "Transfer Account" option.');
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Strict device limit check error:', err);
+  }
+
+  // 4.5. Prevent Free Trial Abuse (New number on old phone)
+  try {
+    const existingInstalls = await queryCollection(env, 'installations', [
+      { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
+    ]);
+    if (existingInstalls && existingInstalls.length > 0) {
+      // Grant exactly 0 days to force purchase if they try to abuse the free trial by changing sim cards.
+      expiresAtEpochMs = now;
+    }
+  } catch(err) {
+     console.warn('Hardware ID check error:', err);
+  }
+
+  // 5. Generate immutable entity keys (`cus_xxxxxxxxx`, `inst_xxxxxxxxx`, `sub_xxxxxxxxx`)
   const customerId = `cus_${generateShortId()}`;
   const installationId = identity.installationId || identity.installationUuid || `inst_${generateShortId()}`;
   const subscriptionId = `sub_${generateShortId()}`;
-  const expiresAtEpochMs = now + (30 * 86400000); // exactly 30 calendar days
 
-  // 5. Generate cryptographic signedLeaseToken using Web Crypto HMAC-SHA256
+  // 6. Generate cryptographic signedLeaseToken using Web Crypto HMAC-SHA256
   const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
   const leasePayload = {
     subscriptionId,
@@ -102,7 +164,7 @@ export async function handleCustomerRegistration(
     planName: '30-Day Free Demo License',
     startsAtEpochMs: now,
     expiresAtEpochMs,
-    maxCustomers: 50,
+    maxCustomers: 50  ,
     allowWhatsAppAutoSend: true,
     allowThermalPrinting: true,
     issuedAt: now

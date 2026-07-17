@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/security_service.dart';
 import '../services/license_service.dart';
+import '../services/transfer_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/excel_service.dart';
 import '../services/backup_service.dart';
@@ -371,6 +372,12 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                 onTap: () => SystemDiagnosticsModal.show(context, widget.settingsService),
               ),
               _buildSettingItem(
+                icon: Icons.mobile_screen_share,
+                title: 'Request Device Transfer',
+                subtitle: 'Move your license from an old device to this one',
+                onTap: () => _showDeviceTransferDialog(),
+              ),
+              _buildSettingItem(
                 icon: Icons.key_off_outlined,
                 title: 'Deactivate License',
                 subtitle: 'Remove license from this device',
@@ -448,6 +455,111 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
             ],
           ),
           const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  void _showDeviceTransferDialog() {
+    final TextEditingController oldIdCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Row(
+          children: [
+            Icon(Icons.mobile_screen_share, color: Color(0xFF00E676)),
+            SizedBox(width: 8),
+            Text('Request Transfer', style: TextStyle(color: Colors.white, fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter your Registered Mobile Number (or Customer ID) to transfer your active license to this device.', 
+              style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4)
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: oldIdCtrl,
+              style: const TextStyle(color: Colors.white),
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: 'Mobile Number',
+                labelStyle: const TextStyle(color: Colors.grey),
+                enabledBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.white24), borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Color(0xFF00E676)), borderRadius: BorderRadius.circular(12)),
+                prefixIcon: const Icon(Icons.phone, color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: Colors.orange.withOpacity(0.1), borderRadius: BorderRadius.circular(8), border: Border.all(color: Colors.orange.withOpacity(0.3))),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'If you lost your old phone, request the transfer here, then contact Support to manually approve it.',
+                      style: TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+            onPressed: () async {
+              final inputValue = oldIdCtrl.text.trim();
+              if (inputValue.isEmpty) return;
+              Navigator.pop(ctx);
+              
+              showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676))));
+              try {
+                // Determine if it's a customerId or mobileNumber based on prefix
+                String? customerId;
+                String? mobileNumber;
+                if (inputValue.startsWith('cus_')) {
+                  customerId = inputValue;
+                } else {
+                  mobileNumber = inputValue;
+                }
+                
+                await TransferService().requestTransfer(customerId: customerId, mobileNumber: mobileNumber);
+                if (mounted) {
+                  Navigator.pop(context); // Close loading
+                  showDialog(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      backgroundColor: const Color(0xFF161B22),
+                      title: const Text('Transfer Requested!', style: TextStyle(color: Color(0xFF00E676))),
+                      content: const Text(
+                        'Your request was sent.\n\n• If you have your old phone, open VendSoft on it and tap "Approve".\n• If you LOST your old phone, please contact Support to verify your identity and manually approve this request.',
+                        style: TextStyle(color: Colors.white70, height: 1.4),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK', style: TextStyle(color: Color(0xFF00E676)))),
+                      ],
+                    )
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context); // Close loading
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to request transfer: $e'), backgroundColor: Colors.redAccent));
+                }
+              }
+            },
+            child: const Text('Request Transfer', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
     );

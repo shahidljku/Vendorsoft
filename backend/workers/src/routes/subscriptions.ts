@@ -39,6 +39,16 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       );
     }
 
+    // 2.5 Check if customer is deactivated
+    const customerDoc = await getDocument(env, 'customers', customerId);
+    if (customerDoc && customerDoc.status === 'DEACTIVATED') {
+      return createErrorResponse(
+        403,
+        'CUSTOMER_DEACTIVATED',
+        'This account has been deactivated by the administrator.'
+      );
+    }
+
     // 3. Query active subscriptions for this customer
     const activeSubs = await queryCollection(env, 'subscriptions', [
       { field: 'customerId', op: 'EQUAL', value: customerId },

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/license_service.dart';
 import '../services/whatsapp_service.dart';
+import '../services/payment_service.dart';
 
 class SubscriptionDialog {
   /// Show modal dialog displaying Monthly and Yearly subscription plans
@@ -203,7 +204,7 @@ class SubscriptionDialog {
             width: double.infinity,
             child: ElevatedButton.icon(
               icon: const Icon(Icons.qr_code_2),
-              label: const Text('Show QR Code to Pay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              label: const Text('Pay with Razorpay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: isPopular ? const Color(0xFF00E676) : Colors.blueAccent,
                 foregroundColor: isPopular ? Colors.black : Colors.white,
@@ -211,7 +212,24 @@ class SubscriptionDialog {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               onPressed: () {
-                showPaymentQr(context, planName, amount, deviceId: deviceId);
+                final planId = planName.contains('Yearly') ? 'PRO_YEARLY' : 'PRO_MONTHLY';
+                PaymentService().initiateCheckout(
+                  context,
+                  planId: planId,
+                  onResult: (success, message) {
+                    if (success) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(message ?? 'Activation successful!'), backgroundColor: const Color(0xFF00E676)),
+                      );
+                      // Close dialogs and reload
+                      Navigator.of(context).popUntil((route) => route.isFirst);
+                    } else if (message != null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+                      );
+                    }
+                  }
+                );
               },
             ),
           ),
