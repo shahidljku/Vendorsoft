@@ -45,11 +45,11 @@ gantt
 - **Testing Protocol**: Verify JWT validation against Firebase JWKs via `Miniflare` local emulator; verify `firestore.rules` via Firebase Local Emulator Suite.
 - **Rollback Plan**: Run `wrangler rollback` to instantly restore previous edge deployment if routing errors occur.
 - **Completion Checklist**:
-  - [ ] Cloudflare Worker project initialized with TypeScript and `wrangler.toml`.
-  - [ ] Google Cloud Service Account credentials stored in Worker secrets (`wrangler secret put FIRESTORE_SA_KEY`).
-  - [ ] `firestore.rules` and `firestore.indexes.json` deployed to production Firebase project.
-  - [ ] `plans` collection populated with `DEMO_FREE`, `PRO_MONTHLY`, and `PRO_YEARLY` documents.
-  - [ ] `system_configs/global` document seeded with `allowRegistrations: true`, `allowPayments: true`, `allowTransfers: true`, `maintenanceMode: false`.
+  - [x] Cloudflare Worker project initialized with TypeScript and `wrangler.toml`.
+  - [x] Google Cloud Service Account credentials stored in Worker secrets (`wrangler secret put FIRESTORE_SA_KEY`).
+  - [x] `firestore.rules` and `firestore.indexes.json` deployed to production Firebase project.
+  - [x] `plans` collection populated with `DEMO_FREE`, `PRO_MONTHLY`, and `PRO_YEARLY` documents.
+  - [x] `system_configs/global` document seeded with `allowRegistrations: true`, `allowPayments: true`, `allowTransfers: true`, `maintenanceMode: false`.
 
 ---
 
@@ -60,9 +60,9 @@ gantt
 - **Testing Protocol**: Verify that first launch collects details, creates `cus_xxxxxxxxx` and `inst_xxxxxxxxx` in Firestore, and returns initial `signedLeaseToken`. Verify that `TrialService` and `LicenseService` remain completely untouched for existing users.
 - **Rollback Plan**: If onboarding fails remotely, allow user to skip profile collection and fall back to pure anonymous execution while retrying registration in background.
 - **Completion Checklist**:
-  - [ ] `POST /api/v1/customers/register` deployed and creating immutable `cus_xxxxxxxxx` records.
-  - [ ] App onboarding screen reading `system_configs` and collecting Business Name, Owner Name, and Mobile Number.
-  - [ ] `flutter analyze` passing with zero warnings.
+  - [x] `POST /api/v1/customers/register` deployed and creating immutable `cus_xxxxxxxxx` records.
+  - [x] App onboarding screen reading `system_configs` and collecting Business Name, Owner Name, and Mobile Number.
+  - [x] `flutter analyze` passing with zero warnings.
 
 ---
 
@@ -75,9 +75,9 @@ gantt
   - Peer-to-Peer transfer simulation: Register Device A (`inst_A`). Register Device B (`inst_B`). Request transfer from Device B (`POST /transfers/request`). Poll on Device A (`GET /transfers/pending`). Tap Approve on Device A (`POST /transfers/approve`). Verify `activeInstallationId` atomically switches to `inst_B` and `inst_A` locks cleanly into `SUPERSEDED` mode. Verify system works perfectly even when FCM push notifications are disabled or undelivered.
 - **Rollback Plan**: If transfer or online synchronization introduces issues, `LicenseService.isLicensed()` immediately falls back 100% to checking legacy `offline_license_key` while skipping online checks.
 - **Completion Checklist**:
-  - [ ] `GET /api/v1/subscriptions/status` enforcing the One Active Device Rule.
-  - [ ] Peer-to-Peer transfer endpoints deployed with optional FCM + mandatory polling synchronization.
-  - [ ] Flutter `LicenseService` verifying `signedLeaseToken` offline.
+  - [x] `GET /api/v1/subscriptions/status` enforcing the One Active Device Rule.
+  - [x] Peer-to-Peer transfer endpoints deployed with optional FCM + mandatory polling synchronization.
+  - [x] Flutter `LicenseService` verifying `signedLeaseToken` offline.
 
 ---
 
@@ -88,9 +88,9 @@ gantt
 - **Testing Protocol**: Conduct 20+ simulated checkout flows via Razorpay Test Mode (`success@razorpay`, `failure@razorpay`). Simulate duplicate webhook floods via Postman Runner; verify `runTransaction` idempotency ensures exactly 1 subscription extension occurs.
 - **Rollback Plan**: Switch `plans.isActive = false` or `system_configs.allowPayments = false` via Admin panel and re-enable manual WhatsApp activation key entry if checkout errors occur.
 - **Completion Checklist**:
-  - [ ] Razorpay production webhook configured (`https://api.vendsoft.app/v1/webhooks/razorpay`).
-  - [ ] HMAC SHA-256 webhook signature verification passing with 100% reliability.
-  - [ ] App checkout UI displaying dynamic prices loaded directly from `plans`.
+  - [x] Razorpay production webhook configured (`https://api.vendsoft.app/v1/webhooks/razorpay`).
+  - [x] HMAC SHA-256 webhook signature verification passing with 100% reliability.
+  - [x] App checkout UI displaying dynamic prices loaded directly from `plans`.
 
 ---
 
@@ -101,9 +101,9 @@ gantt
 - **Testing Protocol**: Verify SAML/SSO authentication locks out unauthenticated requests. Verify Support Admins can successfully toggle `maintenanceMode`, approve manual transfers for lost phones, and edit `businessName`/`mobileNumber` without breaking `customerId` subscriptions.
 - **Rollback Plan**: If Admin Portal experiences downtime, administrators fall back to calling Worker Admin REST endpoints via authenticated Postman collections.
 - **Completion Checklist**:
-  - [ ] Admin Portal deployed to `admin.vendsoft.app` behind Cloudflare Zero Trust.
-  - [ ] Customer Search, `system_configs` switches, and 360° Profile View operational.
-  - [ ] Manual Transfer Approval workflow (`Lost or Broken Phone Case`) verified and writing to `audit_logs`.
+  - [x] Admin Portal deployed to `admin.vendsoft.app` behind Cloudflare Zero Trust.
+  - [x] Customer Search, `system_configs` switches, and 360° Profile View operational.
+  - [x] Manual Transfer Approval workflow (`Lost or Broken Phone Case`) verified and writing to `audit_logs`.
 
 ---
 
@@ -114,6 +114,6 @@ gantt
 - **Testing Protocol**: Test migration flow with 50 beta vendor accounts holding historical RSA license strings. Verify `getDeviceId()` (`hardwareId`) matches perfectly and creates an `ACTIVE` subscription in Firestore expiring on the original date.
 - **Rollback Plan**: Legacy RSA verification code remains embedded inside `LicenseService.verifyLicenseKey()` indefinitely as a permanent fail-safe fallback.
 - **Completion Checklist**:
-  - [ ] Legacy RSA key claiming endpoint deployed and tested.
-  - [ ] 100% production rollout completed across Google Play Store and Windows distribution channels.
-  - [ ] Monitoring dashboards showing zero spike in support tickets or billing lockouts.
+  - [x] Legacy RSA key claiming endpoint deployed and tested.
+  - [x] 100% production rollout completed across Google Play Store and Windows distribution channels.
+  - [x] Monitoring dashboards showing zero spike in support tickets or billing lockouts.

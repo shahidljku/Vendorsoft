@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/license_service.dart';
+import '../services/payment_service.dart';
 
 class ActivationScreen extends StatefulWidget {
   final LicenseService licenseService;
@@ -69,10 +70,34 @@ class _ActivationScreenState extends State<ActivationScreen> {
     );
   }
 
-  @override
+  void _buyPlan(String planId) {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = '';
+    });
 
+    PaymentService().initiateCheckout(
+      context,
+      planId: planId,
+      onResult: (success, message) {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(message ?? 'Activation successful!'), backgroundColor: const Color(0xFF00E676)),
+          );
+          widget.onActivated();
+        } else if (message != null && message.isNotEmpty) {
+          setState(() => _errorMessage = message);
+        }
+      },
+    );
+  }
+
+  @override
   void dispose() {
     _licenseController.dispose();
+    PaymentService().dispose();
     super.dispose();
   }
 
@@ -91,6 +116,121 @@ class _ActivationScreenState extends State<ActivationScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // Online Instant Upgrade Section (`Phase 3 - Razorpay Checkout`)
+              const Text(
+                'Instant Online Activation',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(height: 12),
+              Card(
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFF00E676), width: 1.5),
+                ),
+                color: const Color(0xFF161B22),
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'PRO ANNUAL LICENSE',
+                            style: TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1.1),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: const Color(0xFF00E676), borderRadius: BorderRadius.circular(12)),
+                            child: const Text('RECOMMENDED', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 10)),
+                          )
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      const Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text('₹1,499', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+                          Text(' / year', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _buildFeatureRow('Up to 10,000 Customers in Excel & SQLite'),
+                      _buildFeatureRow('Automatic WhatsApp Delivery Bills & Invoices'),
+                      _buildFeatureRow('High-Speed Thermal ESC/POS Receipt Printing'),
+                      _buildFeatureRow('Offline-First Autonomy & Device Transfer Lock'),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _isLoading ? null : () => _buyPlan('PRO_YEARLY'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF00E676),
+                            foregroundColor: Colors.black,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text('Activate Annual License Now', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Card(
+                elevation: 0,
+                color: const Color(0xFF161B22),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Colors.white12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'PRO MONTHLY LICENSE',
+                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1.1),
+                      ),
+                      const SizedBox(height: 8),
+                      const Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text('₹149', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+                          Text(' / month', style: TextStyle(color: Colors.grey, fontSize: 14)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      _buildFeatureRow('Up to 1,000 Customers & Full Offline Access'),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: _isLoading ? null : () => _buyPlan('PRO_MONTHLY'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: const BorderSide(color: Colors.white38),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          child: const Text('Activate Monthly License', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Center(
+                child: Text(
+                  'Or activate manually with a prepaid license key:',
+                  style: TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+              ),
+              const SizedBox(height: 12),
               Card(
                 elevation: 0,
                 color: const Color(0xFF161B22),
@@ -218,6 +358,24 @@ class _ActivationScreenState extends State<ActivationScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildFeatureRow(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle, color: Color(0xFF00E676), size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        ],
       ),
     );
   }

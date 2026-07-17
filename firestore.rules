@@ -1,0 +1,93 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Common Helper Functions
+    function isAuthenticated() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isOwnerOfInstallation(installationId) {
+      return isAuthenticated() && 
+             exists(/databases/$(database)/documents/installations/$(installationId)) &&
+             get(/databases/$(database)/documents/installations/$(installationId)).data.firebaseUid == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. SYSTEM_CONFIGS COLLECTION: Publicly readable; strictly admin-writable
+    // -------------------------------------------------------------------------
+    match /system_configs/{configId} {
+      allow read: if true; // Allows app startup check before authentication
+      allow write: if false; // Only Cloudflare Workers (Service Account) can modify
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. PLANS COLLECTION: Publicly readable catalog; strictly admin-writable
+    // -------------------------------------------------------------------------
+    match /plans/{planId} {
+      allow read: if isAuthenticated() && resource.data.isActive == true;
+      allow write: if false; // Only Cloudflare Workers (Service Account) can modify
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. CUSTOMERS COLLECTION: Read-only by verified customer account owner
+    // -------------------------------------------------------------------------
+    match /customers/{customerId} {
+      allow read: if isAuthenticated() && (
+        exists(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])) &&
+        get(/databases/$(database)/documents/installations/$(request.headers['x-installation-id'])).data.customerId == customerId
+      );
+      allow write: if false; // Only Cloudflare Workers can modify
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. INSTALLATIONS COLLECTION: Read-only by bound session UID
+    // -------------------------------------------------------------------------
+    match /installations/{installationId} {
+      allow read: if isAuthenticated() && resource.data.firebaseUid == request.auth.uid;
+      allow write: if false; // Only Cloudflare Workers can modify after initial onboarding
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. SUBSCRIPTIONS COLLECTION: Read-only by authorized active installation
+    // -------------------------------------------------------------------------
+    match /subscriptions/{subscriptionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.activeInstallationId == request.headers['x-installation-id'] ||
+        isOwnerOfInstallation(resource.data.activeInstallationId)
+      );
+      allow write: if false; // Only Cloudflare Workers can modify
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. DEVICE_TRANSFERS COLLECTION: Read-only by participating installations
+    // -------------------------------------------------------------------------
+    match /device_transfers/{transferId} {
+      // Allow old installation (polling for approvals) OR new installation (polling status) to read
+      allow read: if isAuthenticated() && (
+        isOwnerOfInstallation(resource.data.oldInstallationId) ||
+        isOwnerOfInstallation(resource.data.newInstallationId)
+      );
+      allow write: if false; // Only Cloudflare Workers can modify via /transfers/approve or /request
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. PAYMENTS COLLECTION: Read-only by initiating installation
+    // -------------------------------------------------------------------------
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && isOwnerOfInstallation(resource.data.installationId);
+      allow write: if false; // Only Cloudflare Workers can modify
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. AUDIT_LOGS & IDEMPOTENCY_KEYS: Complete Client Lockout
+    // -------------------------------------------------------------------------
+    match /audit_logs/{logId} {
+      allow read, write: if false; // Strictly Worker / Admin access only
+    }
+
+    match /idempotency_keys/{keyId} {
+      allow read, write: if false; // Strictly Worker access only
+    }
+  }
+}

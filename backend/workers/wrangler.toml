@@ -1,0 +1,15 @@
+name = "vendsoft-api-worker"
+main = "src/index.ts"
+compatibility_date = "2024-07-16"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+GCP_PROJECT_ID = "vendsoft-prod"
+FIREBASE_PROJECT_ID = "vendsoft-prod"
+ENVIRONMENT = "production"
+
+# Note: The following secrets MUST be added using `wrangler secret put <KEY_NAME>`:
+# - FIRESTORE_SA_KEY: Google Cloud Service Account JSON for Firestore REST API access.
+# - RAZORPAY_KEY_ID: Razorpay Production/Test Key ID.
+# - RAZORPAY_KEY_SECRET: Razorpay Production/Test Key Secret.
+# - RAZORPAY_WEBHOOK_SECRET: Razorpay Webhook Secret for HMAC SHA-256 validation.

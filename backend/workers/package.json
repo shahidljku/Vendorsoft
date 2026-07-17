@@ -1,0 +1,18 @@
+{
+  "name": "vendsoft-api-worker",
+  "version": "1.0.0",
+  "description": "Authoritative Cloudflare Workers Serverless Control Plane for VendSoft",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240712.0",
+    "typescript": "^5.5.3",
+    "wrangler": "^3.64.0"
+  },
+  "private": true
+}

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VendSoft — Cloud Control & Admin Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark-theme">
+  <!-- Top Glass Navigation Bar -->
+  <header class="navbar glass">
+    <div class="nav-brand">
+      <div class="logo-icon">VS</div>
+      <div>
+        <h1 class="brand-title">VendSoft Control Plane</h1>
+        <span class="brand-badge">ZERO TRUST ACTIVE</span>
+      </div>
+    </div>
+    <div class="nav-controls">
+      <div class="env-selector">
+        <label for="apiBaseUrl">Target API Endpoint:</label>
+        <select id="apiBaseUrl">
+          <option value="http://127.0.0.1:8788/api/v1" selected>Local Worker (Dev: 8788)</option>
+          <option value="https://api.vendsoft.app/v1">Production Cloudflare (VendSoft App)</option>
+        </select>
+      </div>
+      <div class="auth-pill glass-pill">
+        <span class="pulse-dot"></span>
+        <span id="adminStatusText">Auth: Dev Mock (admin_secret_mock)</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Dashboard Grid -->
+  <main class="dashboard-grid">
+    <!-- Left Sidebar / Navigation Tabs -->
+    <aside class="sidebar glass">
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="tab-customers">
+          <svg viewBox="0 0 24 24" class="tab-icon"><path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          Customer 360° View
+        </button>
+        <button class="tab-btn" data-tab="tab-transfers">
+          <svg viewBox="0 0 24 24" class="tab-icon"><path fill="currentColor" d="M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3V14h2V6.99h3L9 3z"/></svg>
+          Lost Phone Approvals
+          <span class="badge warning" id="pendingTransfersCount">0</span>
+        </button>
+        <button class="tab-btn" data-tab="tab-settings">
+          <svg viewBox="0 0 24 24" class="tab-icon"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+          System Configs
+        </button>
+        <button class="tab-btn" data-tab="tab-audit">
+          <svg viewBox="0 0 24 24" class="tab-icon"><path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+          Immutable Audit Logs
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="system-health">
+          <span class="health-label">Cloudflare Edge Status</span>
+          <div class="health-status">
+            <span class="dot active"></span> Online (Miniflare Engine)
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Right Content Area -->
+    <section class="content-area">
+      
+      <!-- TAB 1: CUSTOMERS 360 -->
+      <div id="tab-customers" class="tab-content active">
+        <div class="section-header glass">
+          <div>
+            <h2>Customer 360° Management</h2>
+            <p>Search vendor profiles, inspect hardware bindings, and edit metadata safely.</p>
+          </div>
+          <div class="search-bar">
+            <input type="text" id="customerSearchInput" placeholder="Search ID, business name, phone number..." />
+            <button class="btn primary" id="btnSearchCustomers">Search</button>
+          </div>
+        </div>
+
+        <div class="card-grid" id="customersList">
+          <div class="loading-state">Type a search term or click Search to load active vendors.</div>
+        </div>
+      </div>
+
+      <!-- TAB 2: P2P TRANSFERS (LOST/BROKEN PHONE OVERRIDE) -->
+      <div id="tab-transfers" class="tab-content">
+        <div class="section-header glass">
+          <div>
+            <h2>Manual Device Transfer Approvals</h2>
+            <p><strong>Lost or Broken Phone Override:</strong> Approve vendor hardware transfer requests when the source phone is unavailable.</p>
+          </div>
+          <button class="btn secondary" id="btnRefreshTransfers">Refresh List</button>
+        </div>
+
+        <div class="table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Transfer ID</th>
+                <th>Customer ID</th>
+                <th>Source Hardware ID</th>
+                <th>Target Hardware ID</th>
+                <th>Requested At</th>
+                <th>Status / Action</th>
+              </tr>
+            </thead>
+            <tbody id="transfersTableBody">
+              <tr><td colspan="6" class="empty-cell">Click Refresh or execute simulated transfer request in CLI.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB 3: SYSTEM CONFIGS -->
+      <div id="tab-settings" class="tab-content">
+        <div class="section-header glass">
+          <div>
+            <h2>Global System Controls (`system_configs/global`)</h2>
+            <p>Real-time edge switches controlling payment availability, maintenance gates, and app updates.</p>
+          </div>
+          <button class="btn primary" id="btnSaveConfig">Save Settings</button>
+        </div>
+
+        <div class="config-grid">
+          <div class="config-card glass">
+            <div class="config-info">
+              <h3>Allow Razorpay Payments</h3>
+              <p>When disabled (`false`), app checkout is blocked instantly across all vendor devices without an app store update.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="chkAllowPayments" checked>
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="config-card glass">
+            <div class="config-info">
+              <h3>Allow Peer-to-Peer Device Transfers</h3>
+              <p>When disabled (`false`), vendors cannot request automated QR/push notifications to transfer devices.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="chkAllowTransfers" checked>
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="config-card glass">
+            <div class="config-info">
+              <h3>System Maintenance Mode</h3>
+              <p>If enabled (`true`), all Worker endpoints return HTTP 503 Maintenance Mode across the entire fleet.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="chkMaintenanceMode">
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div class="config-card glass">
+            <div class="config-info">
+              <h3>Enforce Strict App Version (`1.0.0+`)</h3>
+              <p>Forces vendors running outdated APKs to update immediately before taking payments.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="chkStrictAppVersion">
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: AUDIT LOGS -->
+      <div id="tab-audit" class="tab-content">
+        <div class="section-header glass">
+          <div>
+            <h2>Immutable Edge Audit Logs (`audit_logs`)</h2>
+            <p>Cryptographic trail of webhooks, admin overrides, metadata edits, and security blocks.</p>
+          </div>
+          <button class="btn secondary" id="btnRefreshLogs">Refresh Logs</button>
+        </div>
+
+        <div class="table-container glass">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Log ID</th>
+                <th>Timestamp (IST)</th>
+                <th>Action Type</th>
+                <th>Severity</th>
+                <th>Metadata / Details</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody">
+              <tr><td colspan="5" class="empty-cell">Loading audit logs...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Modal for Customer Metadata Edit -->
+  <div id="editCustomerModal" class="modal-backdrop">
+    <div class="modal-card glass">
+      <h3>Edit Vendor Profile Metadata</h3>
+      <p class="modal-sub">Updates are applied immediately without modifying subscription expiration dates.</p>
+      
+      <form id="editCustomerForm" class="edit-form">
+        <input type="hidden" id="editCustomerId" />
+        <div class="form-group">
+          <label>Business Name</label>
+          <input type="text" id="editBusinessName" required />
+        </div>
+        <div class="form-group">
+          <label>Owner Name</label>
+          <input type="text" id="editOwnerName" required />
+        </div>
+        <div class="form-group">
+          <label>Mobile Number</label>
+          <input type="text" id="editMobileNumber" required />
+        </div>
+        <div class="form-group">
+          <label>City / Location</label>
+          <input type="text" id="editCity" required />
+        </div>
+        
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" id="btnCancelEdit">Cancel</button>
+          <button type="submit" class="btn primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
