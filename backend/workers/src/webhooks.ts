@@ -133,7 +133,7 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
     issuedAt: now
   };
 
-  const secretKey = env.LEASE_SIGNING_SECRET || env.RAZORPAY_WEBHOOK_SECRET || 'vendsoft_authoritative_worker_secret_v1';
+  const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
   const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
 
   const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [

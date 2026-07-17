@@ -208,7 +208,8 @@ graph TD
 - **Why Mandatory Polling alongside FCM Push (`transfers.ts`)**: In many Indian field scenarios, battery-saver apps or custom OEM ROMs (Xiaomi, Vivo, Oppo, Realme) aggressively kill background Firebase Cloud Messaging (FCM) push notification services. When Device A initiates a transfer request, Device B polls `GET /v1/transfers/pending` during app foregrounding. Even if FCM notifications fail completely, the transfer flow completes reliably.
 
 ### 6.3 Historical Gotchas & Lessons Learned (Avoid Repeating Mistakes!)
-1. **Base64 Encoding & PowerShell Test Scripts**: When testing via `Invoke-RestMethod` in PowerShell (`verify_phase_5.ps1`), concatenating base64 strings with custom prefixes (`MOCK_DEV_LEGACY_KEY_eyJ...`) can cause `atob()` to throw `InvalidCharacterError` on the edge if the prefix is not stripped before base64 decoding. In `migrate.ts`, we explicitly strip `MOCK_DEV_LEGACY_KEY_` before calling `atob()`. If writing new mock verification scripts, always ensure prefixes are handled cleanly.
+1. **The HMAC Security Flaw (v1.0.0 to v1.0.1)**: Initially, `signedLeaseToken` was signed with a symmetric HMAC secret. Because the Flutter client couldn't verify the HMAC without leaking the secret, it blindly trusted the expiration date. This allowed forged offline licenses. We patched this by migrating the Worker to sign tokens using the authoritative `RSA_PRIVATE_KEY`. NEVER revert to symmetric HMAC signing for offline tokens.
+2. **Base64 Encoding & PowerShell Test Scripts**: When testing via `Invoke-RestMethod` in PowerShell (`verify_phase_5.ps1`), concatenating base64 strings with custom prefixes (`MOCK_DEV_LEGACY_KEY_eyJ...`) can cause `atob()` to throw `InvalidCharacterError` on the edge if the prefix is not stripped before base64 decoding. In `migrate.ts`, we explicitly strip `MOCK_DEV_LEGACY_KEY_` before calling `atob()`. If writing new mock verification scripts, always ensure prefixes are handled cleanly.
 2. **Firestore REST API Object Properties**: Unlike the Node.js Admin SDK which returns clean JavaScript objects (`{ customerId: 'cus_123' }`), the Google Cloud Firestore REST API returns typed value wrappers (`{ fields: { customerId: { stringValue: 'cus_123' } } }`). In `services/firestore.ts`, `parseFirestoreDocument()` and `toFirestoreFields()` handle this conversion seamlessly. Always use the helper methods in `services/firestore.ts` when interacting with Firestore documents.
 3. **Zod Validation in Edge Routes**: When handling JSON payloads (`POST /register`, `/migrate`, `/orders/create`), always use structured `zod` schemas or explicit null-safety checking before accessing properties to prevent unhandled `500` exceptions inside edge routes.
 
@@ -259,7 +260,7 @@ npx wrangler secret put FIRESTORE_SA_KEY
 npx wrangler secret put RAZORPAY_KEY_ID
 npx wrangler secret put RAZORPAY_KEY_SECRET
 npx wrangler secret put RAZORPAY_WEBHOOK_SECRET
-npx wrangler secret put LEASE_SIGNING_SECRET
+npx wrangler secret put RSA_PRIVATE_KEY
 npx wrangler secret put ADMIN_SECRET
 ```
 

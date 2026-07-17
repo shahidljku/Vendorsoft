@@ -93,7 +93,7 @@ export async function handleCustomerRegistration(
   const expiresAtEpochMs = now + (30 * 86400000); // exactly 30 calendar days
 
   // 5. Generate cryptographic signedLeaseToken using Web Crypto HMAC-SHA256
-  const secretKey = env.LEASE_SIGNING_SECRET || env.RAZORPAY_WEBHOOK_SECRET || 'vendsoft_authoritative_worker_secret_v1';
+  const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
   const leasePayload = {
     subscriptionId,
     customerId,

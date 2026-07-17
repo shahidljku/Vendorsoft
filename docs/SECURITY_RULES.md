@@ -15,7 +15,16 @@ VendSoft operates on Android devices controlled by end users under a **Zero-Trus
 | **Replay & Duplicate Webhook Flooding** | Network retries or attacker replay loops send identical `order.paid` webhooks to double-extend annual subscriptions. | **HMAC Signatures & Transaction Idempotency**: Workers compute HMAC SHA-256 signatures against `x-razorpay-signature` and verify `created_at` age (`<10m`). Inside `runTransaction`, if `payments[orderId].status == "SUCCESS"`, the transaction aborts write operations cleanly without double-granting. | **HIGH** |
 | **Client Spoofing of Global Configuration** | Attackers attempt to write to `/system_configs/global` to turn off `maintenanceMode` or bypass minimum version checks. | **Impenetrable Read-Only Rules**: `system_configs` has `allow write: if false;` across all client SDK access. Only Cloudflare Workers via Service Accounts can alter global switches. | **CRITICAL** |
 
+
 ---
+
+### 1.4 Security Patch: Offline Lease Cryptography
+In the initial `v1.0.0` implementation, the `signedLeaseToken` was signed using symmetric HMAC-SHA256, and the Flutter app did not verify the signature offline. This was a critical vulnerability (CVSS 10.0).
+
+**MANDATE:** All offline `signedLeaseToken` payloads MUST be cryptographically signed by Cloudflare Workers using the authoritative **RSA Private Key** (`RSASSA-PKCS1-v1_5`). The Flutter client application MUST mathematically verify the signature against the embedded **RSA Public Key** before parsing the token's expiration date or granting UI access. The Worker must NEVER use HMAC symmetric signing for offline tokens.
+
+---
+
 
 ## 2. Cloud Firestore Security Rules Strategy
 

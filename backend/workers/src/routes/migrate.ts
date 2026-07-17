@@ -150,7 +150,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
     };
 
     // Generate signed lease token for the migrated subscription
-    const secretKey = env.LEASE_SIGNING_SECRET || 'dev_secret_key_vendsoft_32_bytes!';
+    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
     const leasePayload = {
       subscriptionId,
       customerId,

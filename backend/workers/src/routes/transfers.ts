@@ -187,7 +187,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
     }
 
     // Generate cryptographic signedLeaseToken for the new device
-    const secretKey = env.LEASE_SIGNING_SECRET || env.RAZORPAY_WEBHOOK_SECRET || 'vendsoft_authoritative_worker_secret_v1';
+    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
     const leasePayload = {
       subscriptionId: sub.subscriptionId,
       customerId: sub.customerId,

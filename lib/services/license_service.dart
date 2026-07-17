@@ -106,6 +106,25 @@ MQIDAQAB
       final parts = leaseTokenBase64.split('.');
       if (parts.length < 2) return false;
 
+      // Cryptographically verify the signature first using the authoritative Public Key
+      String base64Signature = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      while (base64Signature.length % 4 != 0) {
+        base64Signature += '=';
+      }
+
+      final parser = RSAKeyParser();
+      final publicKey = parser.parse(publicKeyString) as RSAPublicKey;
+      final signer = Signer(RSASigner(RSASignDigest.SHA256, publicKey: publicKey));
+      
+      // We verify the raw base64url payload string (parts[0]) against the decoded signature
+      final isValidSignature = signer.verify(parts[0], Encrypted.fromBase64(base64Signature));
+
+      if (!isValidSignature) {
+        print('CRITICAL SECURITY ALERT: signedLeaseToken cryptographic verification failed! Possible forgery attempt.');
+        return false;
+      }
+
+      // If signature is mathematically proven, decode payload and check expiration
       String base64Payload = parts[0].replaceAll('-', '+').replaceAll('_', '/');
       while (base64Payload.length % 4 != 0) {
         base64Payload += '=';

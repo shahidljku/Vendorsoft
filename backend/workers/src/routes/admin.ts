@@ -174,7 +174,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
       return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', `Subscription ${subscriptionId} not found.`);
     }
 
-    const secretKey = env.LEASE_SIGNING_SECRET || 'dev_secret_key_vendsoft_32_bytes!';
+    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
     const leasePayload = {
       subscriptionId: subDoc.subscriptionId,
       customerId: subDoc.customerId,

@@ -75,5 +75,6 @@ powershell -ExecutionPolicy Bypass -File verify_phase_5.ps1
 1. **Never Break Offline Autonomy**: The Flutter app must always be able to launch and operate fully offline in remote areas (`LicenseService.isLicensed()` checking `_signedLeaseTokenPref` and falling back to legacy RSA `_licenseKeyPref`).
 2. **Never Touch User Business Data**: Excel files (`customers.xlsx`), SQLite ledgers, monthly bills, and receipt images reside strictly on the user's local device storage. Never attempt to sync or upload them to Firestore or any server.
 3. **Never Remove Legacy RSA Verification**: `verifyLicenseKey()` inside `license_service.dart` is a permanent offline fail-safe. Do not delete or refactor it out.
-4. **Log Everything in `PROGRESS_LOG.md`**: Any task performed must be documented with actual runtime verification proofs inside `docs/PROGRESS_LOG.md` before completion.
-5. **Ask Before Assuming**: If the user's request is underspecified or conflicts with frozen documentation, stop and ask the user for clarification rather than making assumptions.
+4. **Mandatory RSA Offline Verification for New Tokens**: The `signedLeaseToken` must ALWAYS be mathematically verified against the embedded RSA Public Key before trusting its payload (Security Patch v1.0.1).
+5. **Log Everything in `PROGRESS_LOG.md`**: Any task performed must be documented with actual runtime verification proofs inside `docs/PROGRESS_LOG.md` before completion.
+6. **Ask Before Assuming**: If the user's request is underspecified or conflicts with frozen documentation, stop and ask the user for clarification rather than making assumptions.

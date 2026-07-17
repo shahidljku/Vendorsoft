@@ -22,30 +22,46 @@ export function generateShortId(): string {
  * Ensures client APK modification cannot spoof active status locally (`SECURITY_RULES.md Section 1.1`).
  * The signing secret (`LEASE_SIGNING_SECRET`) resides exclusively inside Cloudflare Workers V8 isolated memory.
  */
-export async function generateSignedLeaseToken(payload: Record<string, any>, secret: string): Promise<string> {
+export async function generateSignedLeaseToken(payload: Record<string, any>, privateKeyPem: string): Promise<string> {
   const jsonStr = JSON.stringify(payload);
   const base64Payload = btoa(jsonStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   
   const encoder = new TextEncoder();
-  const keyBuffer = encoder.encode(secret);
   const dataBuffer = encoder.encode(base64Payload);
 
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    keyBuffer,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  try {
+    // Strip PEM headers to extract base64 PKCS#8 payload
+    const base64Pkcs8 = privateKeyPem
+      .replace(/-----BEGIN (?:RSA )?PRIVATE KEY-----/g, '')
+      .replace(/-----END (?:RSA )?PRIVATE KEY-----/g, '')
+      .replace(/\s+/g, '');
+      
+    const binaryPkcs8 = atob(base64Pkcs8);
+    const pkcs8Bytes = new Uint8Array(binaryPkcs8.length);
+    for (let i = 0; i < binaryPkcs8.length; i++) {
+      pkcs8Bytes[i] = binaryPkcs8.charCodeAt(i);
+    }
 
-  const signatureBuffer = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
-  const signatureBytes = new Uint8Array(signatureBuffer);
-  let signatureBinary = '';
-  for (let i = 0; i < signatureBytes.byteLength; i++) {
-    signatureBinary += String.fromCharCode(signatureBytes[i]);
+    const cryptoKey = await crypto.subtle.importKey(
+      'pkcs8',
+      pkcs8Bytes,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+
+    const signatureBuffer = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', cryptoKey, dataBuffer);
+    const signatureBytes = new Uint8Array(signatureBuffer);
+    let signatureBinary = '';
+    for (let i = 0; i < signatureBytes.byteLength; i++) {
+      signatureBinary += String.fromCharCode(signatureBytes[i]);
+    }
+    const base64Signature = btoa(signatureBinary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return `${base64Payload}.${base64Signature}`;
+  } catch (err) {
+    console.error('Failed to sign lease token with RSA Key. Ensure RSA_PRIVATE_KEY is a valid PKCS#8 PEM string.', err);
+    throw new Error('INTERNAL_CRYPTO_ERROR');
   }
-  const base64Signature = btoa(signatureBinary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return `${base64Payload}.${base64Signature}`;
 }
 
 /**
