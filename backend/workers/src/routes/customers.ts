@@ -1,5 +1,5 @@
 import { Env, CompositeIdentity, ApiResponse } from '../types';
-import { getDocument, setDocument, commitAtomicWrites } from '../services/firestore';
+import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 
@@ -146,7 +146,7 @@ export async function handleCustomerRegistration(
       { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
     ]);
     
-    let hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.installationId);
+    let hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.hardwareId);
     
     if (!hardwareTrialDoc && hardwareTrials && hardwareTrials.length > 0) {
       hardwareTrialDoc = hardwareTrials[0];
@@ -234,11 +234,13 @@ export async function handleCustomerRegistration(
     },
     {
       collectionPath: 'hardware_trials',
-      documentId: installationId,
+      documentId: identity.hardwareId,
       data: {
+        hardwareId: identity.hardwareId,
         startedAtEpochMs: trialStartsAt,
         expiresAtEpochMs: trialExpiresAt,
-        customerId: customerId
+        customerId: customerId,
+        trialUsed: true
       }
     }
   ];
