@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
       loadPendingTransfers();
       loadSystemConfigs();
       loadAuditLogs();
+      loadPlans();
     });
   } else {
     requirePassword();
@@ -49,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadPendingTransfers();
   loadSystemConfigs();
   loadAuditLogs();
+  loadPlans();
 });
 
 function setupNavigation() {
@@ -187,9 +189,19 @@ async function loadCustomers() {
             <span class="label">Location</span>
             <span class="value">${cust.city || '—'}</span>
           </div>
-          <div class="info-item">
-            <span class="label">Registered Devices</span>
-            <span class="value">${cust.installationsCount || 0} Hardware Bindings</span>
+          <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div class="label" style="margin-bottom: 8px;">Registered Devices</div>
+            ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => `
+              <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 4px;">
+                <div>
+                  <div style="font-size: 12px; font-family: monospace;">${inst.hardwareId}</div>
+                  <div style="font-size: 11px; color: #888;">${(inst.platform || 'unknown').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
+                </div>
+                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px;" onclick="toggleDeviceBan('${inst.hardwareId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
+                  ${inst.status === 'BANNED' ? 'Unblock' : 'Block Device'}
+                </button>
+              </div>
+            `).join('') : '<div style="font-size: 12px; color: #888;">No hardware bindings</div>'}
           </div>
         </div>
         <div class="card-actions">
@@ -236,6 +248,32 @@ async function toggleCustomerStatus(customerId, newStatus) {
 }
 
 /**
+ * Bans or unbans a specific hardware device
+ */
+async function toggleDeviceBan(hardwareId, newStatus) {
+  const action = newStatus === 'BANNED' ? 'BLOCK' : 'UNBLOCK';
+  if (!confirm(`Are you sure you want to ${action} device ${hardwareId}?`)) return;
+
+  try {
+    const endpoint = newStatus === 'BANNED' ? 'ban' : 'unban';
+    const resp = await fetch(`${apiBaseUrl}/admin/devices/${hardwareId}/${endpoint}`, {
+      method: 'PUT',
+      headers: authHeaders
+    });
+    const resJson = await resp.json();
+
+    if (resJson.success) {
+      loadCustomers();
+      loadAuditLogs();
+    } else {
+      alert(`Device status update failed: ${resJson.error?.message || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Network Error: ${err.message}`);
+  }
+}
+
+/**
  * Loads P2P Transfer Requests (`GET /v1/transfers/pending`)
  */
 async function loadPendingTransfers() {
@@ -244,7 +282,7 @@ async function loadPendingTransfers() {
   tableBody.innerHTML = '<tr><td colspan="6" class="empty-cell">Fetching pending transfers...</td></tr>';
 
   try {
-    const resp = await fetch(`${apiBaseUrl}/transfers/pending`, {
+    const resp = await fetch(`${apiBaseUrl}/admin/transfers/pending`, {
       method: 'GET',
       headers: authHeaders
     });
@@ -273,7 +311,8 @@ async function loadPendingTransfers() {
         <td><code>${tx.targetHardwareId}</code></td>
         <td>${new Date(tx.requestedAtEpochMs || Date.now()).toLocaleString()}</td>
         <td>
-          <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}')">Approve (Lost Phone)</button>
+          <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}')">Approve</button>
+          <button class="btn danger" onclick="rejectLostPhoneTransfer('${tx.transferId}')">Reject</button>
         </td>
       `;
       tableBody.appendChild(row);
@@ -312,13 +351,40 @@ async function approveLostPhoneTransfer(transferId) {
 }
 
 /**
+ * Rejects a device transfer override (`POST /v1/admin/transfers/:transferId/reject`)
+ */
+async function rejectLostPhoneTransfer(transferId) {
+  if (!confirm(`Are you sure you want to REJECT transfer ${transferId}?`)) {
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${apiBaseUrl}/admin/transfers/${transferId}/reject`, {
+      method: 'POST',
+      headers: authHeaders
+    });
+    const resJson = await resp.json();
+
+    if (resJson.success) {
+      alert('Transfer rejected successfully.');
+      loadPendingTransfers();
+      loadAuditLogs();
+    } else {
+      alert(`Rejection failed: ${resJson.error?.message || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Network Error: ${err.message}`);
+  }
+}
+
+/**
  * Loads & Saves System Configs (`PUT /v1/admin/config/system`)
  */
 async function loadSystemConfigs() {
   try {
-    const resp = await fetch(`${apiBaseUrl}/dev/store`, { method: 'GET' });
+    const resp = await fetch(`${apiBaseUrl}/config/system`, { method: 'GET' });
     const resJson = await resp.json();
-    const config = resJson.documents?.['system_configs/global'] || {};
+    const config = resJson.data || {};
 
     document.getElementById('chkAllowPayments').checked = config.allowPayments !== false;
     document.getElementById('chkAllowTransfers').checked = config.allowP2PTransfers !== false;
@@ -400,3 +466,79 @@ async function loadAuditLogs() {
     tableBody.innerHTML = `<tr><td colspan="5" class="empty-cell">Network error: ${err.message}</td></tr>`;
   }
 }
+
+/**
+ * Loads Subscription Plans (`GET /v1/plans`)
+ */
+async function loadPlans() {
+  try {
+    const url = apiBaseUrl.endsWith('/api/v1') ? apiBaseUrl.replace('/api/v1', '/api/v1/plans') : `${apiBaseUrl}/plans`;
+    const resp = await fetch(url, {
+      method: 'GET'
+    });
+    const resJson = await resp.json();
+    
+    if (resJson.success && resJson.data) {
+      const monthlyPlan = resJson.data.find(p => p.planId === 'PRO_MONTHLY');
+      const yearlyPlan = resJson.data.find(p => p.planId === 'PRO_YEARLY');
+      
+      if (monthlyPlan) {
+        document.getElementById('planPriceMonthly').value = monthlyPlan.amountPaise / 100;
+      }
+      if (yearlyPlan) {
+        document.getElementById('planPriceYearly').value = yearlyPlan.amountPaise / 100;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load plans', err);
+  }
+}
+
+/**
+ * Updates Subscription Plans (`POST /v1/admin/plans`)
+ */
+async function savePlans(e) {
+  e.preventDefault();
+  
+  const monthlyPrice = parseInt(document.getElementById('planPriceMonthly').value, 10);
+  const yearlyPrice = parseInt(document.getElementById('planPriceYearly').value, 10);
+  
+  if (isNaN(monthlyPrice) || isNaN(yearlyPrice)) {
+    alert('Please enter valid numeric prices.');
+    return;
+  }
+  
+  const payload = {
+    plans: [
+      {
+        planId: 'PRO_MONTHLY',
+        amountPaise: monthlyPrice * 100
+      },
+      {
+        planId: 'PRO_YEARLY',
+        amountPaise: yearlyPrice * 100
+      }
+    ]
+  };
+
+  try {
+    const resp = await fetch(`${apiBaseUrl}/admin/plans`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify(payload)
+    });
+    const resJson = await resp.json();
+    if (resJson.success) {
+      alert('Plan prices successfully updated!');
+    } else {
+      alert(`Update Error: ${resJson.error?.message || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Network Error: ${err.message}`);
+  }
+}
+
+// Event Listeners for Plans
+document.getElementById('btnRefreshPlans')?.addEventListener('click', loadPlans);
+document.getElementById('plansForm')?.addEventListener('submit', savePlans);
+

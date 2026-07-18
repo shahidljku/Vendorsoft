@@ -225,6 +225,21 @@ Manages device migrations securely without paid SMS verification. Enforces stric
 
 ---
 
+### 3.9 `hardware_trials` Collection (Anti-Abuse Trial Tracking — Phase 6)
+*Document ID Example*: `AD32F79F7B1C5933` (exact `hardwareId`)
+
+Tracks 30-day free trial usage per physical device. Created automatically during `POST /customers/register` when no existing trial is found for the requesting `hardwareId`. Prevents trial abuse through app reinstalls, data clearing, or multiple account creation on the same device.
+
+| Field Name | Data Type | Required | Default / Constraints | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `hardwareId` | `string` | Yes | Exact match to Document ID | SHA-256 hardware fingerprint from `LicenseService().getDeviceId()`. |
+| `customerId` | `string` | Yes | Foreign Key -> `customers` | The customer who first claimed the trial on this device. |
+| `trialStartedAtEpochMs` | `number` | Yes | `Date.now()` at registration | Unix epoch millisecond timestamp when the 30-day trial began. |
+| `trialExpiresAtEpochMs` | `number` | Yes | `trialStartedAtEpochMs + 30*86400*1000` | Computed trial expiration. After this, the device must purchase a plan. |
+| `trialUsed` | `boolean` | Yes | `true` | Set immediately on creation. Once `true`, this device can never start another free trial. |
+
+---
+
 ## 4. Required Composite Indexes
 
 | Collection | Indexed Fields & Order | Query Purpose / Use Case |

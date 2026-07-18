@@ -4,6 +4,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'license_service.dart';
 import 'dart:io';
 
+class TransferRequiredException implements Exception {
+  final String message;
+  TransferRequiredException(this.message);
+  @override
+  String toString() => message;
+}
+
 class RegistrationService {
   static final RegistrationService _instance = RegistrationService._internal();
   factory RegistrationService() => _instance;
@@ -68,9 +75,21 @@ class RegistrationService {
       } else {
         try {
           final resJson = jsonDecode(response.body);
-          throw Exception(resJson['error']?['message'] ?? 'Error ${response.statusCode}');
-        } catch (_) {
-          throw Exception('Server returned ${response.statusCode}');
+          final code = resJson['error']?['code'];
+          final message = resJson['error']?['message'] ?? 'Error ${response.statusCode}';
+          
+          if (code == 'DEVICE_BANNED') {
+            LicenseService().triggerDeviceBan();
+          } else if (code == 'TRANSFER_REQUIRED') {
+            throw TransferRequiredException(message);
+          }
+          
+          throw Exception(message);
+        } catch (e) {
+          if (e is FormatException) {
+            throw Exception('Server returned ${response.statusCode}');
+          }
+          rethrow;
         }
       }
     } catch (e) {

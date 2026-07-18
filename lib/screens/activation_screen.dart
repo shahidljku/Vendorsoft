@@ -304,6 +304,10 @@ class _ActivationScreenState extends State<ActivationScreen> {
                     ),
                   );
                 }),
+              /* 
+              // TODO(Agent): The manual prepaid license key activation section has been temporarily 
+              // commented out. The user plans to replace this flow with "Google Sign-In" 
+              // in the future. Do not add Google Sign-In yet until the user explicitly requests it.
               const SizedBox(height: 28),
               const Center(
                 child: Text(
@@ -312,6 +316,8 @@ class _ActivationScreenState extends State<ActivationScreen> {
                 ),
               ),
               const SizedBox(height: 12),
+              */
+              const SizedBox(height: 28),
               Card(
                 elevation: 0,
                 color: const Color(0xFF161B22),
@@ -319,6 +325,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                   padding: const EdgeInsets.all(24.0),
                   child: Column(
                     children: [
+                      /*
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
@@ -331,7 +338,6 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           color: Color(0xFF00E676),
                         ),
                       ),
-
                       const SizedBox(height: 24),
                       const Text(
                         'Secure Activation',
@@ -433,6 +439,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                         ),
                       ),
                       const SizedBox(height: 16),
+                      */
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton(

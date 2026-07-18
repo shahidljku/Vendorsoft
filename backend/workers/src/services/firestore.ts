@@ -155,6 +155,27 @@ export async function getDocument(env: Env, collectionPath: string, documentId: 
 }
 
 /**
+ * Deletes a document by ID.
+ */
+export async function deleteDocument(env: Env, collectionPath: string, documentId: string): Promise<boolean> {
+  const token = await getFirestoreAccessToken(env);
+  const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${collectionPath}/${documentId}`;
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    console.error(`Failed to delete ${collectionPath}/${documentId}:`, await response.text());
+    return false;
+  }
+  return true;
+}
+
+/**
  * Queries documents in a collection matching specified filters via Firestore REST `:runQuery` (or localStore during local dev).
  */
 export async function queryCollection(

@@ -99,3 +99,42 @@ Displays a live feed of all system anomalies, transfer approvals, and security a
 
 - **Filter Toggles**: Filter strictly by `CLOCK_DISCREPANCY_DETECTED`, `WEBHOOK_SIGNATURE_INVALID`, `TRANSFER_APPROVED_ADMIN`, or `INSTALLATION_REVOKED`.
 - **Audit Transparency**: Ensures complete accountability across all support staff by tracking exact Admin User IDs alongside every manual transfer approval or validity extension.
+
+---
+
+### 2.7 Plan Pricing Manager (`Phase 6`)
+Allows administrators to view and manage subscription plan pricing, features, and visibility directly from the Admin Portal.
+
+#### Capabilities
+- **View Active Plans**: Displays all plans from the `plans` Firestore collection with their `planId`, `name`, `amountPaise`, `durationDays`, `features`, `description`, and `isActive` status.
+- **Edit Plan Pricing**: Update `amountPaise` (displayed as ₹ in the Flutter app) for `PRO_MONTHLY` and `PRO_YEARLY` plans. Changes are reflected in real-time on the Flutter activation screen since plans are fetched dynamically via `GET /api/v1/plans`.
+- **Toggle Plan Visibility**: Set `isActive = false` to hide a plan from the checkout UI without deleting it.
+- **Edit Features & Description**: Update the feature list and description text shown on plan cards.
+
+#### Important Notes
+- The `FREE_TRIAL_30` plan is system-managed and cannot be edited or deactivated via the portal.
+- Plan pricing changes do NOT affect existing active subscriptions — only new purchases.
+
+---
+
+## 3. Hosting & Remote Access
+
+### 3.1 Current Deployment
+The Admin Portal is currently a static HTML/JS/CSS application located at `backend/admin-portal/`. It communicates with the Cloudflare Workers API at `https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1`.
+
+### 3.2 Remote Access (Planned)
+To enable remote access from any device (phone or laptop) without requiring a local file server:
+
+**Option A — Cloudflare Pages (Recommended)**:
+Deploy the `backend/admin-portal/` directory as a Cloudflare Pages site. This provides:
+- HTTPS by default
+- Global CDN distribution
+- Access from any device via URL
+- Can be restricted via Cloudflare Access (SSO/2FA)
+
+**Option B — GitHub Pages**:
+Push `backend/admin-portal/` to a dedicated branch and enable GitHub Pages for static hosting.
+
+### 3.3 Authentication
+All Admin Portal API calls require the `x-admin-secret` header. The secret is prompted on page load and stored in `sessionStorage` (cleared when the browser tab closes). For production, this should be supplemented with Cloudflare Zero Trust Access policies.
+

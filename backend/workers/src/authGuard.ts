@@ -1,4 +1,5 @@
 import { Env, CompositeIdentity, ApiResponse } from './types';
+import { getDocument } from './services/firestore';
 
 /**
  * AuthGuard: Evaluates the mandatory composite identity headers and verifies the short-lived Firebase ID token.
@@ -42,6 +43,24 @@ export async function authenticateRequest(
         `Platform '${platform}' is not supported. Must be 'android' or 'windows'.`
       )
     };
+  }
+
+  // 1.5. Hardware Ban Check (Firestore)
+  if (hardwareId) {
+    try {
+      const instDoc = await getDocument(env, 'installations', hardwareId);
+      if (instDoc && instDoc.status === 'BANNED') {
+        return {
+          errorResponse: createErrorResponse(
+            403,
+            'DEVICE_BANNED',
+            'Your device is permanently blocked due to unethical activity or Terms of Service violations.'
+          )
+        };
+      }
+    } catch (err) {
+      console.warn('Failed to check device ban status:', err);
+    }
   }
 
   // 2. Extract and verify Firebase ID Token (`jwt`)

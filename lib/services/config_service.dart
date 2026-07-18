@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 
 class ConfigService {
@@ -11,6 +12,24 @@ class ConfigService {
   Map<String, dynamic>? _systemConfig;
   Map<String, dynamic>? get systemConfig => _systemConfig;
 
+  final StreamController<void> _configUpdatedController = StreamController<void>.broadcast();
+  Stream<void> get onConfigUpdated => _configUpdatedController.stream;
+
+  Timer? _pollingTimer;
+
+  void startBackgroundPolling() {
+    _pollingTimer?.cancel();
+    fetchSystemConfig(); // Fire immediately on boot
+    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      fetchSystemConfig();
+    });
+  }
+
+  void stopBackgroundPolling() {
+    _pollingTimer?.cancel();
+    _pollingTimer = null;
+  }
+
   Future<void> fetchSystemConfig() async {
     try {
       final url = Uri.parse('$baseUrl/config/system');
@@ -19,7 +38,11 @@ class ConfigService {
       if (response.statusCode == 200) {
         final resJson = jsonDecode(response.body);
         if (resJson['success'] == true) {
-          _systemConfig = resJson['data'];
+          final newConfig = resJson['data'];
+          if (jsonEncode(_systemConfig) != jsonEncode(newConfig)) {
+            _systemConfig = newConfig;
+            _configUpdatedController.add(null);
+          }
         }
       }
     } catch (e) {

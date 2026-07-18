@@ -64,20 +64,19 @@ export async function handleCustomerRegistration(
   }
 
   // 3. Parse and validate request body payload
-  let body: {
-    businessName?: string;
-    ownerName?: string;
-    mobileNumber?: string;
-    city?: string;
-    deviceModel?: string;
-  };
+  let body: any;
   try {
     body = await request.json();
   } catch (err) {
     return createErrorResponse(400, 'INVALID_JSON', 'Request body must be a valid JSON object.');
   }
 
-  if (!body.businessName || !body.ownerName || !body.mobileNumber) {
+  // Handle both `phoneNumber` (from older Flutter app) and `mobileNumber`
+  const inputMobileNumber = (body.mobileNumber || body.phoneNumber || '').trim();
+  const businessName = (body.businessName || '').trim();
+  const ownerName = (body.ownerName || '').trim();
+
+  if (!businessName || !ownerName || !inputMobileNumber) {
     return createErrorResponse(
       400,
       'MISSING_REQUIRED_FIELDS',
@@ -85,11 +84,10 @@ export async function handleCustomerRegistration(
     );
   }
 
-  // 4. Strict One-Device Limit: Check by Mobile Number FIRST
   const now = Date.now();
-  let expiresAtEpochMs = now + (30 * 86400000); // 30 calendar days
-  const inputMobileNumber = body.mobileNumber.trim();
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+  // 4. Strict One-Device Limit: Check by Mobile Number FIRST
   try {
     const existingCustomers = await queryCollection(env, 'customers', [
       { field: 'mobileNumber', op: 'EQUAL', value: inputMobileNumber }
@@ -102,69 +100,87 @@ export async function handleCustomerRegistration(
         return createErrorResponse(403, 'CUSTOMER_DEACTIVATED', 'This account has been deactivated by the administrator.');
       }
 
-      // Check their active subscription
+      // Fetch their subscriptions
       const subs = await queryCollection(env, 'subscriptions', [
-        { field: 'customerId', op: 'EQUAL', value: oldCust.customerId },
-        { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
+        { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
       ]);
 
       if (subs && subs.length > 0) {
-        const activeSub = subs[0];
+        subs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
+        const latestSub = subs[0];
         
-        // If they are on the SAME hardware device, just recover their account
-        if (activeSub.activeInstallationId === identity.hardwareId || activeSub.activeInstallationId === identity.installationId) {
+        if (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId) {
           const cachedData = {
             customerId: oldCust.customerId,
-            installationId: activeSub.activeInstallationId,
-            subscriptionId: activeSub.subscriptionId,
-            planId: activeSub.planId,
-            activeInstallationId: activeSub.activeInstallationId,
-            status: activeSub.status,
-            expiresAtEpochMs: activeSub.expiresAtEpochMs,
-            signedLeaseToken: activeSub.signedLeaseToken
+            installationId: latestSub.activeInstallationId,
+            subscriptionId: latestSub.subscriptionId,
+            planId: latestSub.planId,
+            activeInstallationId: latestSub.activeInstallationId,
+            status: latestSub.status,
+            expiresAtEpochMs: latestSub.expiresAtEpochMs,
+            signedLeaseToken: latestSub.signedLeaseToken
           };
           return new Response(JSON.stringify({ success: true, data: cachedData, message: 'Account recovered successfully.' }), {
             status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
         } else {
-          // DIFFERENT DEVICE: STRICT BLOCK!
-          return createErrorResponse(403, 'DEVICE_LIMIT_REACHED', 'This phone number is already active on another device. Please use the "Transfer Account" option.');
+          // DIFFERENT DEVICE: TRANSFER REQUIRED!
+          return createErrorResponse(403, 'TRANSFER_REQUIRED', `This phone number is registered to another device. Please request a transfer.`);
         }
       }
+      return createErrorResponse(400, 'ACCOUNT_ERROR', 'Account exists but has no subscriptions. Please contact support.');
     }
-  } catch (err) {
-    console.warn('Strict device limit check error:', err);
+  } catch (err: any) {
+    console.error('Database error during mobileNumber lookup:', err);
+    return createErrorResponse(500, 'DB_ERROR', 'Failed to verify account uniqueness. Please try again.');
   }
 
-  // 4.5. Prevent Free Trial Abuse (New number on old phone)
+  // 4.5. Hardware-Locked Trial Check
+  let trialStartsAt = now;
+  let trialExpiresAt = now + THIRTY_DAYS_MS;
+  let isHardwareTrialExpired = false;
+
   try {
-    const existingInstalls = await queryCollection(env, 'installations', [
+    // Check if this physical hardware OR this specific installation UUID has already claimed a trial
+    const hardwareTrials = await queryCollection(env, 'hardware_trials', [
       { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
     ]);
-    if (existingInstalls && existingInstalls.length > 0) {
-      // Grant exactly 0 days to force purchase if they try to abuse the free trial by changing sim cards.
-      expiresAtEpochMs = now;
+    
+    let hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.installationId);
+    
+    if (!hardwareTrialDoc && hardwareTrials && hardwareTrials.length > 0) {
+      hardwareTrialDoc = hardwareTrials[0];
+    }
+
+    if (hardwareTrialDoc) {
+      // If they already claimed a trial on this device, we DO NOT give them a fresh 30 days
+      // even if they entered a brand new phone number.
+      trialStartsAt = hardwareTrialDoc.startedAtEpochMs || now;
+      trialExpiresAt = hardwareTrialDoc.expiresAtEpochMs || (now + THIRTY_DAYS_MS);
+      if (now > trialExpiresAt) {
+        isHardwareTrialExpired = true;
+      }
     }
   } catch(err) {
-     console.warn('Hardware ID check error:', err);
+     console.error('Hardware Trial check error:', err);
+     return createErrorResponse(500, 'DB_ERROR', 'Failed to verify hardware trial status.');
   }
 
-  // 5. Generate immutable entity keys (`cus_xxxxxxxxx`, `inst_xxxxxxxxx`, `sub_xxxxxxxxx`)
+  // 5. Generate immutable entity keys (`cus_xxxxxxxxx`, `inst_xxxxxxxxx`)
   const customerId = `cus_${generateShortId()}`;
   const installationId = identity.installationId || identity.installationUuid || `inst_${generateShortId()}`;
-  const subscriptionId = `sub_${generateShortId()}`;
 
   // 6. Generate cryptographic signedLeaseToken using Web Crypto HMAC-SHA256
   const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
   const leasePayload = {
-    subscriptionId,
+    subscriptionId: `TRIAL_${installationId}`,
     customerId,
     activeInstallationId: installationId,
-    planId: 'DEMO_FREE',
-    planName: '30-Day Free Demo License',
-    startsAtEpochMs: now,
-    expiresAtEpochMs,
-    maxCustomers: 50  ,
+    planId: 'FREE_TRIAL_30',
+    planName: '30-Day Pro Trial',
+    startsAtEpochMs: trialStartsAt,
+    expiresAtEpochMs: trialExpiresAt,
+    maxCustomers: 10000,
     allowWhatsAppAutoSend: true,
     allowThermalPrinting: true,
     issuedAt: now
@@ -175,11 +191,11 @@ export async function handleCustomerRegistration(
   const responsePayloadData = {
     customerId,
     installationId,
-    subscriptionId,
-    planId: 'DEMO_FREE',
+    subscriptionId: `TRIAL_${installationId}`,
+    planId: 'FREE_TRIAL_30',
     activeInstallationId: installationId,
-    status: 'ACTIVE',
-    expiresAtEpochMs,
+    status: isHardwareTrialExpired ? 'EXPIRED' : 'ACTIVE',
+    expiresAtEpochMs: trialExpiresAt,
     signedLeaseToken
   };
 
@@ -217,19 +233,12 @@ export async function handleCustomerRegistration(
       }
     },
     {
-      collectionPath: 'subscriptions',
-      documentId: subscriptionId,
+      collectionPath: 'hardware_trials',
+      documentId: installationId,
       data: {
-        subscriptionId,
-        customerId,
-        activeInstallationId: installationId,
-        planId: 'DEMO_FREE',
-        status: 'ACTIVE',
-        startsAtEpochMs: now,
-        expiresAtEpochMs,
-        signedLeaseToken,
-        createdAtEpochMs: now,
-        updatedAtEpochMs: now
+        startedAtEpochMs: trialStartsAt,
+        expiresAtEpochMs: trialExpiresAt,
+        customerId: customerId
       }
     }
   ];

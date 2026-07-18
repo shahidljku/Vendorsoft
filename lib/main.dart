@@ -6,6 +6,10 @@ import 'screens/activation_screen.dart';
 import 'screens/license_expired_screen.dart';
 import 'screens/time_discrepancy_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/account_deactivated_screen.dart';
+import 'screens/device_banned_screen.dart';
+import 'screens/maintenance_screen.dart';
+import 'screens/offline_locked_screen.dart';
 import 'services/settings_service.dart';
 import 'services/security_service.dart';
 import 'services/license_service.dart';
@@ -16,10 +20,13 @@ import 'services/firebase_installation_service.dart';
 import 'services/config_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const ImageSenderApp());
 }
 
@@ -51,22 +58,71 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   bool _isExpired = false;
   bool _isClockTrustworthy = true;
   bool _isTrialActive = false;
+  bool _isDeactivated = false;
+  bool _isBanned = false;
+  bool _isMaintenanceMode = false;
+  bool _isOfflineLocked = false;
+  String _maintenanceMessage = '';
 
   @override
   void initState() {
     super.initState();
     _securityService = SecurityService(_settingsService);
     WidgetsBinding.instance.addObserver(this);
-    _licenseService.onLicenseRevoked.listen((_) {
+    _licenseService.onLicenseRevoked.listen((reason) {
       if (mounted) {
-        _loadSettings();
+        if (reason == 'DEACTIVATED') {
+          setState(() {
+            _isDeactivated = true;
+          });
+        } else if (reason == 'RESTORED') {
+          if (_isDeactivated) {
+            setState(() {
+              _isDeactivated = false;
+            });
+          }
+          if (_isBanned) {
+            setState(() {
+              _isBanned = false;
+            });
+          }
+          if (_isOfflineLocked) {
+            setState(() {
+              _isOfflineLocked = false;
+            });
+          }
+          _loadSettings();
+        } else if (reason == 'BANNED') {
+          setState(() {
+            _isBanned = true;
+          });
+        } else if (reason == 'OFFLINE_LOCKED') {
+          setState(() {
+            _isOfflineLocked = true;
+          });
+        } else {
+          _loadSettings();
+        }
       }
     });
+
+    ConfigService().onConfigUpdated.listen((_) {
+      if (mounted) {
+        setState(() {
+          _isMaintenanceMode = ConfigService().isMaintenanceMode;
+          _maintenanceMessage = ConfigService().maintenanceMessage;
+        });
+      }
+    });
+    ConfigService().startBackgroundPolling();
+    LicenseService().startBackgroundPolling();
     _loadSettings();
   }
 
   @override
   void dispose() {
+    ConfigService().stopBackgroundPolling();
+    LicenseService().stopBackgroundPolling();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -83,6 +139,9 @@ class _ImageSenderAppState extends State<ImageSenderApp>
           });
         }
       });
+      if (!_isOfflineLocked && _isLicensed) {
+        _licenseService.pollOnlineSubscriptionStatus();
+      }
     }
   }
 
@@ -141,6 +200,8 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     setState(() {
       _themeMode = _parseThemeMode(themeStr);
       _isLocked = _pinEnabled && _hasPinSet;
+      _isMaintenanceMode = ConfigService().isMaintenanceMode;
+      _maintenanceMessage = ConfigService().maintenanceMessage;
       _isLoading = false;
     });
   }
@@ -232,6 +293,24 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     return MaterialApp(
       title: 'VendorSoft',
       debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        if (_isBanned) {
+          return const DeviceBannedScreen();
+        }
+        return Stack(
+          children: [
+            if (child != null) child,
+            if (_isDeactivated)
+              const Positioned.fill(
+                child: AccountDeactivatedScreen(),
+              )
+            else if (_isMaintenanceMode)
+              Positioned.fill(
+                child: MaintenanceScreen(message: _maintenanceMessage),
+              ),
+          ],
+        );
+      },
       themeMode: _themeMode,
       theme: ThemeData(
         brightness: Brightness.light,
@@ -301,7 +380,16 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                   },
                 )
               : (_isLicensed && _isExpired)
-                  ? _buildLicenseExpiredScreen()
+                      ? _buildLicenseExpiredScreen()
+                  : _isOfflineLocked
+                      ? OfflineLockedScreen(
+                          isRetrying: _isLoading,
+                          onRetry: () async {
+                            setState(() { _isLoading = true; });
+                            await _licenseService.pollOnlineSubscriptionStatus();
+                            setState(() { _isLoading = false; });
+                          },
+                        )
                   : _isLocked
                       ? PinLockScreen(
                           securityService: _securityService,

@@ -1,5 +1,5 @@
 import { Env, CompositeIdentity, ApiResponse } from '../types';
-import { getDocument, queryCollection } from '../services/firestore';
+import { getDocument, setDocument, queryCollection } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateSignedLeaseToken } from '../cryptoEngine';
 
@@ -55,16 +55,58 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
     ]);
 
-    if (!activeSubs || activeSubs.length === 0) {
-      return createErrorResponse(
-        404,
-        'NO_ACTIVE_SUBSCRIPTION',
-        `No active subscription found for customer '${customerId}'.`
-      );
-    }
-
-    const sub = activeSubs[0];
+    let sub: any = null;
     const now = Date.now();
+
+    if (!activeSubs || activeSubs.length === 0) {
+      // Hardware-Locked Trial Logic
+      if (!identity.installationId) {
+        return createErrorResponse(
+          404,
+          'NO_ACTIVE_SUBSCRIPTION',
+          `No active subscription found for customer '${customerId}', and hardware ID is missing for trial fallback.`
+        );
+      }
+
+      // Check for hardware trial
+      const hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.installationId);
+      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+      
+      let trialStartsAt = now;
+      let trialExpiresAt = now + THIRTY_DAYS_MS;
+
+      if (!hardwareTrialDoc) {
+        // Start new trial
+        await setDocument(env, 'hardware_trials', identity.installationId, {
+          startedAtEpochMs: trialStartsAt,
+          expiresAtEpochMs: trialExpiresAt,
+          customerId: customerId
+        });
+      } else {
+        trialStartsAt = hardwareTrialDoc.startedAtEpochMs;
+        trialExpiresAt = hardwareTrialDoc.expiresAtEpochMs;
+      }
+
+      if (now > trialExpiresAt) {
+        return createErrorResponse(
+          403,
+          'TRIAL_EXPIRED',
+          'Your 30-Day Hardware Free Trial has expired. Please activate with a Pro plan.'
+        );
+      }
+
+      // Construct a mock subscription for the trial
+      sub = {
+        subscriptionId: `TRIAL_${identity.installationId}`,
+        customerId: customerId,
+        activeInstallationId: identity.installationId,
+        planId: 'FREE_TRIAL_30',
+        startsAtEpochMs: trialStartsAt,
+        expiresAtEpochMs: trialExpiresAt
+      };
+    } else {
+      sub = activeSubs[0];
+    }
 
     // 4. Enforce One Active Device Rule (`API_SPECIFICATION.md Section 2.3`)
     if (sub.activeInstallationId && identity.installationId && sub.activeInstallationId !== identity.installationId) {
@@ -92,11 +134,11 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       customerId: sub.customerId,
       activeInstallationId: sub.activeInstallationId || identity.installationId,
       hasActiveSubscription: true,
-      planId: sub.planId || 'DEMO_FREE',
-      planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : '30-Day Free Demo License',
+      planId: sub.planId,
+      planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : sub.planId === 'FREE_TRIAL_30' ? '30-Day Pro Trial' : 'Pro Monthly License',
       startsAtEpochMs: sub.startsAtEpochMs || now,
       expiresAtEpochMs: sub.expiresAtEpochMs,
-      maxCustomers: sub.planId === 'PRO_YEARLY' ? 10000 : 50,
+      maxCustomers: 10000, // Full access during trial
       allowWhatsAppAutoSend: true,
       allowThermalPrinting: true,
       issuedAt: now

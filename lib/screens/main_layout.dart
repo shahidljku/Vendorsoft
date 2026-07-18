@@ -58,12 +58,10 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
     _loadFileName();
     _loadPrinterStatus();
     _pollTransfers();
-    LicenseService().startBackgroundPolling();
   }
 
   @override
   void dispose() {
-    LicenseService().stopBackgroundPolling();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

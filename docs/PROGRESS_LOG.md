@@ -475,6 +475,48 @@ Run against local Miniflare (`wrangler dev --port 8788`) using automated script 
 - **Phase 5** is completely implemented, verified, and proven against actual live runtime simulation.
 - All 5 Phases of the frozen `v1.0` Phased Backend Architecture Roadmap are now 100% completed, verified, and operational with zero broken features or regressions.
 
+---
 
+## Session Log: Anti-Abuse Enforcement, Device Transfer System & Admin Plan Pricing (July 18, 2026)
 
+### 1. Files Changed
+
+#### Backend (Cloudflare Workers)
+- **`backend/workers/src/routes/customers.ts`**: Major refactor — added strict phone number uniqueness check (`PHONE_NUMBER_ALREADY_REGISTERED` error with `TRANSFER_REQUIRED` hint), hardware-based trial limit enforcement (`DEVICE_TRIAL_USED` error), and auto-provisioning of `hardware_trials/{hardwareId}` documents for 30-day free trial tracking per physical device.
+- **`backend/workers/src/routes/transfers.ts`** (already tracked): Peer-to-peer transfer API. `POST /transfers/request` creates `PENDING` records in `device_transfers`. `POST /transfers/approve` and `POST /transfers/reject` handle old-device approval/rejection. `GET /transfers/pending` returns transfers waiting for the current device's approval.
+- **`backend/workers/src/routes/plans.ts`**: Added `GET /plans` endpoint returning active plan catalog with `amountPaise`, `features`, and `description` fields for the Flutter activation screen.
+- **`backend/workers/src/routes/admin.ts`**: Added `handleAdminApproveTransfer` and `handleAdminRejectTransfer` for lost/broken phone manual recovery. Added `handleAdminListPendingTransfers` for the Admin Portal transfers tab.
+- **`backend/workers/src/routes/subscriptions.ts`**: Enhanced subscription status check to auto-issue `FREE_TRIAL_30` lease tokens when a device has an active hardware trial but no paid subscription.
+- **`backend/workers/src/router.ts`**: Registered all new transfer endpoints (`/transfers/request`, `/transfers/approve`, `/transfers/reject`, `/transfers/pending`), admin transfer endpoints (`/admin/transfers/pending`, `/admin/transfers/:id/approve`, `/admin/transfers/:id/reject`), and plan catalog endpoint (`/plans`).
+- **`backend/workers/src/authGuard.ts`**: Extended auth guard to support admin authentication via `x-admin-secret` header for Admin Portal API calls.
+- **`backend/workers/src/services/firestore.ts`**: Added `queryDocuments()` helper for Firestore structured queries (used by transfer and admin endpoints).
+
+#### Flutter Client
+- **`lib/services/registration_service.dart`**: Added `TransferRequiredException` custom exception class. Registration now catches `TRANSFER_REQUIRED` error code from backend and throws typed exception instead of generic `Exception`.
+- **`lib/services/transfer_service.dart`** (already tracked): Complete transfer client — `requestTransfer()`, `pollPendingTransfers()`, `approveTransfer()`, `rejectTransfer()`.
+- **`lib/services/license_service.dart`**: Enhanced with `triggerDeviceBan()`, `removeLicense()`, and `pollOnlineSubscriptionStatus()` methods for runtime enforcement.
+- **`lib/services/config_service.dart`**: Added remote config polling (`GET /config/system`) for maintenance mode, feature flags, and minimum version checks.
+- **`lib/services/trial_service.dart`**: Added trial expiration detection helpers.
+- **`lib/screens/onboarding_screen.dart`**: Added `TransferRequiredException` handler directly in the registration flow. When a duplicate phone number is detected, shows a "Transfer Required" dialog with a one-tap "Request Transfer" button — solving the catch-22 where users needed to be logged in to access the transfer feature.
+- **`lib/screens/main_layout.dart`**: Added automatic polling for pending transfer requests on app startup and resume. Shows approval modal on old device when a transfer is pending.
+- **`lib/screens/settings_tab.dart`**: Removed redundant "Request Device Transfer" button (now handled at registration). Cleaned up unused `_showDeviceTransferDialog()` method.
+- **`lib/screens/activation_screen.dart`**: Updated plan display to use dynamic pricing from backend `/plans` endpoint.
+- **`lib/main.dart`**: Added centralized app state management with device ban screen, maintenance screen, account deactivation screen, and offline lock screen routing.
+- **`lib/screens/device_banned_screen.dart`** (NEW): Full-screen blocked device UI.
+- **`lib/screens/maintenance_screen.dart`** (NEW): Server maintenance mode UI.
+- **`lib/screens/account_deactivated_screen.dart`** (NEW): Account deactivation UI.
+- **`lib/screens/offline_locked_screen.dart`** (NEW): Offline lock screen when license requires online verification.
+
+#### Admin Portal
+- **`backend/admin-portal/app.js`**: Added `loadPendingTransfers()` with approve/reject actions, `loadPlans()` for plan pricing management, `loadAuditLogs()` for security event viewer, `loadSystemConfigs()` / `saveSystemConfigs()` for remote feature toggles.
+- **`backend/admin-portal/index.html`**: Added Transfers tab, Plans tab, Settings (System Config) tab, and Audit Logs tab to the admin navigation.
+
+### 2. Security Improvements
+- **Dual-Layer Anti-Abuse**: Both `hardwareId` AND `mobileNumber` are now enforced as unique constraints. A single phone number cannot create multiple accounts, and a single device cannot start multiple free trials.
+- **Samsung Dual Apps Protection**: Since Samsung Dual Apps generate different `Android ID` values, the `hardwareId` (SHA-256 of `Android ID`) effectively blocks trial abuse through app cloning.
+- **Transfer-Based Recovery**: Instead of allowing duplicate registrations, the system now routes users through a secure peer-to-peer transfer flow or admin-assisted manual recovery.
+
+### 3. Deployment
+- Cloudflare Worker redeployed to production (`https://vendsoft-api-worker.vendorproapk.workers.dev`).
+- `flutter analyze`: No issues found.
 

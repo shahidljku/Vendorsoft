@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/registration_service.dart';
+import '../services/transfer_service.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onCompleted;
@@ -64,6 +65,53 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         );
         return;
       }
+    } on TransferRequiredException catch (e) {
+      setState(() => _isRegistering = false);
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF161B22),
+            title: const Text('Transfer Required', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: Text(e.message, style: const TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  setState(() => _isRegistering = true);
+                  try {
+                    final response = await TransferService().requestTransfer(
+                      mobileNumber: mobileNumber,
+                    );
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(response['message'] ?? 'Transfer requested! Approve it on your old device.'),
+                        backgroundColor: const Color(0xFF00E676),
+                        duration: const Duration(seconds: 10),
+                      ));
+                    }
+                  } catch (err) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${err.toString().replaceAll('Exception: ', '')}'), backgroundColor: Colors.redAccent));
+                    }
+                  }
+                  if (mounted) {
+                    setState(() => _isRegistering = false);
+                  }
+                },
+                child: const Text('Request Transfer'),
+              ),
+            ],
+          ),
+        );
+      }
+      return;
     } catch (e) {
       setState(() => _isRegistering = false);
       ScaffoldMessenger.of(context).showSnackBar(

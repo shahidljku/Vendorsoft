@@ -81,6 +81,7 @@ export async function handleAdminUpdateCustomer(request: Request, env: Env, admi
     if (body.ownerName !== undefined) updatedData.ownerName = body.ownerName;
     if (body.mobileNumber !== undefined) updatedData.mobileNumber = body.mobileNumber;
     if (body.city !== undefined) updatedData.city = body.city;
+    if (body.status !== undefined) updatedData.status = body.status;
 
     await setDocument(env, 'customers', customerId, updatedData);
     await logAuditEvent(env, 'ADMIN_UPDATE_CUSTOMER_METADATA', {
@@ -228,6 +229,109 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
 }
 
 /**
+ * Handles POST /api/v1/admin/transfers/:transferId/reject
+ * Rejects a device transfer request manually.
+ */
+export async function handleAdminRejectTransfer(request: Request, env: Env, adminUid: string, transferId: string): Promise<Response> {
+  try {
+    const transferDoc = await getDocument(env, 'device_transfers', transferId);
+    if (!transferDoc) {
+      return createErrorResponse(404, 'TRANSFER_NOT_FOUND', `Transfer request ${transferId} not found.`);
+    }
+
+    if (transferDoc.status !== 'PENDING') {
+      return createErrorResponse(409, 'TRANSFER_NOT_PENDING', `Transfer request is already ${transferDoc.status}.`);
+    }
+
+    const now = Date.now();
+    const updatedTransfer = {
+      ...transferDoc,
+      status: 'REJECTED',
+      rejectedBy: `ADMIN_${adminUid}`,
+      updatedAtEpochMs: now
+    };
+    await setDocument(env, 'device_transfers', transferId, updatedTransfer);
+
+    await logAuditEvent(env, 'ADMIN_REJECTED_TRANSFER', {
+      adminUid,
+      transferId
+    });
+
+    const responseWrapper: ApiResponse = {
+      success: true,
+      data: {
+        transferId,
+        status: 'REJECTED'
+      }
+    };
+
+    return new Response(JSON.stringify(responseWrapper), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error in handleAdminRejectTransfer:', err);
+    return createErrorResponse(500, 'ADMIN_TRANSFER_REJECTION_FAILED', `Failed to reject transfer: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles PUT /api/v1/admin/devices/:hardwareId/ban
+ * Bans a device at the hardware level.
+ */
+export async function handleAdminBanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
+  try {
+    const instDoc = await getDocument(env, 'installations', hardwareId) || {};
+    
+    const updatedInst = {
+      ...instDoc,
+      status: 'BANNED',
+      bannedAtEpochMs: Date.now(),
+      bannedBy: adminUid
+    };
+    
+    await setDocument(env, 'installations', hardwareId, updatedInst);
+    
+    await logAuditEvent(env, 'ADMIN_BANNED_DEVICE', { adminUid, hardwareId });
+
+    return new Response(JSON.stringify({ success: true, message: 'Device banned successfully' }), {
+      status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error in handleAdminBanDevice:', err);
+    return createErrorResponse(500, 'ADMIN_BAN_FAILED', `Failed to ban device: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles PUT /api/v1/admin/devices/:hardwareId/unban
+ * Unbans a hardware device.
+ */
+export async function handleAdminUnbanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
+  try {
+    const instDoc = await getDocument(env, 'installations', hardwareId) || {};
+    
+    const updatedInst = {
+      ...instDoc,
+      status: 'ACTIVE',
+      unbannedAtEpochMs: Date.now(),
+      unbannedBy: adminUid
+    };
+    
+    await setDocument(env, 'installations', hardwareId, updatedInst);
+    
+    await logAuditEvent(env, 'ADMIN_UNBANNED_DEVICE', { adminUid, hardwareId });
+
+    return new Response(JSON.stringify({ success: true, message: 'Device unbanned successfully' }), {
+      status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error in handleAdminUnbanDevice:', err);
+    return createErrorResponse(500, 'ADMIN_UNBAN_FAILED', `Failed to unban device: ${err.message || err}`);
+  }
+}
+
+/**
  * Handles PUT /api/v1/admin/config/system
  * Toggles global system controls (`allowPayments`, `allowP2PTransfers`, `maintenanceMode`).
  */
@@ -291,5 +395,73 @@ export async function handleAdminGetAuditLogs(request: Request, env: Env): Promi
   } catch (err: any) {
     console.error('Error in handleAdminGetAuditLogs:', err);
     return createErrorResponse(500, 'ADMIN_LOGS_FAILED', `Failed to fetch audit logs: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles GET /api/v1/admin/transfers/pending
+ * Retrieves all pending transfers globally for support overriding.
+ */
+export async function handleAdminGetPendingTransfers(request: Request, env: Env): Promise<Response> {
+  try {
+    const pendingList = await queryCollection(env, 'device_transfers', [
+      { field: 'status', op: 'EQUAL', value: 'PENDING' }
+    ]);
+    
+    // Sort by requestedAtEpochMs descending
+    pendingList.sort((a: any, b: any) => (b.requestedAtEpochMs || 0) - (a.requestedAtEpochMs || 0));
+
+    const responseWrapper: ApiResponse = {
+      success: true,
+      data: { transfers: pendingList }
+    };
+
+    return new Response(JSON.stringify(responseWrapper), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error in handleAdminGetPendingTransfers:', err);
+    return createErrorResponse(500, 'ADMIN_POLL_FAILED', `Failed to query pending transfers: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles POST /api/v1/admin/plans
+ * Updates the prices of the plans.
+ */
+export async function handleAdminUpdatePlans(request: Request, env: Env, adminUid: string): Promise<Response> {
+  try {
+    const body = await request.json() as { plans: any[] };
+    if (!body.plans || !Array.isArray(body.plans)) {
+      return createErrorResponse(400, 'INVALID_PAYLOAD', 'Payload must contain a plans array.');
+    }
+
+    for (const plan of body.plans) {
+      if (!plan.planId) continue;
+      
+      const existingPlan = await getDocument(env, 'plans', plan.planId);
+      const updatedPlan = {
+        ...(existingPlan || {}),
+        ...plan,
+        isActive: true,
+        updatedAtEpochMs: Date.now()
+      };
+      
+      await setDocument(env, 'plans', plan.planId, updatedPlan);
+    }
+
+    await logAuditEvent(env, 'ADMIN_UPDATE_PLANS', {
+      adminUid,
+      action: 'Updated subscription plan prices'
+    });
+
+    return new Response(JSON.stringify({ success: true, message: 'Plans updated successfully' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error in handleAdminUpdatePlans:', err);
+    return createErrorResponse(500, 'ADMIN_UPDATE_PLANS_FAILED', `Failed to update plans: ${err.message || err}`);
   }
 }

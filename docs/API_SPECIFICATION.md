@@ -299,3 +299,165 @@ Enables automated transition of legacy RSA `offline_license_key` strings (`v0.9.
   }
 }
 ```
+
+---
+
+### 2.8 Plan Catalog (`Phase 6 — Anti-Abuse & Pricing`)
+`GET /api/v1/plans`
+
+#### Purpose
+Returns the active subscription plan catalog. Called by the Flutter activation screen to display dynamic pricing (monthly/yearly) and feature lists. Plans are managed via the Admin Portal.
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "data": {
+    "plans": [
+      {
+        "planId": "PRO_MONTHLY",
+        "name": "Pro Monthly",
+        "amountPaise": 79900,
+        "durationDays": 30,
+        "description": "Full access renewed monthly",
+        "features": ["Unlimited customers", "WhatsApp auto-send", "Thermal printing", "Priority support"],
+        "isRecommended": false
+      },
+      {
+        "planId": "PRO_YEARLY",
+        "name": "Pro Annual",
+        "amountPaise": 949900,
+        "durationDays": 365,
+        "description": "Best value — save over 2 months",
+        "features": ["Unlimited customers", "WhatsApp auto-send", "Thermal printing", "Priority support", "2 months free"],
+        "isRecommended": true
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 2.9 Device Transfer — Request (`Phase 6`)
+`POST /api/v1/transfers/request`
+
+#### Purpose
+Called by a **new device** when the user's phone number is already registered on another device. Creates a `PENDING` transfer record in `device_transfers` collection. The old device polls for pending transfers and can approve or reject.
+
+#### Request Headers & Payload
+*Headers*: `Authorization: Bearer <ID_TOKEN>`, `x-hardware-id`, `x-installation-uuid`.
+```json
+{
+  "mobileNumber": "+919876543210",
+  "deviceModel": "Samsung SM-G986U1"
+}
+```
+
+#### Success Response (`202 Accepted`)
+```json
+{
+  "success": true,
+  "data": {
+    "transferId": "trn_A1B2C3D4E5",
+    "status": "PENDING",
+    "message": "Transfer request created. Approve on your old device or contact Support."
+  }
+}
+```
+
+---
+
+### 2.10 Device Transfer — Poll Pending (`Phase 6`)
+`GET /api/v1/transfers/pending`
+
+#### Purpose
+Called by the **old device** on app resume/startup to check if any transfer requests are waiting for approval. Returns a list of `PENDING` transfers targeting this device's hardware ID.
+
+#### Success Response (`200 OK`)
+```json
+{
+  "success": true,
+  "data": {
+    "pendingTransfers": [
+      {
+        "transferId": "trn_A1B2C3D4E5",
+        "customerId": "cus_XNLX3ZD9F8",
+        "deviceModel": "Samsung SM-G986U1",
+        "requestedAtEpochMs": 1784371339980
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 2.11 Device Transfer — Approve / Reject (`Phase 6`)
+`POST /api/v1/transfers/approve`
+`POST /api/v1/transfers/reject`
+
+#### Purpose
+Called by the **old device** to approve or reject a pending transfer. On approval, the old device's installation is deactivated and the subscription's `activeInstallationId` is updated to the new device. A fresh `signedLeaseToken` is issued for the new device.
+
+#### Request Payload
+```json
+{
+  "transferId": "trn_A1B2C3D4E5"
+}
+```
+
+#### Success Response (`200 OK` — Approve)
+```json
+{
+  "success": true,
+  "data": {
+    "transferId": "trn_A1B2C3D4E5",
+    "status": "APPROVED",
+    "message": "Transfer approved. Your license has been moved to the new device."
+  }
+}
+```
+
+---
+
+### 2.12 Admin — List Pending Transfers (`Phase 6`)
+`GET /api/v1/admin/transfers/pending`
+
+#### Purpose
+Returns all `PENDING` device transfer requests for the Admin Portal. Used for manual recovery when the old phone is lost or broken.
+
+#### Request Headers
+*Headers*: `x-admin-secret: <ADMIN_SECRET>`.
+
+---
+
+### 2.13 Admin — Approve / Reject Transfer (`Phase 6`)
+`POST /api/v1/admin/transfers/:transferId/approve`
+`POST /api/v1/admin/transfers/:transferId/reject`
+
+#### Purpose
+Allows administrators to forcibly approve or reject a device transfer. Used when the old device is lost/stolen/broken and cannot approve the transfer itself. On approval, a new `signedLeaseToken` is issued for the target device.
+
+#### Request Headers
+*Headers*: `x-admin-secret: <ADMIN_SECRET>`.
+
+#### Success Response (`200 OK` — Approve)
+```json
+{
+  "success": true,
+  "data": {
+    "transferId": "trn_A1B2C3D4E5",
+    "status": "APPROVED",
+    "activeInstallationId": "AD32F79F7B1C5933",
+    "signedLeaseToken": "eyJzdWJzY3JpcHRpb24..."
+  }
+}
+```
+
+#### Error Responses
+| HTTP Status | Error Code | Description |
+| :--- | :--- | :--- |
+| `404` | `TRANSFER_NOT_FOUND` | Transfer request does not exist. |
+| `409` | `TRANSFER_NOT_PENDING` | Transfer has already been approved, rejected, or expired. |
+

@@ -79,6 +79,16 @@ class TrialService {
     }
   }
 
+  /// Permanently kills the trial for this device (used when license is explicitly revoked or banned)
+  Future<void> killTrial() async {
+    _isTrialActive = false;
+    _daysRemaining = 0;
+    // Set the first boot time to exactly 40 days ago to guarantee expiry across all storage mechanisms
+    final int expiredMillis = DateTime.now().toUtc().millisecondsSinceEpoch - (40 * 24 * 60 * 60 * 1000);
+    await _saveFirstBootMillis(expiredMillis);
+    _firstBootMillis = expiredMillis;
+  }
+
   Future<int?> _loadFirstBootMillis() async {
     int? earliestTimestamp;
 

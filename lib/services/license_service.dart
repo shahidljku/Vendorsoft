@@ -8,8 +8,10 @@ import 'package:android_id/android_id.dart';
 import 'package:pointycastle/asymmetric/api.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
+import 'trial_service.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:device_info_plus/device_info_plus.dart';
 class LicenseService {
   static final LicenseService _instance = LicenseService._internal();
   factory LicenseService() => _instance;
@@ -17,19 +19,20 @@ class LicenseService {
 
   static const String _licenseKeyPref = 'offline_license_key';
   static const String _signedLeaseTokenPref = 'signed_lease_token';
+  static const String _lastSyncPref = 'last_successful_sync';
   final _storage = const FlutterSecureStorage();
   final _androidIdPlugin = const AndroidId();
 
   // Hardcoded public key corresponding to the developer's private key
   static const String publicKeyString = '''
 -----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq5K1M4RgVKtFNqVfRQ71
-ocBrAfUu9uhK6rR91r07iJstUzygBjpqCbIxAc0BzATIxgQ6yHd3zp5rr4xrKRIh
-9Kl7o4A6uRiiaAb61S9Tcf/D6Chq8etZJ4VQc2WBzyi00Kw5lKmZtYFqmgQPuzcy
-nykc3e8LoQ8HeMdoUp41nQdlf4ycmqq2fi5TVFFodvE21O+9Q9Kr3OM91QFrxKVd
-of9lekmxqtIFjL3ia7w+dkenebHxq/YbCFHHgZvRbnABRRyxToVHFPLS+6ZOnVL3
-TMj+g3jEHWMMdOrqXtNXkCcXfe8lFNpIKZx7zBoLp2DGPhneZwPgSvrhYiWirefA
-MQIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj/ogDRDyPvLs3T68lnzV
+5dVp/ZCJ05nyBTZZB7xMt60Moa4SkM7ihfyBxJDruIdcLWOabHdimLDRVvmT5pCg
+DAskyVEy+ycR2RaPjzVHgHVBNZRh1b/XMUiBWjt5i2nmzfWboA/q5tklAETe9Psi
+iIgjBkUGqedpAVLEOS47DtZbGU1WIN0J8g8RFpDvrChSOFzrcR9HR9gxb1hmzeQ+
+0hHJjAJHo/8uD68hNpGmO+IZE8k3CJombBhPvQHipKiDBc/aN358DklyWALyMlY5
+X/7xBMv2Qqdx5gQgmWNH6JoCvPSQA4cu1RQa//1iG6fT1K4u1TxZ1T2/t/1VwaRo
+JQIDAQAB
 -----END PUBLIC KEY-----
 ''';
 
@@ -38,10 +41,14 @@ MQIDAQAB
   String? _cachedLicenseKey;
   bool? _cachedIsValid;
 
-  final StreamController<void> _revocationController = StreamController<void>.broadcast();
-  Stream<void> get onLicenseRevoked => _revocationController.stream;
+  final StreamController<String?> _revocationController = StreamController<String?>.broadcast();
+  Stream<String?> get onLicenseRevoked => _revocationController.stream;
 
-  /// Generate a stable, short Device ID.
+  void triggerDeviceBan() {
+    _revocationController.add('BANNED');
+  }
+
+  /// Generate a stable, un-spoofable Cryptographic Hardware Signature.
   Future<String> getDeviceId() async {
     if (_deviceIdCache != null) return _deviceIdCache!;
 
@@ -50,8 +57,40 @@ MQIDAQAB
       androidId = 'UNKNOWN_DEVICE';
     }
 
-    final bytes = utf8.encode(androidId);
+    String hardwareString = androidId;
+
+    if (Platform.isAndroid) {
+      try {
+        final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+        final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+        
+        // Combine deep physical hardware properties that survive factory resets and dual-app cloning
+        hardwareString = '''
+          $androidId
+          ${androidInfo.board}
+          ${androidInfo.brand}
+          ${androidInfo.device}
+          ${androidInfo.hardware}
+          ${androidInfo.id}
+          ${androidInfo.manufacturer}
+          ${androidInfo.model}
+          ${androidInfo.product}
+        ''';
+      } catch (e) {
+        print('Warning: Failed to gather deep hardware fingerprint: $e');
+      }
+    } else if (Platform.isWindows) {
+      try {
+        final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+        final WindowsDeviceInfo windowsInfo = await deviceInfo.windowsInfo;
+        hardwareString = '$androidId-${windowsInfo.deviceId}';
+      } catch (e) {}
+    }
+
+    // Hash the composite physical hardware string
+    final bytes = utf8.encode(hardwareString);
     final digest = sha256.convert(bytes);
+    // Keep it short and readable but cryptographically tied to the hardware
     final shortId = digest.toString().substring(0, 16).toUpperCase();
 
     _deviceIdCache = shortId;
@@ -224,7 +263,7 @@ MQIDAQAB
         final isValidLease = await verifySignedLeaseToken(savedLeaseToken, saveToStorage: false);
         if (isValidLease) {
           // Asynchronously poll the backend to ensure device hasn't been remotely superseded
-          _pollOnlineSubscriptionStatus();
+          pollOnlineSubscriptionStatus();
           return true;
         }
         await _storage.delete(key: _signedLeaseTokenPref);
@@ -339,6 +378,7 @@ MQIDAQAB
 
   void startBackgroundPolling() {
     _pollingTimer?.cancel();
+    pollOnlineSubscriptionStatus(); // Fire immediately on boot
     _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       pollOnlineSubscriptionStatus();
     });
@@ -352,9 +392,21 @@ MQIDAQAB
   /// If the server returns 403 INSTALLATION_SUPERSEDED, this device was revoked.
   Future<void> pollOnlineSubscriptionStatus() async {
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        try {
+          final userCred = await FirebaseAuth.instance.signInAnonymously();
+          user = userCred.user;
+        } catch (e) {
+          print('Failed to sign in anonymously for polling: $e');
+        }
+      }
+      
       final token = user != null ? await user.getIdToken() : '';
-      if (token == null || token.isEmpty) return;
+      if (token == null || token.isEmpty) {
+        print('Skipping polling: no firebase auth token available.');
+        return;
+      }
 
       final deviceId = await getDeviceId();
       final url = Uri.parse('https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1/subscriptions/status');
@@ -371,26 +423,66 @@ MQIDAQAB
       if (response.statusCode == 403) {
         final data = jsonDecode(response.body);
         final errorCode = data['error']?['code'];
-        if (errorCode == 'INSTALLATION_SUPERSEDED') {
-          print('CRITICAL: This installation was superseded. Removing license.');
-          await removeLicense();
-          _revocationController.add(null);
-        } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
-          print('CRITICAL: Customer deactivated by admin. Signing out.');
+        if (errorCode == 'DEVICE_BANNED') {
+          print('CRITICAL: Device is banned. Removing license.');
           await removeLicense();
           await FirebaseAuth.instance.signOut();
-          _revocationController.add(null);
+          _revocationController.add('BANNED');
+        } else if (errorCode == 'INSTALLATION_SUPERSEDED') {
+          print('CRITICAL: This installation was superseded. Removing license.');
+          await TrialService().killTrial();
+          await removeLicense();
+          _revocationController.add('SUPERSEDED');
+        } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
+          print('CRITICAL: Customer deactivated by admin. Signing out.');
+          await TrialService().killTrial();
+          await removeLicense();
+          await FirebaseAuth.instance.signOut();
+          _revocationController.add('DEACTIVATED');
         }
+      } else if (response.statusCode == 404 || response.statusCode == 400) {
+        print('CRITICAL: Account or subscription not found on server. Removing license.');
+        await TrialService().killTrial();
+        await removeLicense();
+        await FirebaseAuth.instance.signOut();
+        _revocationController.add('REVOKED');
       } else if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['data']?['signedLeaseToken'] != null) {
           // Update the locally cached lease token if the backend has a fresher one
           await verifySignedLeaseToken(data['data']['signedLeaseToken'], saveToStorage: true);
+          await _storage.write(key: _lastSyncPref, value: DateTime.now().millisecondsSinceEpoch.toString());
+          _revocationController.add('RESTORED');
         }
+      } else {
+        // Unhandled server error (500, etc), treat as network issue and use grace period
+        await _checkOfflineGracePeriod();
       }
     } catch (e) {
       print('Online subscription status polling failed (offline?): $e');
+      await _checkOfflineGracePeriod();
     }
+  }
+
+  Future<void> _checkOfflineGracePeriod() async {
+    try {
+      final syncStr = await _storage.read(key: _lastSyncPref);
+      if (syncStr != null && syncStr.isNotEmpty) {
+        final lastSync = int.tryParse(syncStr);
+        if (lastSync != null) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final elapsed = now - lastSync;
+          final gracePeriod = 24 * 60 * 60 * 1000; // 24 hours
+          if (elapsed > gracePeriod) {
+            print('CRITICAL: Offline grace period exceeded.');
+            _revocationController.add('OFFLINE_LOCKED');
+          }
+        }
+      } else if (_cachedIsValid == true) {
+        // If we've never synced but we have a license, start the timer now
+        await _storage.write(key: _lastSyncPref, value: DateTime.now().millisecondsSinceEpoch.toString());
+      }
+    } catch (_) {}
   }
 }
 

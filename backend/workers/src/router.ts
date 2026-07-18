@@ -5,7 +5,7 @@ import { handleCustomerRegistration } from './routes/customers';
 import { handleGetSubscriptionStatus } from './routes/subscriptions';
 import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer } from './routes/transfers';
 import { handleCreateOrder, handleVerifyOrder } from './routes/orders';
-import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs } from './routes/admin';
+import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans } from './routes/admin';
 import { handleMigrateLegacyKey } from './routes/migrate';
 import { handleRazorpayWebhook } from './webhooks';
 import { localStore } from './services/firestore';
@@ -35,9 +35,6 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
   // Normalize path by stripping optional `/api` prefix if present (`/api/v1/...` -> `/v1/...`)
   const normalizedPath = path.startsWith('/api/') ? path.substring(4) : path;
 
-  // ---------------------------------------------------------------------------
-  // PUBLIC ENDPOINTS (No authentication or composite headers required)
-  // ---------------------------------------------------------------------------
     // === PUBLIC CONFIG ENDPOINTS ===
     if (normalizedPath === '/v1/config/system') {
       return await handleGetSystemConfig(request, env);
@@ -46,6 +43,8 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     if (normalizedPath === '/v1/plans') {
       return await handleGetPlans(request, env);
     }
+
+
 
   // Phase 3: Razorpay Webhook Receiver (`POST /v1/webhooks/razorpay`)
   if (normalizedPath === '/v1/webhooks/razorpay' && request.method === 'POST') {
@@ -92,11 +91,29 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
       const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/approve'.length);
       return handleAdminApproveTransfer(request, env, adminUid, transferId);
     }
+    if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/reject') && request.method === 'POST') {
+      const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/reject'.length);
+      return handleAdminRejectTransfer(request, env, adminUid, transferId);
+    }
+    if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/ban') && request.method === 'PUT') {
+      const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/ban'.length);
+      return handleAdminBanDevice(request, env, adminUid, hardwareId);
+    }
+    if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/unban') && request.method === 'PUT') {
+      const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/unban'.length);
+      return handleAdminUnbanDevice(request, env, adminUid, hardwareId);
+    }
     if (normalizedPath === '/v1/admin/config/system' && request.method === 'PUT') {
       return handleAdminUpdateSystemConfig(request, env, adminUid);
     }
     if (normalizedPath === '/v1/admin/audit-logs' && request.method === 'GET') {
       return handleAdminGetAuditLogs(request, env);
+    }
+    if (normalizedPath === '/v1/admin/transfers/pending' && request.method === 'GET') {
+      return handleAdminGetPendingTransfers(request, env);
+    }
+    if (normalizedPath === '/v1/admin/plans' && request.method === 'POST') {
+      return handleAdminUpdatePlans(request, env, adminUid);
     }
 
     return createErrorResponse(404, 'ADMIN_ENDPOINT_NOT_FOUND', `Admin endpoint ${normalizedPath} not found.`);

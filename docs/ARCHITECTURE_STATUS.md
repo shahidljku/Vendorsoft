@@ -9,11 +9,11 @@
 
 | Metadata Field | Value |
 | :--- | :--- |
-| **Architecture Version** | `Version 1.0.0-FROZEN` |
-| **Current Status** | **FROZEN FOR PRODUCTION IMPLEMENTATION** |
-| **Date** | `July 16, 2026` |
+| **Architecture Version** | `Version 1.1.0` |
+| **Current Status** | **PRODUCTION — ACTIVE** |
+| **Date** | `July 18, 2026` |
 | **Freeze Status** | **LOCKED (Permanently Frozen unless genuine implementation blocker discovered)** |
-| **Implementation Status** | • **Phase 1.1 (Firebase Foundation & Anonymous Auth)**: **COMPLETED ✅**<br/>• **Phase 1.2 (Workers Control Plane Setup & Catalog/Config API)**: **COMPLETED ✅**<br/>• **Phase 2.1 (Customer Onboarding & Composite Registration)**: **COMPLETED ✅**<br/>• **Phase 2.2 (Offline Lease Engine & Peer-to-Peer Transfers)**: **COMPLETED ✅**<br/>• **Phase 3 (Razorpay Payment Checkout & Webhook Pipeline)**: **COMPLETED ✅**<br/>• **Phase 4 (Security Hardening & Admin Panel Setup)**: **COMPLETED ✅**<br/>• **Phase 5 (Production Migration & Legacy System Sunset)**: **COMPLETED ✅** |
+| **Implementation Status** | • **Phase 1.1 (Firebase Foundation & Anonymous Auth)**: **COMPLETED ✅**<br/>• **Phase 1.2 (Workers Control Plane Setup & Catalog/Config API)**: **COMPLETED ✅**<br/>• **Phase 2.1 (Customer Onboarding & Composite Registration)**: **COMPLETED ✅**<br/>• **Phase 2.2 (Offline Lease Engine & Peer-to-Peer Transfers)**: **COMPLETED ✅**<br/>• **Phase 3 (Razorpay Payment Checkout & Webhook Pipeline)**: **COMPLETED ✅**<br/>• **Phase 4 (Security Hardening & Admin Panel Setup)**: **COMPLETED ✅**<br/>• **Phase 5 (Production Migration & Legacy System Sunset)**: **COMPLETED ✅**<br/>• **Phase 6 (Anti-Abuse Enforcement, Device Transfer UI & Admin Plan Pricing)**: **COMPLETED ✅** |
 
 ---
 
@@ -27,7 +27,7 @@
 - **Payment Gateway**: Razorpay (UPI, Cards, NetBanking with HMAC SHA-256 webhooks).
 - **Cryptographic Engine**: Web Crypto Ed25519 / RSA local lease verification (`signedLeaseToken`).
 
-### 2.2 Approved Database Design (9 Firestore Collections)
+### 2.2 Approved Database Design (10 Firestore Collections)
 1. **`/system_configs/global`**: Server-controlled global configuration flags (`allowRegistrations`, `allowPayments`, `allowTransfers`, `maintenanceMode`, `minimumSupportedVersion`). Read-only for client.
 2. **`/customers/{customerId}`**: Immutable customer profiles (`cus_xxxxxxxxx`). `businessName` and `mobileNumber` are editable display metadata only (`Not primary keys`).
 3. **`/installations/{installationId}`**: Hardware and storage telemetry (`inst_xxxxxxxxx` / `installationUuid`).
@@ -37,6 +37,7 @@
 7. **`/payments/{paymentId}`**: Financial transaction tracking (`order_xxxxxxxxx`).
 8. **`/audit_logs/{logId}`**: Immutable security event and manual admin action logs.
 9. **`/idempotency_keys/{keyId}`**: 24-hour deduplication locks for state-changing endpoints.
+10. **`/hardware_trials/{hardwareId}`**: Per-device 30-day free trial tracking. Prevents trial abuse via reinstalls, data clearing, or Samsung Dual Apps.
 
 ### 2.3 Approved Identity Model (Composite Hybrid Anchor)
 No single identifier is trusted individually. Authentication and entitlement evaluation strictly check:
