@@ -74,8 +74,7 @@ class _TransferPendingScreenState extends State<TransferPendingScreen> {
     // Attempt login to fetch the new lease token and hardware lock
     try {
       showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.orange)));
-      
-      await LicenseService().pollOnlineSubscriptionStatus();
+      await LicenseService().pollOnlineSubscriptionStatus(force: true);
       final success = await LicenseService().isLicensed();
 
       if (mounted) {

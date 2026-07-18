@@ -417,11 +417,11 @@ JQIDAQAB
 
   /// Periodically checks the backend to enforce the "One Active Device" rule.
   /// If the server returns 403 INSTALLATION_SUPERSEDED, this device was revoked.
-  Future<void> pollOnlineSubscriptionStatus() async {
+  Future<void> pollOnlineSubscriptionStatus({bool force = false}) async {
     try {
       final hasLic = await isLicensed();
       final hasTrial = await TrialService().checkTrialState();
-      if (!hasLic && !hasTrial) {
+      if (!hasLic && !hasTrial && !force) {
         return; // Skip polling if no active license or trial locally to avoid 404 infinite loops on fresh installs
       }
 
