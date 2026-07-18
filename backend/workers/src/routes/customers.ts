@@ -105,11 +105,50 @@ export async function handleCustomerRegistration(
         { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
       ]);
 
+      let latestSub: any = null;
       if (subs && subs.length > 0) {
         subs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
-        const latestSub = subs[0];
-        
+        latestSub = subs[0];
+      } else {
+        // Fallback: Check if they have a hardware trial
+        const trials = await queryCollection(env, 'hardware_trials', [
+          { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
+        ]);
+        if (trials && trials.length > 0) {
+          const trial = trials[0];
+          latestSub = {
+            subscriptionId: `TRIAL_${trial.hardwareId}`,
+            planId: 'FREE_TRIAL_30',
+            activeInstallationId: trial.hardwareId,
+            status: Date.now() > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE',
+            expiresAtEpochMs: trial.expiresAtEpochMs
+          };
+        }
+      }
+
+      if (latestSub) {
         if (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId) {
+          let token = latestSub.signedLeaseToken;
+          
+          // If this is a trial recovery, the token wasn't saved in DB, so generate it on the fly
+          if (!token && latestSub.planId === 'FREE_TRIAL_30') {
+            const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+            const leasePayload = {
+              subscriptionId: latestSub.subscriptionId,
+              customerId: oldCust.customerId,
+              activeInstallationId: latestSub.activeInstallationId,
+              planId: latestSub.planId,
+              planName: '30-Day Pro Trial',
+              startsAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
+              expiresAtEpochMs: latestSub.expiresAtEpochMs,
+              maxCustomers: 10000,
+              allowWhatsAppAutoSend: true,
+              allowThermalPrinting: true,
+              issuedAt: Date.now()
+            };
+            token = await generateSignedLeaseToken(leasePayload, secretKey);
+          }
+
           const cachedData = {
             customerId: oldCust.customerId,
             installationId: latestSub.activeInstallationId,
@@ -118,7 +157,7 @@ export async function handleCustomerRegistration(
             activeInstallationId: latestSub.activeInstallationId,
             status: latestSub.status,
             expiresAtEpochMs: latestSub.expiresAtEpochMs,
-            signedLeaseToken: latestSub.signedLeaseToken
+            signedLeaseToken: token
           };
           return new Response(JSON.stringify({ success: true, data: cachedData, message: 'Account recovered successfully.' }), {
             status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
@@ -128,7 +167,8 @@ export async function handleCustomerRegistration(
           return createErrorResponse(403, 'TRANSFER_REQUIRED', `This phone number is registered to another device. Please request a transfer.`);
         }
       }
-      return createErrorResponse(400, 'ACCOUNT_ERROR', 'Account exists but has no subscriptions. Please contact support.');
+      
+      return createErrorResponse(400, 'ACCOUNT_ERROR', 'Account exists but has no subscriptions or trials. Please contact support.');
     }
   } catch (err: any) {
     console.error('Database error during mobileNumber lookup:', err);
