@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/registration_service.dart';
 import '../services/transfer_service.dart';
+import '../services/license_service.dart';
+import 'transfer_pending_screen.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback onCompleted;
@@ -90,11 +92,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       mobileNumber: mobileNumber,
                     );
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(response['message'] ?? 'Transfer requested! Approve it on your old device.'),
-                        backgroundColor: const Color(0xFF00E676),
-                        duration: const Duration(seconds: 10),
-                      ));
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(
+                          builder: (ctx) => TransferPendingScreen(
+                            transferId: response['transferId'],
+                            customerId: '', // Using mobile number for re-auth
+                            mobileNumber: mobileNumber,
+                          ),
+                        ),
+                        (route) => false,
+                      );
                     }
                   } catch (err) {
                     if (mounted) {
@@ -134,7 +141,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       // If storage permission is not yet granted, folders will be created automatically later.
     }
 
-    // Step 6: Save acceptance and continue into app
+    // Step 6: Save business name globally and continue into app
+    await LicenseService().setCustomBusinessName(businessName);
     await widget.settingsService.setHasAcceptedTerms(true);
     widget.onCompleted();
   }

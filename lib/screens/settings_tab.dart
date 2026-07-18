@@ -129,6 +129,18 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
           _buildSettingsGroup(
+            title: 'Profile & Business Details',
+            children: [
+              _buildSettingItem(
+                icon: Icons.storefront,
+                title: 'Edit Business Name',
+                subtitle: LicenseService().getBusinessName(),
+                onTap: () => _editBusinessName(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildSettingsGroup(
             title: 'Sending Options',
             children: [
               _buildSwitchItem(
@@ -644,13 +656,13 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.only(left: 8, bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Text(
             title,
             style: const TextStyle(
-              color: Color(0xFF00E676),
-              fontWeight: FontWeight.bold,
+              color: Colors.orange,
               fontSize: 14,
+              fontWeight: FontWeight.w600,
               letterSpacing: 1.2,
             ),
           ),
@@ -800,6 +812,48 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
               );
             }).toList(),
             onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editBusinessName() {
+    final TextEditingController ctrl = TextEditingController(text: LicenseService().getBusinessName());
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Edit Business Name', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            labelText: 'Business Name',
+            labelStyle: TextStyle(color: Colors.white54),
+            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.orange)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (ctrl.text.trim().isNotEmpty) {
+                await LicenseService().setCustomBusinessName(ctrl.text.trim());
+                if (mounted) {
+                  setState(() {});
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Business Name Updated')),
+                  );
+                }
+              }
+            },
+            child: const Text('Save', style: TextStyle(color: Colors.orange)),
           ),
         ],
       ),

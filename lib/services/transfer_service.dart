@@ -110,6 +110,26 @@ class TransferService {
     }
   }
 
+  /// Cancels a pending transfer request from the new device (`Phase 2.2`).
+  Future<bool> cancelTransfer(String transferId) async {
+    try {
+      final headers = await _buildHeaders();
+      final url = Uri.parse('$baseUrl/transfers/cancel');
+      final body = jsonEncode({'transferId': transferId});
+
+      final response = await http.post(url, headers: headers, body: body);
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        print('Cancel transfer failed (${response.statusCode}): ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      print('Error in cancelTransfer: $e');
+      return false;
+    }
+  }
+
   /// Rejects an incoming transfer request (`Phase 2.2`).
   Future<bool> rejectTransfer(String transferId) async {
     try {
@@ -127,6 +147,26 @@ class TransferService {
     } catch (e) {
       print('Error in rejectTransfer: $e');
       return false;
+    }
+  }
+
+  /// Polls the status of a specific transfer request.
+  Future<Map<String, dynamic>?> pollTransferStatus(String transferId) async {
+    try {
+      final headers = await _buildHeaders();
+      final url = Uri.parse('$baseUrl/transfers/$transferId/status');
+
+      final response = await http.get(url, headers: headers);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['data'] as Map<String, dynamic>?;
+      } else {
+        print('Poll transfer status failed (${response.statusCode}): ${response.body}');
+        return null;
+      }
+    } catch (e) {
+      print('Error in pollTransferStatus: $e');
+      return null;
     }
   }
 }

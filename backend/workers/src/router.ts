@@ -1,9 +1,9 @@
 import { Env } from './types';
 import { handleGetSystemConfig } from './routes/config';
 import { handleGetPlans } from './routes/plans';
-import { handleCustomerRegistration } from './routes/customers';
+import { handleCustomerRegistration, handleUpdateFcmToken } from './routes/customers';
 import { handleGetSubscriptionStatus } from './routes/subscriptions';
-import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer } from './routes/transfers';
+import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer, handleGetTransferStatus, handleCancelTransfer } from './routes/transfers';
 import { handleCreateOrder, handleVerifyOrder } from './routes/orders';
 import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans } from './routes/admin';
 import { handleMigrateLegacyKey } from './routes/migrate';
@@ -132,6 +132,10 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     return handleCustomerRegistration(request, env, identity);
   }
 
+  if (normalizedPath === '/v1/installations/update-fcm' && request.method === 'POST') {
+    return handleUpdateFcmToken(request, env, identity);
+  }
+
   // Phase 2.2: Authoritative Subscription Status & Signed Lease
   if (normalizedPath === '/v1/subscriptions/status' && request.method === 'GET') {
     return handleGetSubscriptionStatus(request, env, identity);
@@ -144,11 +148,17 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
   if (normalizedPath === '/v1/transfers/pending' && request.method === 'GET') {
     return handleGetPendingTransfers(request, env, identity);
   }
+  if (normalizedPath.startsWith('/v1/transfers/') && normalizedPath.endsWith('/status') && request.method === 'GET') {
+    return handleGetTransferStatus(request, env, identity, normalizedPath);
+  }
   if (normalizedPath === '/v1/transfers/approve' && request.method === 'POST') {
     return handleApproveTransfer(request, env, identity);
   }
   if (normalizedPath === '/v1/transfers/reject' && request.method === 'POST') {
     return handleRejectTransfer(request, env, identity);
+  }
+  if (normalizedPath === '/v1/transfers/cancel' && request.method === 'POST') {
+    return handleCancelTransfer(request, env, identity);
   }
 
   // Phase 3: Razorpay Payment Checkout & Verification

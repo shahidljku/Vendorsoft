@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -16,6 +17,7 @@ import 'reports_tab.dart';
 import 'reminders_modal.dart';
 import '../services/transfer_service.dart';
 import '../services/license_service.dart';
+import '../services/push_notification_service.dart';
 
 class MainLayout extends StatefulWidget {
   final SettingsService settingsService;
@@ -49,11 +51,15 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   bool _directPrintEnabled = false;
 
   bool _isPollingTransfers = false;
+  late final StreamSubscription _fcmSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _fcmSubscription = PushNotificationService().onMessageStream.listen((_) {
+      if (mounted) _pollTransfers();
+    });
     _checkPermissions(isStartup: true);
     _loadFileName();
     _loadPrinterStatus();
@@ -62,6 +68,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _fcmSubscription.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -75,7 +82,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   }
 
   Future<void> _pollTransfers() async {
-    if (_isPollingTransfers || widget.isTrialActive) return;
+    if (_isPollingTransfers) return;
     _isPollingTransfers = true;
     try {
       final transfers = await TransferService().pollPendingTransfers();
@@ -129,10 +136,9 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 await TransferService().approveTransfer(transfer['transferId']);
                 if (mounted) {
                   Navigator.pop(context); // close loading
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transfer approved. Your license was moved.')));
-                  if (widget.onActivateRequested != null) {
-                    widget.onActivateRequested!(); // Will trigger refresh and lock them out
-                  }
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Transfer approved. Your license was moved. Closing app...')));
+                  await Future.delayed(const Duration(seconds: 2));
+                  SystemNavigator.pop();
                 }
               } catch (e) {
                 if (mounted) {

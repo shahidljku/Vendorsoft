@@ -43,7 +43,7 @@ e:\image_sender\
 │       │   │   ├── config.ts      # GET /v1/config/system (Public / Read-Only system toggles)
 │       │   │   ├── customers.ts   # POST /v1/customers/register (Onboarding profile creation)
 │       │   │   ├── subscriptions.ts # GET /v1/subscriptions/status (Enforces One Active Device Rule)
-│       │   │   ├── transfers.ts   # P2P device transfers (/request, /pending, /approve, /reject)
+│       │   │   ├── transfers.ts   # P2P device transfers (/request, /pending, /approve, /reject, /cancel)
 │       │   │   ├── orders.ts      # POST /v1/orders/create & /verify (Razorpay order lifecycle)
 │       │   │   ├── admin.ts       # Control plane endpoints (/customers, /transfers/approve, /config, /audit-logs)
 │       │   │   └── migrate.ts     # POST /v1/migrate/legacy-key (Phase 5: Automated RSA claiming)

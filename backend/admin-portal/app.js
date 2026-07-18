@@ -194,10 +194,10 @@ async function loadCustomers() {
             ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => `
               <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 4px;">
                 <div>
-                  <div style="font-size: 12px; font-family: monospace;">${inst.hardwareId}</div>
-                  <div style="font-size: 11px; color: #888;">${(inst.platform || 'unknown').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
+                  <div style="font-size: 12px; font-family: monospace;">${inst.hardwareId || inst.installationId}</div>
+                  <div style="font-size: 11px; color: #888;">${(inst.platform || 'ANDROID').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
                 </div>
-                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px;" onclick="toggleDeviceBan('${inst.hardwareId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
+                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px;" onclick="toggleDeviceBan('${inst.hardwareId || inst.installationId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
                   ${inst.status === 'BANNED' ? 'Unblock' : 'Block Device'}
                 </button>
               </div>
@@ -307,8 +307,8 @@ async function loadPendingTransfers() {
       row.innerHTML = `
         <td><strong>${tx.transferId}</strong></td>
         <td>${tx.customerId}</td>
-        <td><code>${tx.sourceHardwareId || '—'}</code></td>
-        <td><code>${tx.targetHardwareId}</code></td>
+        <td><code>${tx.sourceHardwareId || tx.oldInstallationId || '—'}</code></td>
+        <td><code>${tx.targetHardwareId || tx.newInstallationId || '—'}</code></td>
         <td>${new Date(tx.requestedAtEpochMs || Date.now()).toLocaleString()}</td>
         <td>
           <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}')">Approve</button>

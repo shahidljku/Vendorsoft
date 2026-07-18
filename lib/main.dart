@@ -10,6 +10,7 @@ import 'screens/account_deactivated_screen.dart';
 import 'screens/device_banned_screen.dart';
 import 'screens/maintenance_screen.dart';
 import 'screens/offline_locked_screen.dart';
+import 'screens/device_transferred_screen.dart';
 import 'services/settings_service.dart';
 import 'services/security_service.dart';
 import 'services/license_service.dart';
@@ -21,12 +22,14 @@ import 'services/config_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
+import 'services/push_notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  PushNotificationService().initialize();
   runApp(const ImageSenderApp());
 }
 
@@ -62,6 +65,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   bool _isBanned = false;
   bool _isMaintenanceMode = false;
   bool _isOfflineLocked = false;
+  bool _isSuperseded = false;
   String _maintenanceMessage = '';
 
   @override
@@ -100,6 +104,19 @@ class _ImageSenderAppState extends State<ImageSenderApp>
           setState(() {
             _isOfflineLocked = true;
           });
+        } else if (reason == 'SUPERSEDED') {
+          setState(() {
+            _isSuperseded = true;
+            _isOfflineLocked = false;
+          });
+        } else if (reason == 'REVOKED') {
+          setState(() {
+            _isSuperseded = false;
+            _isDeactivated = false;
+            _isBanned = false;
+            _isOfflineLocked = false;
+          });
+          _loadSettings();
         } else {
           _loadSettings();
         }
@@ -303,6 +320,10 @@ class _ImageSenderAppState extends State<ImageSenderApp>
             if (_isDeactivated)
               const Positioned.fill(
                 child: AccountDeactivatedScreen(),
+              )
+            else if (_isSuperseded)
+              const Positioned.fill(
+                child: DeviceTransferredScreen(),
               )
             else if (_isMaintenanceMode)
               Positioned.fill(

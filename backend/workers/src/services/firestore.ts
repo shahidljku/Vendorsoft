@@ -53,7 +53,7 @@ export async function getFirestoreAccessToken(env: Env): Promise<string> {
     aud: 'https://oauth2.googleapis.com/token',
     iat,
     exp,
-    scope: 'https://www.googleapis.com/auth/datastore'
+    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging'
   };
 
   const base64Header = base64UrlEncode(JSON.stringify(header));
@@ -473,5 +473,56 @@ export async function logAuditEvent(env: Env, severityOrAction: string, metadata
     });
   } catch (err) {
     console.error('Failed to write audit log:', err);
+  }
+}
+
+/**
+ * Sends a push notification using Firebase Cloud Messaging (FCM) v1 API.
+ */
+export async function sendFcmNotification(env: Env, token: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+  try {
+    const accessToken = await getFirestoreAccessToken(env);
+    const projectId = env.FIREBASE_PROJECT_ID || env.GCP_PROJECT_ID;
+    
+    if (!projectId) {
+      throw new Error('Missing FIREBASE_PROJECT_ID');
+    }
+
+    const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`;
+    
+    const payload: any = {
+      message: {
+        token,
+        notification: {
+          title,
+          body
+        },
+        android: {
+          priority: 'high'
+        }
+      }
+    };
+
+    if (data) {
+      payload.message.data = data;
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`FCM send failed (${response.status}):`, errText);
+    } else {
+      console.log('FCM Notification sent successfully to', token);
+    }
+  } catch (err) {
+    console.error('Error sending FCM Notification:', err);
   }
 }

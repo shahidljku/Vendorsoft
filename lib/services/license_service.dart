@@ -20,6 +20,7 @@ class LicenseService {
   static const String _licenseKeyPref = 'offline_license_key';
   static const String _signedLeaseTokenPref = 'signed_lease_token';
   static const String _lastSyncPref = 'last_successful_sync';
+  static const String _customBusinessNamePref = 'custom_business_name';
   final _storage = const FlutterSecureStorage();
   final _androidIdPlugin = const AndroidId();
 
@@ -40,6 +41,7 @@ JQIDAQAB
   Map<String, dynamic>? _currentLicenseInfo;
   String? _cachedLicenseKey;
   bool? _cachedIsValid;
+  String? _customBusinessName;
 
   final StreamController<String?> _revocationController = StreamController<String?>.broadcast();
   Stream<String?> get onLicenseRevoked => _revocationController.stream;
@@ -52,9 +54,19 @@ JQIDAQAB
   Future<String> getDeviceId() async {
     if (_deviceIdCache != null) return _deviceIdCache!;
 
-    String? androidId = await _androidIdPlugin.getId();
+    String? androidId;
+    try {
+      androidId = await _androidIdPlugin.getId();
+    } catch (e) {
+      print('Warning: Failed to get Android ID: $e');
+    }
+
     if (androidId == null || androidId.isEmpty) {
-      androidId = 'UNKNOWN_DEVICE';
+      androidId = await _storage.read(key: 'fallback_device_id');
+      if (androidId == null || androidId.isEmpty) {
+        androidId = 'FB_${DateTime.now().millisecondsSinceEpoch}';
+        await _storage.write(key: 'fallback_device_id', value: androidId);
+      }
     }
 
     String hardwareString = androidId;
@@ -132,6 +144,7 @@ JQIDAQAB
         _cachedLicenseKey = licenseKeyBase64;
         _cachedIsValid = true;
         _currentLicenseInfo = payload;
+        _customBusinessName ??= await _storage.read(key: _customBusinessNamePref);
         return true;
       }
     } catch (e) {
@@ -193,6 +206,7 @@ JQIDAQAB
       _cachedLicenseKey = leaseTokenBase64;
       _cachedIsValid = true;
       _currentLicenseInfo = payload;
+      _customBusinessName ??= await _storage.read(key: _customBusinessNamePref);
       return true;
     } catch (e) {
       print('Signed lease verification failed: $e');
@@ -338,8 +352,21 @@ JQIDAQAB
 
   /// Retrieve the business name (customer name) from the license
   String getBusinessName() {
+    if (_customBusinessName != null && _customBusinessName!.trim().isNotEmpty) {
+      return _customBusinessName!;
+    }
     if (_currentLicenseInfo == null) return 'Your Business Name';
     return _currentLicenseInfo!['customerName'] as String? ?? 'Your Business Name';
+  }
+
+  /// Override the business name locally
+  Future<void> setCustomBusinessName(String name) async {
+    _customBusinessName = name.trim().isEmpty ? null : name.trim();
+    if (_customBusinessName == null) {
+      await _storage.delete(key: _customBusinessNamePref);
+    } else {
+      await _storage.write(key: _customBusinessNamePref, value: _customBusinessName);
+    }
   }
 
   /// Remove license (deactivate)
@@ -392,6 +419,12 @@ JQIDAQAB
   /// If the server returns 403 INSTALLATION_SUPERSEDED, this device was revoked.
   Future<void> pollOnlineSubscriptionStatus() async {
     try {
+      final hasLic = await isLicensed();
+      final hasTrial = await TrialService().checkTrialState();
+      if (!hasLic && !hasTrial) {
+        return; // Skip polling if no active license or trial locally to avoid 404 infinite loops on fresh installs
+      }
+
       User? user = FirebaseAuth.instance.currentUser;
       if (user == null) {
         try {

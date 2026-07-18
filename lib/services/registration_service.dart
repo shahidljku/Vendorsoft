@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'license_service.dart';
 import 'dart:io';
+import 'push_notification_service.dart';
 
 class TransferRequiredException implements Exception {
   final String message;
@@ -43,8 +44,8 @@ class RegistrationService {
   }
 
   Future<bool> registerCustomer({
-    required String businessName,
-    required String ownerName,
+    String? businessName,
+    String? ownerName,
     required String mobileNumber,
     String? city,
   }) async {
@@ -52,12 +53,15 @@ class RegistrationService {
       final headers = await _buildHeaders();
       final url = Uri.parse('$baseUrl/customers/register');
       
+      final fcmToken = PushNotificationService().fcmToken;
+
       final body = jsonEncode({
-        'businessName': businessName,
-        'ownerName': ownerName,
+        'businessName': businessName ?? 'Unknown',
+        'ownerName': ownerName ?? 'Unknown',
         'mobileNumber': mobileNumber,
-        'city': city,
+        'city': city ?? 'Unknown',
         'deviceModel': Platform.operatingSystem,
+        if (fcmToken != null) 'fcmToken': fcmToken,
       });
 
       final response = await http.post(url, headers: headers, body: body);

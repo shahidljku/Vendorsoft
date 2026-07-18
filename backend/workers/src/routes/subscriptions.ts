@@ -76,8 +76,23 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       let trialExpiresAt = now + THIRTY_DAYS_MS;
 
       if (!hardwareTrialDoc) {
+        // Check if customer already has a trial on another device
+        const existingTrials = await queryCollection(env, 'hardware_trials', [
+          { field: 'customerId', op: 'EQUAL', value: customerId }
+        ]);
+        
+        if (existingTrials.length > 0) {
+          return createErrorResponse(
+            403,
+            'INSTALLATION_SUPERSEDED',
+            'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.',
+            { activeInstallationId: existingTrials[0].hardwareId }
+          );
+        }
+
         // Start new trial
         await setDocument(env, 'hardware_trials', identity.installationId, {
+          hardwareId: identity.hardwareId,
           startedAtEpochMs: trialStartsAt,
           expiresAtEpochMs: trialExpiresAt,
           customerId: customerId

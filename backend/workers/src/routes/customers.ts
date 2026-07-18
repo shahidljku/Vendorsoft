@@ -115,6 +115,7 @@ export async function handleCustomerRegistration(
           { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
         ]);
         if (trials && trials.length > 0) {
+          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
           const trial = trials[0];
           latestSub = {
             subscriptionId: `TRIAL_${trial.hardwareId}`,
@@ -127,7 +128,30 @@ export async function handleCustomerRegistration(
       }
 
       if (latestSub) {
-        if (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId) {
+        let isSameDevice = (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId);
+        
+        // Data healing for legacy trials that were missing hardwareId
+        if (!latestSub.activeInstallationId && latestSub.planId === 'FREE_TRIAL_30') {
+          isSameDevice = true;
+          try {
+            await setDocument(env, 'hardware_trials', identity.hardwareId, {
+              hardwareId: identity.hardwareId,
+              startedAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
+              expiresAtEpochMs: latestSub.expiresAtEpochMs,
+              customerId: oldCust.customerId,
+              trialUsed: true
+            });
+          } catch(e) {}
+        }
+
+        if (!isSameDevice) {
+          const activeInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
+          if (activeInst && activeInst.hardwareId === identity.hardwareId) {
+            isSameDevice = true;
+          }
+        }
+
+        if (isSameDevice) {
           let token = latestSub.signedLeaseToken;
           
           // If this is a trial recovery, the token wasn't saved in DB, so generate it on the fly
@@ -147,6 +171,18 @@ export async function handleCustomerRegistration(
               issuedAt: Date.now()
             };
             token = await generateSignedLeaseToken(leasePayload, secretKey);
+          }
+
+          if (body.fcmToken) {
+            const existingInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
+            if (existingInst) {
+              const updatedInst = {
+                ...existingInst,
+                fcmToken: body.fcmToken,
+                lastSeenAtEpochMs: Date.now()
+              };
+              await setDocument(env, 'installations', latestSub.activeInstallationId, updatedInst);
+            }
           }
 
           const cachedData = {
@@ -266,6 +302,7 @@ export async function handleCustomerRegistration(
         platform: identity.platform,
         appVersion: identity.appVersion,
         deviceModel: body.deviceModel ? body.deviceModel.trim() : null,
+        fcmToken: body.fcmToken || null,
         status: 'ACTIVE',
         isBanned: false,
         createdAtEpochMs: now,
@@ -344,4 +381,43 @@ export async function handleCustomerRegistration(
   }
 }
 
+export async function handleUpdateFcmToken(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+  try {
+    if (!identity.installationId) {
+      return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing x-installation-uuid');
+    }
+    const body = await request.json() as any;
+    const fcmToken = body.fcmToken;
+    if (!fcmToken) {
+      return createErrorResponse(400, 'MISSING_FCM_TOKEN', 'Missing fcmToken in body');
+    }
+
+    const instDoc = await getDocument(env, 'installations', identity.installationId);
+    if (instDoc) {
+      if (instDoc.fcmToken !== fcmToken) {
+        const updated = { ...instDoc, fcmToken, lastSeenAtEpochMs: Date.now() };
+        await setDocument(env, 'installations', identity.installationId, updated);
+      }
+    } else {
+      // If it doesn't exist, we could create it, but usually registration creates it.
+      await setDocument(env, 'installations', identity.installationId, {
+        installationId: identity.installationId,
+        hardwareId: identity.hardwareId,
+        customerId: identity.customerId || 'UNKNOWN',
+        deviceModel: 'Unknown',
+        fcmToken,
+        createdAtEpochMs: Date.now(),
+        lastSeenAtEpochMs: Date.now()
+      });
+    }
+
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+  } catch (err: any) {
+    console.error('Error updating FCM token:', err);
+    return createErrorResponse(500, 'FCM_UPDATE_FAILED', 'Failed to update FCM token');
+  }
+}
 

@@ -1,5 +1,5 @@
 import { Env, ApiResponse } from '../types';
-import { getDocument, setDocument, queryCollection, logAuditEvent } from '../services/firestore';
+import { getDocument, setDocument, deleteDocument, queryCollection, logAuditEvent } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateSignedLeaseToken } from '../cryptoEngine';
 
@@ -125,7 +125,32 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
     const targetInstallationId = transferDoc.newInstallationId || transferDoc.targetInstallationId;
     const now = Date.now();
 
-    // 1. Mark transfer as APPROVED by admin
+    // 1. Fetch Authoritative Subscription or Trial BEFORE applying partial updates
+    let subDoc: any = null;
+    let isTrial = false;
+    if (subscriptionId && subscriptionId.startsWith('TRIAL_')) {
+      isTrial = true;
+      const hardwareId = subscriptionId.replace('TRIAL_', '');
+      const trial = await getDocument(env, 'hardware_trials', hardwareId);
+      if (trial) {
+        subDoc = {
+          subscriptionId,
+          customerId: trial.customerId,
+          activeInstallationId: trial.hardwareId,
+          planId: 'FREE_TRIAL_30',
+          startsAtEpochMs: trial.startedAtEpochMs,
+          expiresAtEpochMs: trial.expiresAtEpochMs
+        };
+      }
+    } else {
+      subDoc = await getDocument(env, 'subscriptions', subscriptionId);
+    }
+
+    if (!subDoc) {
+      return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', `Subscription ${subscriptionId} not found.`);
+    }
+
+    // 2. Mark transfer as APPROVED by admin
     const updatedTransfer = {
       ...transferDoc,
       status: 'APPROVED',
@@ -134,7 +159,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
     };
     await setDocument(env, 'device_transfers', transferId, updatedTransfer);
 
-    // 2. Revoke old device installation status
+    // 3. Revoke old device installation status
     if (sourceInstallationId && sourceInstallationId !== targetInstallationId) {
       const sourceInst = await getDocument(env, 'installations', sourceInstallationId);
       if (sourceInst) {
@@ -147,7 +172,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
       }
     }
 
-    // 3. Activate target device installation status
+    // 4. Activate target device installation status
     const targetInst = await getDocument(env, 'installations', targetInstallationId);
     if (targetInst) {
       await setDocument(env, 'installations', targetInstallationId, {
@@ -169,12 +194,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
       });
     }
 
-    // 4. Update authoritative subscription activeInstallationId
-    const subDoc = await getDocument(env, 'subscriptions', subscriptionId);
-    if (!subDoc) {
-      return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', `Subscription ${subscriptionId} not found.`);
-    }
-
+    // 5. Update authoritative subscription activeInstallationId
     const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
     const leasePayload = {
       subscriptionId: subDoc.subscriptionId,
@@ -191,13 +211,32 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
     };
     const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
 
-    const updatedSub = {
-      ...subDoc,
-      activeInstallationId: targetInstallationId,
-      signedLeaseToken,
-      updatedAtEpochMs: now
-    };
-    await setDocument(env, 'subscriptions', subscriptionId, updatedSub);
+    if (isTrial) {
+      // Trials do not have a document in `subscriptions`. They are in `hardware_trials`.
+      // We update the trial active installation? Hardware trials are bound to hardware.
+      // A transfer actually moves the trial to a new device.
+      // To properly transfer a trial, we would create a new trial document or convert it.
+      // But typically, transferring a trial isn't fully supported, or we just issue the token.
+      // We should update the trial's hardwareId to the new one.
+      const hardwareId = subscriptionId.replace('TRIAL_', '');
+      const trial = await getDocument(env, 'hardware_trials', hardwareId);
+      if (trial) {
+        await setDocument(env, 'hardware_trials', targetInstallationId, {
+          ...trial,
+          hardwareId: targetInstallationId
+        });
+        // We MUST delete the old trial so it doesn't conflict during account recovery
+        await deleteDocument(env, 'hardware_trials', hardwareId);
+      }
+    } else {
+      const updatedSub = {
+        ...subDoc,
+        activeInstallationId: targetInstallationId,
+        signedLeaseToken,
+        updatedAtEpochMs: now
+      };
+      await setDocument(env, 'subscriptions', subscriptionId, updatedSub);
+    }
 
     // 5. Log audit trail
     await logAuditEvent(env, 'ADMIN_APPROVED_TRANSFER_LOST_DEVICE', {

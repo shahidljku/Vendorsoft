@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../services/license_service.dart';
 import '../services/payment_service.dart';
 import '../services/transfer_service.dart';
+import 'transfer_pending_screen.dart';
 
 class ActivationScreen extends StatefulWidget {
   final LicenseService licenseService;
@@ -163,11 +164,15 @@ class _ActivationScreenState extends State<ActivationScreen> {
                   customerId: val.startsWith('cus_') ? val : null,
                 );
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text(response['message'] ?? 'Transfer requested! Approve it on your old device.'),
-                    backgroundColor: const Color(0xFF00E676),
-                    duration: const Duration(seconds: 5),
-                  ));
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (ctx) => TransferPendingScreen(
+                        transferId: response['transferId'],
+                        customerId: val.startsWith('cus_') ? val : '',
+                        mobileNumber: val.startsWith('+') || int.tryParse(val) != null ? val : '',
+                      ),
+                    ),
+                  );
                 }
               } catch (e) {
                 if (mounted) {

@@ -1,5 +1,5 @@
 import { Env, CompositeIdentity, ApiResponse } from '../types';
-import { getDocument, setDocument, queryCollection, commitAtomicWrites } from '../services/firestore';
+import { getDocument, setDocument, queryCollection, commitAtomicWrites, sendFcmNotification } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 
@@ -43,18 +43,54 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
 
     // 2. Locate target subscription
     let sub: any = null;
+    const now = Date.now();
+
     if (subscriptionId) {
-      sub = await getDocument(env, 'subscriptions', subscriptionId);
+      if (subscriptionId.startsWith('TRIAL_')) {
+        const hardwareId = subscriptionId.replace('TRIAL_', '');
+        const trial = await getDocument(env, 'hardware_trials', hardwareId);
+        if (trial) {
+          sub = {
+            subscriptionId,
+            customerId: trial.customerId,
+            activeInstallationId: trial.hardwareId,
+            planId: 'FREE_TRIAL_30',
+            status: now > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE',
+            expiresAtEpochMs: trial.expiresAtEpochMs
+          };
+        }
+      } else {
+        sub = await getDocument(env, 'subscriptions', subscriptionId);
+      }
     } else if (customerId) {
       const subs = await queryCollection(env, 'subscriptions', [
         { field: 'customerId', op: 'EQUAL', value: customerId },
         { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
       ]);
-      if (subs && subs.length > 0) sub = subs[0];
+      if (subs && subs.length > 0) {
+        sub = subs[0];
+      } else {
+        // Fallback to hardware trials
+        const trials = await queryCollection(env, 'hardware_trials', [
+          { field: 'customerId', op: 'EQUAL', value: customerId }
+        ]);
+        if (trials && trials.length > 0) {
+          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
+          const trial = trials[0];
+          sub = {
+            subscriptionId: `TRIAL_${trial.hardwareId}`,
+            customerId: trial.customerId,
+            activeInstallationId: trial.hardwareId,
+            planId: 'FREE_TRIAL_30',
+            status: now > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE',
+            expiresAtEpochMs: trial.expiresAtEpochMs
+          };
+        }
+      }
     }
 
-    if (!sub || sub.status !== 'ACTIVE') {
-      return createErrorResponse(404, 'NO_ACTIVE_SUBSCRIPTION', 'No active subscription found to transfer.');
+    if (!sub || (sub.status !== 'ACTIVE' && sub.status !== 'EXPIRED')) {
+      return createErrorResponse(404, 'NO_ACTIVE_SUBSCRIPTION', 'No active subscription or trial found to transfer.');
     }
 
     // 3. If already active on this installation, return success immediately
@@ -69,13 +105,12 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
       }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
     }
 
-    // 4. Check if a pending transfer already exists (`ONLY_ONE_PENDING_TRANSFER_ALLOWED`)
-    const pendingList = await queryCollection(env, 'device_transfers', [
-      { field: 'subscriptionId', op: 'EQUAL', value: sub.subscriptionId },
-      { field: 'status', op: 'EQUAL', value: 'PENDING' }
+    const rawPendingListForSub = await queryCollection(env, 'device_transfers', [
+      { field: 'subscriptionId', op: 'EQUAL', value: sub.subscriptionId }
     ]);
+    
+    const pendingList = rawPendingListForSub.filter((t: any) => t.status === 'PENDING');
 
-    const now = Date.now();
     for (const pending of pendingList) {
       if (pending.expiresAtEpochMs > now) {
         return createErrorResponse(
@@ -105,6 +140,25 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
 
     await setDocument(env, 'device_transfers', transferId, transferData);
 
+    // Fetch the old installation to send an FCM notification
+    const oldInstallationId = sub.activeInstallationId;
+    if (oldInstallationId) {
+      try {
+        const oldInstallation = await getDocument(env, 'installations', oldInstallationId);
+        if (oldInstallation && oldInstallation.fcmToken) {
+          await sendFcmNotification(
+            env,
+            oldInstallation.fcmToken,
+            'Device Transfer Request',
+            'Another device is trying to claim your active VendSoft license.',
+            { transferId }
+          );
+        }
+      } catch (fcmErr) {
+        console.error('FCM Notification error:', fcmErr);
+      }
+    }
+
     return new Response(JSON.stringify({
       success: true,
       data: {
@@ -130,10 +184,18 @@ export async function handleGetPendingTransfers(request: Request, env: Env, iden
       return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Header x-installation-uuid is required.');
     }
 
-    const pendingList = await queryCollection(env, 'device_transfers', [
-      { field: 'oldInstallationId', op: 'EQUAL', value: identity.installationId },
-      { field: 'status', op: 'EQUAL', value: 'PENDING' }
+    const rawPendingList = await queryCollection(env, 'device_transfers', [
+      { field: 'oldInstallationId', op: 'EQUAL', value: identity.installationId }
     ]);
+    
+    const pendingList = rawPendingList.filter((t: any) => t.status === 'PENDING');
+
+    if (identity.hardwareId && identity.hardwareId !== identity.installationId) {
+      const trialRawList = await queryCollection(env, 'device_transfers', [
+        { field: 'oldInstallationId', op: 'EQUAL', value: identity.hardwareId }
+      ]);
+      pendingList.push(...trialRawList.filter((t: any) => t.status === 'PENDING'));
+    }
 
     const now = Date.now();
     const activePending = pendingList.filter((t) => t.expiresAtEpochMs > now).map((t) => ({
@@ -190,13 +252,32 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
     }
 
     // Security check: Only the old installation can approve its own transfer
-    if (transferDoc.oldInstallationId !== identity.installationId) {
+    if (transferDoc.oldInstallationId !== identity.installationId && transferDoc.oldInstallationId !== identity.hardwareId) {
       return createErrorResponse(403, 'UNAUTHORIZED_APPROVAL', 'Only the current active device (`oldInstallationId`) can approve a transfer.');
     }
 
-    const sub = await getDocument(env, 'subscriptions', transferDoc.subscriptionId);
+    let sub: any = null;
+    let isTrial = false;
+    if (transferDoc.subscriptionId && transferDoc.subscriptionId.startsWith('TRIAL_')) {
+      isTrial = true;
+      const hardwareId = transferDoc.subscriptionId.replace('TRIAL_', '');
+      const trial = await getDocument(env, 'hardware_trials', hardwareId);
+      if (trial) {
+        sub = {
+          subscriptionId: transferDoc.subscriptionId,
+          customerId: trial.customerId,
+          activeInstallationId: trial.hardwareId,
+          planId: 'FREE_TRIAL_30',
+          startsAtEpochMs: trial.startedAtEpochMs,
+          expiresAtEpochMs: trial.expiresAtEpochMs
+        };
+      }
+    } else {
+      sub = await getDocument(env, 'subscriptions', transferDoc.subscriptionId);
+    }
+
     if (!sub) {
-      return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', 'The subscription associated with this transfer no longer exists.');
+      return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', 'The subscription or trial associated with this transfer no longer exists.');
     }
 
     // Generate cryptographic signedLeaseToken for the new device
@@ -206,11 +287,11 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
       customerId: sub.customerId,
       activeInstallationId: transferDoc.newInstallationId,
       hasActiveSubscription: true,
-      planId: sub.planId || 'DEMO_FREE',
-      planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : '30-Day Free Demo License',
+      planId: sub.planId || 'FREE_TRIAL_30',
+      planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : sub.planId === 'FREE_TRIAL_30' ? '30-Day Pro Trial' : 'Pro Monthly License',
       startsAtEpochMs: sub.startsAtEpochMs || now,
       expiresAtEpochMs: sub.expiresAtEpochMs,
-      maxCustomers: sub.planId === 'PRO_YEARLY' ? 10000 : 50,
+      maxCustomers: sub.planId === 'PRO_YEARLY' || sub.planId === 'FREE_TRIAL_30' ? 10000 : 50,
       allowWhatsAppAutoSend: true,
       allowThermalPrinting: true,
       issuedAt: now
@@ -225,18 +306,17 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
 
     const auditLogId = `aud_${generateShortId()}`;
 
+    // We must retrieve the hardware ID of the new installation to correctly migrate the trial lock.
+    let newHardwareId = transferDoc.newInstallationId;
+    try {
+      const newInst = await getDocument(env, 'installations', transferDoc.newInstallationId);
+      if (newInst && newInst.hardwareId) {
+        newHardwareId = newInst.hardwareId;
+      }
+    } catch(e) {}
+
     // Atomic batch write (`:commit`)
     const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any>; requireDoesNotExist?: boolean }> = [
-      {
-        collectionPath: 'subscriptions',
-        documentId: sub.subscriptionId,
-        data: {
-          ...sub,
-          activeInstallationId: transferDoc.newInstallationId,
-          signedLeaseToken,
-          updatedAtEpochMs: now
-        }
-      },
       {
         collectionPath: 'installations',
         documentId: transferDoc.oldInstallationId,
@@ -282,6 +362,42 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
         }
       }
     ];
+
+    if (isTrial) {
+      batchWrites.push({
+        collectionPath: 'hardware_trials',
+        documentId: newHardwareId,
+        data: {
+          hardwareId: newHardwareId,
+          startedAtEpochMs: sub.startsAtEpochMs,
+          expiresAtEpochMs: sub.expiresAtEpochMs,
+          customerId: sub.customerId,
+          trialUsed: true
+        }
+      });
+      batchWrites.push({
+        collectionPath: 'hardware_trials',
+        documentId: sub.activeInstallationId,
+        data: {
+          hardwareId: sub.activeInstallationId,
+          startedAtEpochMs: sub.startsAtEpochMs,
+          expiresAtEpochMs: 0,
+          customerId: sub.customerId,
+          trialUsed: true
+        }
+      });
+    } else {
+      batchWrites.push({
+        collectionPath: 'subscriptions',
+        documentId: sub.subscriptionId,
+        data: {
+          ...sub,
+          activeInstallationId: transferDoc.newInstallationId,
+          signedLeaseToken,
+          updatedAtEpochMs: now
+        }
+      });
+    }
 
     if (idempotencyKey) {
       batchWrites.push({
@@ -332,6 +448,7 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
   try {
     const body = await request.json() as any;
     const transferId = body.transferId;
+    const idempotencyKey = identity.idempotencyKey;
 
     if (!transferId) {
       return createErrorResponse(400, 'MISSING_TRANSFER_ID', 'Parameter transferId is required.');
@@ -344,7 +461,7 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
       return createErrorResponse(400, 'TRANSFER_NOT_PENDING', 'Transfer request is not in PENDING state.');
     }
 
-    if (transferDoc.oldInstallationId !== identity.installationId) {
+    if (transferDoc.oldInstallationId !== identity.installationId && transferDoc.oldInstallationId !== identity.hardwareId) {
       return createErrorResponse(403, 'UNAUTHORIZED_REJECTION', 'Only the current active device can reject this transfer.');
     }
 
@@ -376,18 +493,141 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
       }
     ];
 
+    if (idempotencyKey) {
+      batchWrites.push({
+        collectionPath: 'idempotency_keys',
+        documentId: idempotencyKey,
+        data: {
+          keyId: idempotencyKey,
+          expiresAtEpochMs: now + (24 * 3600000),
+          responsePayload: JSON.stringify({
+            transferId,
+            status: 'REJECTED',
+            message: 'Transfer request rejected.'
+          })
+        }
+      });
+    }
+
+    try {
+      await commitAtomicWrites(env, batchWrites);
+
+      return new Response(JSON.stringify({
+        success: true,
+        data: {
+          transferId,
+          status: 'REJECTED',
+          message: 'Transfer request rejected.'
+        }
+      }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+    } catch (err: any) {
+      if (err.code === 'ALREADY_EXISTS' && idempotencyKey) {
+        return createErrorResponse(409, 'TRANSFER_ALREADY_PROCESSED', 'Transfer already rejected.');
+      }
+      throw err;
+    }
+  } catch (err: any) {
+    console.error('Error in POST /api/v1/transfers/reject:', err);
+    return createErrorResponse(500, 'TRANSFER_REJECTION_FAILED', `Failed to reject transfer: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles GET /api/v1/transfers/:transferId/status
+ * Allows the requesting device to poll for the status of a transfer.
+ */
+export async function handleGetTransferStatus(request: Request, env: Env, identity: CompositeIdentity, path: string): Promise<Response> {
+  try {
+    const transferId = path.substring('/v1/transfers/'.length, path.length - '/status'.length);
+    
+    if (!transferId) {
+      return createErrorResponse(400, 'MISSING_TRANSFER_ID', 'Transfer ID is required in URL path.');
+    }
+
+    const transferDoc = await getDocument(env, 'device_transfers', transferId);
+    
+    if (!transferDoc) {
+      return createErrorResponse(404, 'TRANSFER_NOT_FOUND', 'The requested transfer was not found.');
+    }
+
+    // Security: Only allow if the requester is either the old or new installation
+    if (transferDoc.oldInstallationId !== identity.installationId && 
+        transferDoc.oldInstallationId !== identity.hardwareId && 
+        transferDoc.newInstallationId !== identity.installationId) {
+      return createErrorResponse(403, 'UNAUTHORIZED_ACCESS', 'You are not authorized to view this transfer status.');
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        transferId: transferDoc.transferId,
+        status: transferDoc.status,
+        expiresAtEpochMs: transferDoc.expiresAtEpochMs,
+        resolvedAtEpochMs: transferDoc.resolvedAtEpochMs || null,
+        completedAtEpochMs: transferDoc.completedAtEpochMs || null
+      }
+    }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+    
+  } catch (err: any) {
+    console.error('Error in GET /api/v1/transfers/status:', err);
+    return createErrorResponse(500, 'TRANSFER_STATUS_FAILED', `Failed to get transfer status: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles POST /api/v1/transfers/cancel
+ * Cancels a transfer claim from the requesting device (new device).
+ */
+export async function handleCancelTransfer(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+  try {
+    const body = await request.json() as any;
+    const transferId = body.transferId;
+    
+    if (!transferId) {
+      return createErrorResponse(400, 'MISSING_TRANSFER_ID', 'Parameter transferId is required.');
+    }
+
+    const transferDoc = await getDocument(env, 'device_transfers', transferId);
+    if (!transferDoc) {
+      return createErrorResponse(404, 'TRANSFER_NOT_FOUND', 'Transfer request not found.');
+    }
+
+    if (transferDoc.status !== 'PENDING') {
+      return createErrorResponse(409, 'TRANSFER_NOT_PENDING', `Transfer request is already ${transferDoc.status}.`);
+    }
+
+    // Security check: Only the NEW installation can cancel its own transfer
+    if (transferDoc.newInstallationId !== identity.installationId) {
+      return createErrorResponse(403, 'UNAUTHORIZED_CANCEL', 'Only the requesting device can cancel this transfer.');
+    }
+
+    const now = Date.now();
+    const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [
+      {
+        collectionPath: 'device_transfers',
+        documentId: transferId,
+        data: {
+          ...transferDoc,
+          status: 'CANCELLED',
+          resolvedAtEpochMs: now,
+          updatedAtEpochMs: now
+        }
+      }
+    ];
+
     await commitAtomicWrites(env, batchWrites);
 
     return new Response(JSON.stringify({
       success: true,
       data: {
         transferId,
-        status: 'REJECTED',
-        message: 'Transfer request rejected.'
+        status: 'CANCELLED',
+        message: 'Transfer request cancelled.'
       }
     }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+
   } catch (err: any) {
-    console.error('Error in POST /api/v1/transfers/reject:', err);
-    return createErrorResponse(500, 'TRANSFER_REJECTION_FAILED', `Failed to reject transfer: ${err.message || err}`);
+    console.error('Error in POST /api/v1/transfers/cancel:', err);
+    return createErrorResponse(500, 'TRANSFER_CANCELLATION_FAILED', `Failed to cancel transfer: ${err.message || err}`);
   }
 }
