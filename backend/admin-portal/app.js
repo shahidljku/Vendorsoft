@@ -155,9 +155,21 @@ async function loadCustomers() {
     listContainer.innerHTML = '';
     customers.forEach((cust) => {
       const activeSub = cust.activeSubscription;
-      const subBadge = activeSub 
-        ? `<span class="badge success">Plan: ${activeSub.planId || 'ACTIVE'}</span>` 
-        : '<span class="badge danger">No Active Plan</span>';
+      let subBadge = '<span class="badge danger">No Active Plan</span>';
+      if (activeSub) {
+        let daysLeftText = '';
+        if (activeSub.expiresAtEpochMs) {
+          const daysLeft = Math.ceil((activeSub.expiresAtEpochMs - Date.now()) / (1000 * 60 * 60 * 24));
+          daysLeftText = ` (${daysLeft} days left)`;
+        }
+        if (activeSub.status === 'CANCELLED') {
+          subBadge = `<span class="badge danger">CANCELLED: ${activeSub.planId}</span>`;
+        } else if (activeSub.status === 'EXPIRED') {
+          subBadge = `<span class="badge warning">EXPIRED: ${activeSub.planId}</span>`;
+        } else {
+          subBadge = `<span class="badge success">Plan: ${activeSub.planId || 'ACTIVE'}${daysLeftText}</span>`;
+        }
+      }
 
       const statusBadge = cust.status === 'DEACTIVATED' 
         ? '<span class="badge danger" style="margin-left: 8px;">DEACTIVATED</span>'
@@ -167,37 +179,37 @@ async function loadCustomers() {
       card.className = `customer-card glass ${activeSub ? 'active-sub' : 'expired-sub'} ${cust.status === 'DEACTIVATED' ? 'deactivated' : ''}`;
       card.innerHTML = `
         <div class="card-header">
-          <div>
-            <h3>${cust.businessName || 'Unnamed Business'}</h3>
+          <div style="min-width: 0; padding-right: 8px;">
+            <h3 style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.businessName || 'Unnamed Business'}</h3>
             <span>ID: ${cust.customerId}</span>
           </div>
-          <div style="display: flex; gap: 4px;">
+          <div style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end;">
             ${subBadge}
             ${statusBadge}
           </div>
         </div>
         <div class="card-body">
-          <div class="info-item">
+          <div class="info-item" style="min-width: 0;">
             <span class="label">Owner</span>
-            <span class="value">${cust.ownerName || '—'}</span>
+            <span class="value" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.ownerName || '—'}</span>
           </div>
-          <div class="info-item">
+          <div class="info-item" style="min-width: 0;">
             <span class="label">Mobile Number</span>
-            <span class="value">${cust.mobileNumber || '—'}</span>
+            <span class="value" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.mobileNumber || '—'}</span>
           </div>
-          <div class="info-item">
+          <div class="info-item" style="min-width: 0;">
             <span class="label">Location</span>
-            <span class="value">${cust.city || '—'}</span>
+            <span class="value" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.city || '—'}</span>
           </div>
-          <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+          <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); grid-column: 1 / -1;">
             <div class="label" style="margin-bottom: 8px;">Registered Devices</div>
             ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => `
-              <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 4px;">
-                <div>
-                  <div style="font-size: 12px; font-family: monospace;">${inst.hardwareId || inst.installationId}</div>
-                  <div style="font-size: 11px; color: #888;">${(inst.platform || 'ANDROID').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
+              <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 4px; gap: 8px;">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-size: 12px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${inst.hardwareId || inst.installationId}</div>
+                  <div style="font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${(inst.deviceModel || inst.platform || 'ANDROID').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
                 </div>
-                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px;" onclick="toggleDeviceBan('${inst.hardwareId || inst.installationId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
+                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px; white-space: nowrap; flex-shrink: 0;" onclick="toggleDeviceBan('${inst.hardwareId || inst.installationId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
                   ${inst.status === 'BANNED' ? 'Unblock' : 'Block Device'}
                 </button>
               </div>
@@ -206,6 +218,7 @@ async function loadCustomers() {
         </div>
         <div class="card-actions">
           <button class="btn secondary" onclick="openEditCustomer('${cust.customerId}', '${encodeURIComponent(cust.businessName || '')}', '${encodeURIComponent(cust.ownerName || '')}', '${encodeURIComponent(cust.mobileNumber || '')}', '${encodeURIComponent(cust.city || '')}')">Edit Profile</button>
+          <button class="btn warning" onclick="openManageSubscription('${cust.customerId}')">Manage Sub</button>
           <button class="btn ${cust.status === 'DEACTIVATED' ? 'primary' : 'danger'}" onclick="toggleCustomerStatus('${cust.customerId}', '${cust.status === 'DEACTIVATED' ? 'ACTIVE' : 'DEACTIVATED'}')">
             ${cust.status === 'DEACTIVATED' ? 'Activate' : 'Deactivate'}
           </button>
@@ -390,6 +403,10 @@ async function loadSystemConfigs() {
     document.getElementById('chkAllowTransfers').checked = config.allowP2PTransfers !== false;
     document.getElementById('chkMaintenanceMode').checked = config.maintenanceMode === true;
     document.getElementById('chkStrictAppVersion').checked = config.enforceStrictAppVersion === true;
+    
+    document.getElementById('txtLatestAppVersion').value = config.latestVersion || '1.0.0+1';
+    document.getElementById('txtMinimumAppVersion').value = config.minimumSupportedVersion || '1.0.0+1';
+    document.getElementById('txtApkDownloadUrl').value = config.apkDownloadUrl || '';
   } catch (err) {
     console.warn('Could not inspect initial configs:', err);
   }
@@ -400,7 +417,10 @@ async function saveSystemConfigs() {
     allowPayments: document.getElementById('chkAllowPayments').checked,
     allowP2PTransfers: document.getElementById('chkAllowTransfers').checked,
     maintenanceMode: document.getElementById('chkMaintenanceMode').checked,
-    enforceStrictAppVersion: document.getElementById('chkStrictAppVersion').checked
+    enforceStrictAppVersion: document.getElementById('chkStrictAppVersion').checked,
+    latestAppVersion: document.getElementById('txtLatestAppVersion').value.trim(),
+    minimumAppVersion: document.getElementById('txtMinimumAppVersion').value.trim(),
+    apkDownloadUrl: document.getElementById('txtApkDownloadUrl').value.trim()
   };
 
   try {
@@ -541,4 +561,83 @@ async function savePlans(e) {
 // Event Listeners for Plans
 document.getElementById('btnRefreshPlans')?.addEventListener('click', loadPlans);
 document.getElementById('plansForm')?.addEventListener('submit', savePlans);
+
+// --- Manage Subscription Modal Logic ---
+
+function openManageSubscription(customerId) {
+  document.getElementById('manageSubCustomerId').value = customerId;
+  const actionSelect = document.getElementById('manageSubAction');
+  actionSelect.value = '';
+  actionSelect.dispatchEvent(new Event('change'));
+  document.getElementById('manageSubModal').classList.add('active');
+}
+
+document.getElementById('btnCancelManageSub')?.addEventListener('click', () => {
+  document.getElementById('manageSubModal').classList.remove('active');
+});
+
+document.getElementById('manageSubAction')?.addEventListener('change', (e) => {
+  const val = e.target.value;
+  document.getElementById('manageSubExtendConfig').style.display = val === 'EXTEND' ? 'block' : 'none';
+  document.getElementById('manageSubPlanConfig').style.display = val === 'CHANGE_PLAN' ? 'block' : 'none';
+  document.getElementById('manageSubTransferConfig').style.display = val === 'TRANSFER' ? 'block' : 'none';
+  document.getElementById('manageSubRemoveConfig').style.display = val === 'REMOVE' ? 'block' : 'none';
+});
+
+document.getElementById('manageSubForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const customerId = document.getElementById('manageSubCustomerId').value;
+  const action = document.getElementById('manageSubAction').value;
+  
+  if (!action) {
+    alert('Please select an action');
+    return;
+  }
+  
+  if (action === 'REMOVE') {
+    if (!confirm('Are you absolutely sure you want to cancel this subscription? Access will be immediately revoked.')) {
+      return;
+    }
+  }
+
+  const payload = { action };
+  if (action === 'EXTEND') {
+    const days = parseInt(document.getElementById('manageSubDays').value, 10);
+    if (isNaN(days) || days <= 0) return alert('Enter valid number of days');
+    payload.daysToAdd = days;
+  } else if (action === 'CHANGE_PLAN') {
+    payload.newPlanId = document.getElementById('manageSubPlanId').value;
+  } else if (action === 'TRANSFER') {
+    const hwId = document.getElementById('manageSubNewHardwareId').value.trim();
+    if (!hwId) return alert('Enter the new Hardware ID');
+    payload.newHardwareId = hwId;
+  }
+
+  const submitBtn = document.querySelector('#manageSubForm button[type="submit"]');
+  const originalText = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Processing...';
+
+  try {
+    const resp = await fetch(`${apiBaseUrl}/admin/customers/${customerId}/subscription`, {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify(payload)
+    });
+    const resJson = await resp.json();
+    if (resJson.success) {
+      alert(`Success: ${resJson.message}`);
+      document.getElementById('manageSubModal').classList.remove('active');
+      loadCustomers();
+      loadAuditLogs();
+    } else {
+      alert(`Update Failed: ${resJson.error?.message || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Network Error: ${err.message}`);
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = originalText;
+  }
+});
 

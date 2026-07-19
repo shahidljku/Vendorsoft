@@ -14,6 +14,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../widgets/system_diagnostics_modal.dart';
 import '../widgets/settings_auxiliary_modals.dart';
 import 'help_and_faq_screen.dart';
+import '../services/trial_service.dart';
 
 class SettingsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -48,6 +49,8 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   bool _waitingForAccessibility = false;
   String _dynamicVersion = '';
   String _dynamicAppName = '';
+  String _currentPlanName = 'Free Trial';
+  int _daysLeft = 0;
 
   @override
   void initState() {
@@ -104,6 +107,25 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     _dynamicVersion = '${packageInfo.version} (Build ${packageInfo.buildNumber})';
     _dynamicAppName = packageInfo.appName;
 
+    bool isLicensed = await LicenseService().isLicensed();
+    if (isLicensed) {
+      final info = LicenseService().getLicenseInfo();
+      _daysLeft = LicenseService().getDaysRemaining();
+      final pId = info?['planId'];
+      if (pId == 'PRO_YEARLY') {
+        _currentPlanName = 'Pro Annual';
+      } else if (pId == 'PRO_MONTHLY') {
+        _currentPlanName = 'Pro Monthly';
+      } else if (info?['customerType'] == 'Lifetime') {
+        _currentPlanName = 'Lifetime Pro';
+      } else {
+        _currentPlanName = pId ?? 'Active Subscription';
+      }
+    } else {
+      _currentPlanName = 'Free Trial';
+      _daysLeft = TrialService().daysRemaining;
+    }
+
     setState(() {
       _isLoading = false;
     });
@@ -128,6 +150,50 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
+          _buildSettingsGroup(
+            title: 'Current Subscription',
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.workspace_premium, color: Color(0xFF00E676), size: 32),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(_currentPlanName, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 4),
+                          Text(
+                            _daysLeft > 9000 ? 'Lifetime Access' : '$_daysLeft Days Remaining', 
+                            style: const TextStyle(color: Color(0xFF00E676), fontSize: 14, fontWeight: FontWeight.w500)
+                          ),
+                        ],
+                      ),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF00E676).withValues(alpha: 0.1),
+                        foregroundColor: const Color(0xFF00E676),
+                        elevation: 0,
+                      ),
+                      onPressed: () => SubscriptionDialog.showPlans(context),
+                      child: const Text('Upgrade'),
+                    )
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           _buildSettingsGroup(
             title: 'Profile & Business Details',
             children: [
@@ -361,12 +427,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
           _buildSettingsGroup(
             title: 'About & License',
             children: [
-              _buildSettingItem(
-                icon: Icons.workspace_premium,
-                title: 'Subscription Plans & Upgrade',
-                subtitle: 'View Monthly (₹799) & Yearly (₹9,499) plans',
-                onTap: () => SubscriptionDialog.showPlans(context),
-              ),
               _buildSettingItem(
                 icon: Icons.info_outline,
                 title: 'App Version',

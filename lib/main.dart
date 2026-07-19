@@ -23,6 +23,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'firebase_options.dart';
 import 'services/push_notification_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'screens/update_required_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,6 +69,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   bool _isOfflineLocked = false;
   bool _isSuperseded = false;
   String _maintenanceMessage = '';
+  bool _isUpdateRequired = false;
 
   @override
   void initState() {
@@ -125,6 +128,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
 
     ConfigService().onConfigUpdated.listen((_) {
       if (mounted) {
+        _checkAppVersion();
         setState(() {
           _isMaintenanceMode = ConfigService().isMaintenanceMode;
           _maintenanceMessage = ConfigService().maintenanceMessage;
@@ -134,6 +138,25 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     ConfigService().startBackgroundPolling();
     LicenseService().startBackgroundPolling();
     _loadSettings();
+  }
+
+  Future<void> _checkAppVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentVersion = '${packageInfo.version}+${packageInfo.buildNumber}';
+      final requiresUpdate = ConfigService().isUpdateRequired(currentVersion);
+      if (mounted && requiresUpdate != _isUpdateRequired) {
+        setState(() {
+          _isUpdateRequired = requiresUpdate;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to check app version: $e');
+    }
+  }
+
+  Future<void> _initTimeGuard() async {
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
@@ -213,6 +236,8 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     if (lastUri != null && lastUri.isNotEmpty && lastName != null) {
       await _excelService.loadFromUri(lastUri, lastName);
     }
+
+    await _checkAppVersion();
 
     setState(() {
       _themeMode = _parseThemeMode(themeStr);
@@ -317,7 +342,14 @@ class _ImageSenderAppState extends State<ImageSenderApp>
         return Stack(
           children: [
             if (child != null) child,
-            if (_isDeactivated)
+            if (_isUpdateRequired)
+              Positioned.fill(
+                child: UpdateRequiredScreen(
+                  apkDownloadUrl: ConfigService().apkDownloadUrl,
+                  latestVersion: ConfigService().latestVersion,
+                ),
+              )
+            else if (_isDeactivated)
               const Positioned.fill(
                 child: AccountDeactivatedScreen(),
               )

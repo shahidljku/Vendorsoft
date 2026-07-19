@@ -32,7 +32,23 @@ export async function handleAdminSearchCustomers(request: Request, env: Env): Pr
       const subscriptions = await queryCollection(env, 'subscriptions', [
         { field: 'customerId', op: 'EQUAL', value: customer.customerId }
       ]);
-      const activeSub = subscriptions.find((s: any) => s.status === 'ACTIVE') || subscriptions[0] || null;
+      let activeSub = subscriptions.find((s: any) => s.status === 'ACTIVE') || subscriptions[0] || null;
+      
+      if (!activeSub) {
+        const trials = await queryCollection(env, 'hardware_trials', [
+          { field: 'customerId', op: 'EQUAL', value: customer.customerId }
+        ]);
+        if (trials.length > 0) {
+          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
+          const trial = trials[0];
+          activeSub = {
+            subscriptionId: `TRIAL_${trial.hardwareId}`,
+            planId: 'FREE_TRIAL_30',
+            status: trial.status === 'CANCELLED' ? 'CANCELLED' : (Date.now() > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE'),
+            expiresAtEpochMs: trial.expiresAtEpochMs
+          };
+        }
+      }
 
       detailedCustomers.push({
         ...customer,
@@ -385,6 +401,9 @@ export async function handleAdminUpdateSystemConfig(request: Request, env: Env, 
       allowP2PTransfers: body.allowP2PTransfers !== undefined ? body.allowP2PTransfers : (existingConfig.allowP2PTransfers ?? true),
       maintenanceMode: body.maintenanceMode !== undefined ? body.maintenanceMode : (existingConfig.maintenanceMode ?? false),
       enforceStrictAppVersion: body.enforceStrictAppVersion !== undefined ? body.enforceStrictAppVersion : (existingConfig.enforceStrictAppVersion ?? false),
+      latestVersion: body.latestAppVersion !== undefined ? body.latestAppVersion : existingConfig.latestVersion,
+      minimumSupportedVersion: body.minimumAppVersion !== undefined ? body.minimumAppVersion : existingConfig.minimumSupportedVersion,
+      apkDownloadUrl: body.apkDownloadUrl !== undefined ? body.apkDownloadUrl : existingConfig.apkDownloadUrl,
       updatedAtEpochMs: Date.now(),
       updatedBy: adminUid
     };
@@ -502,5 +521,207 @@ export async function handleAdminUpdatePlans(request: Request, env: Env, adminUi
   } catch (err: any) {
     console.error('Error in handleAdminUpdatePlans:', err);
     return createErrorResponse(500, 'ADMIN_UPDATE_PLANS_FAILED', `Failed to update plans: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles PUT /api/v1/admin/customers/:customerId/subscription
+ * Manages the subscription (Extend, Change Plan, Transfer, Remove).
+ */
+export async function handleAdminManageSubscription(request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
+  try {
+    const body = await request.json() as { action: string; daysToAdd?: number; newPlanId?: string; newHardwareId?: string };
+    
+    // Find active subscription or trial
+    const subscriptions = await queryCollection(env, 'subscriptions', [
+      { field: 'customerId', op: 'EQUAL', value: customerId }
+    ]);
+    let activeSub = subscriptions.find((s: any) => s.status === 'ACTIVE') || subscriptions[0] || null;
+    let isTrial = false;
+    let trialId = '';
+    
+    if (!activeSub) {
+      // Check for hardware trial
+      const existingTrials = await queryCollection(env, 'hardware_trials', [
+        { field: 'customerId', op: 'EQUAL', value: customerId }
+      ]);
+      if (existingTrials.length > 0) {
+        activeSub = existingTrials[0];
+        isTrial = true;
+        trialId = activeSub.hardwareId || activeSub.installationId;
+      }
+    }
+
+    const now = Date.now();
+    const action = body.action?.toUpperCase();
+
+    if (!activeSub && action !== 'CHANGE_PLAN' && action !== 'EXTEND') {
+      return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', `No active subscription or trial found for customer ${customerId}.`);
+    }
+
+    if (action === 'EXTEND') {
+      const days = body.daysToAdd || 0;
+      if (days <= 0) return createErrorResponse(400, 'INVALID_DAYS', 'daysToAdd must be greater than 0.');
+      
+      const additionalMs = days * 24 * 60 * 60 * 1000;
+      
+      if (!activeSub) {
+        // Create a new subscription if none exists
+        let hwId = null;
+        const installs = await queryCollection(env, 'installations', [
+           { field: 'customerId', op: 'EQUAL', value: customerId }
+        ]);
+        if (installs.length > 0) {
+           installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
+           hwId = installs[0].hardwareId || installs[0].installationId;
+        }
+        
+        const newSubId = `SUB_${crypto.randomUUID()}`;
+        activeSub = {
+          subscriptionId: newSubId,
+          customerId,
+          activeInstallationId: hwId,
+          planId: 'FREE_TRIAL_30', // default fallback plan
+          status: 'ACTIVE',
+          startsAtEpochMs: now,
+          expiresAtEpochMs: now + additionalMs,
+          createdAtEpochMs: now,
+          updatedAtEpochMs: now
+        };
+        await setDocument(env, 'subscriptions', newSubId, activeSub);
+      } else {
+        // If the subscription was cancelled, reactivate it and start the timer from NOW
+        if (activeSub!.status === 'CANCELLED' || (activeSub!.expiresAtEpochMs && activeSub!.expiresAtEpochMs < now)) {
+           activeSub!.expiresAtEpochMs = now;
+        }
+        activeSub!.expiresAtEpochMs = (activeSub!.expiresAtEpochMs || now) + additionalMs;
+        activeSub!.status = 'ACTIVE';
+        
+        if (isTrial) {
+          await setDocument(env, 'hardware_trials', trialId, activeSub);
+        } else {
+          await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+        }
+      }
+
+    } else if (action === 'CHANGE_PLAN') {
+      if (!body.newPlanId) return createErrorResponse(400, 'MISSING_PLAN_ID', 'newPlanId is required.');
+      
+      if (isTrial || !activeSub) {
+        // Upgrade from trial (or nothing) to PRO
+        let hwId = activeSub?.hardwareId || activeSub?.activeInstallationId;
+        if (!hwId) {
+          const installs = await queryCollection(env, 'installations', [
+             { field: 'customerId', op: 'EQUAL', value: customerId }
+          ]);
+          if (installs.length > 0) {
+             installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
+             hwId = installs[0].hardwareId || installs[0].installationId;
+          }
+        }
+        
+        // Determine days based on plan
+        let planDays = 30; // default
+        if (body.newPlanId.includes('YEAR')) planDays = 365;
+        if (body.newPlanId === 'FREE_TRIAL_30') planDays = 30;
+        
+        const newSubId = `SUB_${crypto.randomUUID()}`;
+        const newSub = {
+          subscriptionId: newSubId,
+          customerId,
+          activeInstallationId: hwId,
+          planId: body.newPlanId,
+          status: 'ACTIVE',
+          startsAtEpochMs: now,
+          expiresAtEpochMs: now + (planDays * 24 * 60 * 60 * 1000),
+          createdAtEpochMs: now,
+          updatedAtEpochMs: now
+        };
+        await setDocument(env, 'subscriptions', newSubId, newSub);
+        if (isTrial && trialId) {
+          await deleteDocument(env, 'hardware_trials', trialId);
+        }
+        activeSub = newSub;
+        isTrial = false;
+      } else {
+        // Determine days based on plan
+        let planDays = 30; // default
+        if (body.newPlanId.includes('YEAR')) planDays = 365;
+        if (body.newPlanId === 'FREE_TRIAL_30') planDays = 30;
+        
+        activeSub.planId = body.newPlanId;
+        activeSub.status = 'ACTIVE';
+        activeSub.expiresAtEpochMs = now + (planDays * 24 * 60 * 60 * 1000);
+        activeSub.updatedAtEpochMs = now;
+        await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+      }
+
+    } else if (action === 'TRANSFER') {
+      if (!body.newHardwareId) return createErrorResponse(400, 'MISSING_HARDWARE_ID', 'newHardwareId is required.');
+      const oldHardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
+      
+      if (isTrial) {
+        activeSub.hardwareId = body.newHardwareId;
+        await setDocument(env, 'hardware_trials', body.newHardwareId, activeSub);
+        await deleteDocument(env, 'hardware_trials', trialId);
+      } else {
+        activeSub.activeInstallationId = body.newHardwareId;
+        activeSub.updatedAtEpochMs = now;
+        await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+      }
+      
+      // Revoke old installation
+      if (oldHardwareId) {
+        const sourceInst = await getDocument(env, 'installations', oldHardwareId);
+        if (sourceInst) {
+          await setDocument(env, 'installations', oldHardwareId, {
+            ...sourceInst,
+            status: 'REVOKED',
+            revokedAtEpochMs: now,
+            revokedReason: `Admin transfer override to ${body.newHardwareId}`
+          });
+        }
+      }
+
+    } else if (action === 'REMOVE') {
+      const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
+      if (isTrial) {
+        activeSub.status = 'CANCELLED';
+        await setDocument(env, 'hardware_trials', trialId, activeSub);
+      } else {
+        activeSub.status = 'CANCELLED';
+        activeSub.updatedAtEpochMs = now;
+        await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+      }
+      
+      if (hardwareId) {
+        const sourceInst = await getDocument(env, 'installations', hardwareId);
+        if (sourceInst) {
+          await setDocument(env, 'installations', hardwareId, {
+            ...sourceInst,
+            status: 'REVOKED',
+            revokedAtEpochMs: now,
+            revokedReason: 'Subscription removed by Admin'
+          });
+        }
+      }
+    } else {
+      return createErrorResponse(400, 'INVALID_ACTION', 'Action must be one of: EXTEND, CHANGE_PLAN, TRANSFER, REMOVE');
+    }
+
+    await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', {
+      adminUid,
+      customerId,
+      action,
+      details: body
+    });
+
+    return new Response(JSON.stringify({ success: true, message: `Subscription successfully processed for action: ${action}` }), {
+      status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+
+  } catch (err: any) {
+    console.error('Error in handleAdminManageSubscription:', err);
+    return createErrorResponse(500, 'ADMIN_MANAGE_SUB_FAILED', `Failed to manage subscription: ${err.message || err}`);
   }
 }

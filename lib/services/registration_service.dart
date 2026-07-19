@@ -3,7 +3,9 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'license_service.dart';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'push_notification_service.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 class TransferRequiredException implements Exception {
   final String message;
@@ -39,7 +41,7 @@ class RegistrationService {
       'x-hardware-id': hardwareId,
       'x-installation-uuid': hardwareId, // Fallback to hardwareId for simplicity
       'x-app-version': '1.0.0',
-      'x-platform': Platform.operatingSystem,
+      'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
     };
   }
 
@@ -48,19 +50,34 @@ class RegistrationService {
     String? ownerName,
     required String mobileNumber,
     String? city,
+    bool recoverOnly = false,
   }) async {
     try {
       final headers = await _buildHeaders();
       final url = Uri.parse('$baseUrl/customers/register');
       
       final fcmToken = PushNotificationService().fcmToken;
+      
+      String deviceModelName = kIsWeb ? 'web' : Platform.operatingSystem;
+      try {
+        if (!kIsWeb && Platform.isAndroid) {
+          final androidInfo = await DeviceInfoPlugin().androidInfo;
+          deviceModelName = '${androidInfo.manufacturer} ${androidInfo.model}'.trim();
+        } else if (!kIsWeb && Platform.isIOS) {
+          final iosInfo = await DeviceInfoPlugin().iosInfo;
+          deviceModelName = iosInfo.name;
+        }
+      } catch (e) {
+        print('Error getting device info: $e');
+      }
 
       final body = jsonEncode({
         'businessName': businessName ?? 'Unknown',
         'ownerName': ownerName ?? 'Unknown',
         'mobileNumber': mobileNumber,
         'city': city ?? 'Unknown',
-        'deviceModel': Platform.operatingSystem,
+        'deviceModel': deviceModelName,
+        'recoverOnly': recoverOnly,
         if (fcmToken != null) 'fcmToken': fcmToken,
       });
 
@@ -99,6 +116,19 @@ class RegistrationService {
     } catch (e) {
       print('Registration failed: $e');
       rethrow;
+    }
+  }
+
+  Future<void> logoutFromServer() async {
+    try {
+      final headers = await _buildHeaders();
+      final url = Uri.parse('$baseUrl/customers/logout');
+      final response = await http.post(url, headers: headers);
+      if (response.statusCode == 200) {
+        print('Logged out from server successfully.');
+      }
+    } catch (e) {
+      print('Error logging out from server: $e');
     }
   }
 }

@@ -49,11 +49,27 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       );
     }
 
-    // 3. Query active subscriptions for this customer
-    const activeSubs = await queryCollection(env, 'subscriptions', [
-      { field: 'customerId', op: 'EQUAL', value: customerId },
-      { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
+    // 2.75 Check for any explicitly CANCELLED subscriptions or trials
+    const allSubs = await queryCollection(env, 'subscriptions', [
+      { field: 'customerId', op: 'EQUAL', value: customerId }
     ]);
+    const cancelledSubs = allSubs.filter((s: any) => s.status === 'CANCELLED');
+    
+    const allTrials = await queryCollection(env, 'hardware_trials', [
+      { field: 'customerId', op: 'EQUAL', value: customerId }
+    ]);
+    const cancelledTrials = allTrials.filter((t: any) => t.status === 'CANCELLED');
+
+    if (cancelledSubs.length > 0 || cancelledTrials.length > 0) {
+      return createErrorResponse(
+        403,
+        'SUBSCRIPTION_CANCELLED',
+        'Your subscription has been cancelled. Please activate a new plan.'
+      );
+    }
+
+    // 3. Find active subscriptions for this customer
+    const activeSubs = allSubs.filter((s: any) => s.status === 'ACTIVE');
 
     let sub: any = null;
     const now = Date.now();
@@ -76,18 +92,23 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       let trialExpiresAt = now + THIRTY_DAYS_MS;
 
       if (!hardwareTrialDoc) {
-        // Check if customer already has a trial on another device
-        const existingTrials = await queryCollection(env, 'hardware_trials', [
-          { field: 'customerId', op: 'EQUAL', value: customerId }
-        ]);
-        
-        if (existingTrials.length > 0) {
-          return createErrorResponse(
-            403,
-            'INSTALLATION_SUPERSEDED',
-            'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.',
-            { activeInstallationId: existingTrials[0].hardwareId }
-          );
+        if (allTrials.length > 0) {
+          const existingTrial = allTrials.find((t: any) => t.status !== 'CANCELLED');
+          if (existingTrial) {
+            if (now > existingTrial.expiresAtEpochMs) {
+              return createErrorResponse(
+                403,
+                'TRIAL_EXPIRED',
+                'Your 30-Day Hardware Free Trial has expired. Please activate with a Pro plan.'
+              );
+            }
+            return createErrorResponse(
+              403,
+              'INSTALLATION_SUPERSEDED',
+              'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.',
+              { activeInstallationId: existingTrial.hardwareId }
+            );
+          }
         }
 
         // Start new trial

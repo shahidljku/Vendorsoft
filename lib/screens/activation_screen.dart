@@ -1,10 +1,16 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
-import '../services/license_service.dart';
+import 'package:image_sender/services/license_service.dart';
 import '../services/payment_service.dart';
 import '../services/transfer_service.dart';
+import '../services/registration_service.dart';
+import '../services/settings_service.dart';
+import '../main.dart';
 import 'transfer_pending_screen.dart';
 
 class ActivationScreen extends StatefulWidget {
@@ -27,12 +33,61 @@ class _ActivationScreenState extends State<ActivationScreen> {
   bool _isLoading = true;
   String _errorMessage = '';
   List<dynamic> _plans = [];
+  bool _wasCancelled = false;
+  Timer? _pollingTimer;
 
   @override
   void initState() {
     super.initState();
     _loadDeviceId();
     _loadPlans();
+    _checkCancelledState();
+    _startPolling();
+  }
+
+  void _startPolling() {
+    _pollingTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (mounted && !_isLoading) {
+        await widget.licenseService.pollOnlineSubscriptionStatus(force: true);
+        final isLic = await widget.licenseService.isLicensed();
+        final isDemo = await widget.licenseService.isDemoMode();
+        if (isLic && !isDemo && mounted) {
+          timer.cancel();
+          widget.onActivated();
+        }
+      }
+    });
+  }
+
+  Future<void> _checkCancelledState() async {
+    const storage = const FlutterSecureStorage();
+    final val = await storage.read(key: 'was_cancelled_on_device');
+    if (mounted) {
+      setState(() {
+        _wasCancelled = val == 'true';
+      });
+    }
+  }
+
+  Future<void> _logout() async {
+    setState(() => _isLoading = true);
+    const storage = const FlutterSecureStorage();
+    await storage.delete(key: 'was_cancelled_on_device');
+    
+    // Log out from the server to invalidate the device session/FCM token
+    try {
+      await RegistrationService().logoutFromServer();
+    } catch(e) {}
+    
+    await FirebaseAuth.instance.signOut();
+    
+    // Reset terms acceptance so they are forced back to OnboardingScreen to register a new account
+    await SettingsService().setHasAcceptedTerms(false);
+    
+    if (mounted) {
+      // Use UniqueKey to force Flutter to completely destroy and rebuild the ImageSenderApp state
+      runApp(ImageSenderApp(key: UniqueKey()));
+    }
   }
 
   Future<void> _loadPlans() async {
@@ -117,81 +172,11 @@ class _ActivationScreenState extends State<ActivationScreen> {
     );
   }
 
-  void _showTransferDialog() {
-    final TextEditingController transferController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF161B22),
-        title: const Text('Transfer License', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Enter the registered Mobile Number or Customer ID of the license you want to claim on this device.',
-              style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: transferController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Mobile Number or Customer ID',
-                labelStyle: const TextStyle(color: Colors.grey),
-                enabledBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.white24)),
-                focusedBorder: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
-            onPressed: () async {
-              final val = transferController.text.trim();
-              if (val.isEmpty) return;
-              Navigator.pop(ctx);
-              
-              setState(() => _isLoading = true);
-              try {
-                final response = await TransferService().requestTransfer(
-                  mobileNumber: val.startsWith('+') || int.tryParse(val) != null ? val : null,
-                  customerId: val.startsWith('cus_') ? val : null,
-                );
-                if (mounted) {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (ctx) => TransferPendingScreen(
-                        transferId: response['transferId'],
-                        customerId: val.startsWith('cus_') ? val : '',
-                        mobileNumber: val.startsWith('+') || int.tryParse(val) != null ? val : '',
-                      ),
-                    ),
-                  );
-                }
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: ${e.toString().replaceAll('Exception: ', '')}'), backgroundColor: Colors.redAccent));
-                }
-              }
-              if (mounted) {
-                setState(() => _isLoading = false);
-              }
-            },
-            child: const Text('Request Transfer'),
-          ),
-        ],
-      ),
-    );
-  }
+
 
   @override
   void dispose() {
+    _pollingTimer?.cancel();
     _licenseController.dispose();
     PaymentService().dispose();
     super.dispose();
@@ -445,18 +430,26 @@ class _ActivationScreenState extends State<ActivationScreen> {
                       ),
                       const SizedBox(height: 16),
                       */
+                      if (_wasCancelled) ...[
+                        Text(
+                          'Your subscription has expired or been cancelled. Please select a plan to continue.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.redAccent.shade100, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       SizedBox(
                         width: double.infinity,
                         child: OutlinedButton(
-                          onPressed: _isLoading ? null : _showTransferDialog,
+                          onPressed: _isLoading ? null : _logout,
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            foregroundColor: const Color(0xFF00E676),
-                            side: const BorderSide(color: Color(0xFF00E676)),
+                            foregroundColor: Colors.grey,
+                            side: const BorderSide(color: Colors.grey),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
                           child: const Text(
-                            'Recover / Transfer Account',
+                            'Logout / Switch Account',
                             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                           ),
                         ),

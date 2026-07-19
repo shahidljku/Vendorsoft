@@ -211,6 +211,27 @@
               <span class="slider round"></span>
             </label>
           </div>
+
+          <div class="config-card glass" style="grid-column: 1 / -1; padding-top: 16px;">
+            <div class="config-info">
+              <h3>OTA Update Settings</h3>
+              <p>Provide the version information and Direct Download Link for the latest APK.</p>
+            </div>
+            <div style="display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap;">
+              <div class="form-group" style="flex: 1; min-width: 200px;">
+                <label>Latest App Version</label>
+                <input type="text" id="txtLatestAppVersion" placeholder="e.g. 1.0.2+3" />
+              </div>
+              <div class="form-group" style="flex: 1; min-width: 200px;">
+                <label>Minimum App Version</label>
+                <input type="text" id="txtMinimumAppVersion" placeholder="e.g. 1.0.1+2" />
+              </div>
+              <div class="form-group" style="flex: 2; min-width: 300px;">
+                <label>APK Direct Download Link (Firebase Storage / GitHub)</label>
+                <input type="text" id="txtApkDownloadUrl" placeholder="https://..." />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -273,6 +294,60 @@
         <div class="modal-actions">
           <button type="button" class="btn secondary" id="btnCancelEdit">Cancel</button>
           <button type="submit" class="btn primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal for Managing Subscription -->
+  <div id="manageSubModal" class="modal-backdrop">
+    <div class="modal-card glass" style="max-width: 500px;">
+      <h3>Manage Customer Subscription</h3>
+      <p class="modal-sub">Updates directly alter the active license and hardware bindings. Be careful.</p>
+      
+      <form id="manageSubForm" class="edit-form">
+        <input type="hidden" id="manageSubCustomerId" />
+        
+        <div class="form-group">
+          <label>Select Action</label>
+          <select id="manageSubAction" required>
+            <option value="" disabled selected>Choose an action...</option>
+            <option value="EXTEND">Extend Subscription (Add Days)</option>
+            <option value="CHANGE_PLAN">Update / Change Plan</option>
+            <option value="TRANSFER">Transfer Device (Force Hardware ID)</option>
+            <option value="REMOVE">Remove / Cancel Subscription</option>
+          </select>
+        </div>
+
+        <div id="manageSubExtendConfig" class="form-group" style="display: none; margin-top: 1rem;">
+          <label>Days to Add</label>
+          <input type="number" id="manageSubDays" placeholder="e.g. 30" min="1" />
+        </div>
+
+        <div id="manageSubPlanConfig" class="form-group" style="display: none; margin-top: 1rem;">
+          <label>Select New Plan</label>
+          <select id="manageSubPlanId">
+            <option value="PRO_MONTHLY">Pro Monthly</option>
+            <option value="PRO_YEARLY">Pro Annual</option>
+            <option value="FREE_TRIAL_30">30-Day Pro Trial</option>
+          </select>
+        </div>
+
+        <div id="manageSubTransferConfig" class="form-group" style="display: none; margin-top: 1rem;">
+          <label>New Hardware ID</label>
+          <input type="text" id="manageSubNewHardwareId" placeholder="Enter target hardware ID" />
+          <small style="color: #ffaa00;">This will instantly revoke access on the old device.</small>
+        </div>
+
+        <div id="manageSubRemoveConfig" class="form-group" style="display: none; margin-top: 1rem;">
+          <p style="color: #ff4444; font-weight: bold; background: rgba(255, 0, 0, 0.1); padding: 8px; border-radius: 4px;">
+            ⚠️ WARNING: This will immediately cancel the active subscription and block access on the current device.
+          </p>
+        </div>
+        
+        <div class="modal-actions" style="margin-top: 1.5rem;">
+          <button type="button" class="btn secondary" id="btnCancelManageSub">Cancel</button>
+          <button type="submit" class="btn primary" id="btnConfirmManageSub">Confirm Action</button>
         </div>
       </form>
     </div>

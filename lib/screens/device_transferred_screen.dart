@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../main.dart';
+import '../services/license_service.dart';
 
 class DeviceTransferredScreen extends StatelessWidget {
   const DeviceTransferredScreen({super.key});
@@ -43,11 +44,7 @@ class DeviceTransferredScreen extends StatelessWidget {
               const SizedBox(height: 32),
               ElevatedButton(
                 onPressed: () {
-                  // Restart the app state to go back to ActivationScreen
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (ctx) => const ImageSenderApp()),
-                    (route) => false,
-                  );
+                  LicenseService().triggerLoginReset();
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00E676),

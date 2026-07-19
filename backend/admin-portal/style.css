@@ -437,6 +437,7 @@ body {
   border-radius: 12px;
   font-size: 0.75rem;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .badge.success { background: rgba(46, 160, 67, 0.2); color: #56d364; }

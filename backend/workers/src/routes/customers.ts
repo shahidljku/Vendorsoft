@@ -84,6 +84,8 @@ export async function handleCustomerRegistration(
     );
   }
 
+  const recoverOnly = body.recoverOnly === true;
+
   const now = Date.now();
   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -127,6 +129,18 @@ export async function handleCustomerRegistration(
         }
       }
 
+      if (!latestSub) {
+        // The user exists but has no subscriptions or trials (e.g. they were completely deleted).
+        // Synthesize a CANCELLED subscription so the frontend allows them to log in and purchase a plan.
+        latestSub = {
+          subscriptionId: `SUB_NONE_${oldCust.customerId}`,
+          planId: 'FREE_TRIAL_30',
+          activeInstallationId: identity.hardwareId || identity.installationId,
+          status: 'CANCELLED',
+          expiresAtEpochMs: 0
+        };
+      }
+
       if (latestSub) {
         let isSameDevice = (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId);
         
@@ -148,13 +162,21 @@ export async function handleCustomerRegistration(
           const activeInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
           if (activeInst && activeInst.hardwareId === identity.hardwareId) {
             isSameDevice = true;
+          } else if (latestSub.status === 'EXPIRED' || latestSub.status === 'CANCELLED' || (latestSub.expiresAtEpochMs && now > latestSub.expiresAtEpochMs)) {
+            // If subscription is dead, allow login on new device so they can purchase a new one
+            isSameDevice = true;
+            if (latestSub.planId !== 'FREE_TRIAL_30') {
+              latestSub.activeInstallationId = identity.hardwareId || identity.installationId;
+              latestSub.updatedAtEpochMs = now;
+              await setDocument(env, 'subscriptions', latestSub.subscriptionId, latestSub);
+            }
           }
         }
 
         if (isSameDevice) {
           let token = latestSub.signedLeaseToken;
           
-          // If this is a trial recovery, the token wasn't saved in DB, so generate it on the fly
+          // If this is a trial recovery or synthetic, the token wasn't saved in DB, so generate it on the fly
           if (!token && latestSub.planId === 'FREE_TRIAL_30') {
             const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
             const leasePayload = {
@@ -203,21 +225,28 @@ export async function handleCustomerRegistration(
           return createErrorResponse(403, 'TRANSFER_REQUIRED', `This phone number is registered to another device. Please request a transfer.`);
         }
       }
-      
-      return createErrorResponse(400, 'ACCOUNT_ERROR', 'Account exists but has no subscriptions or trials. Please contact support.');
     }
   } catch (err: any) {
     console.error('Database error during mobileNumber lookup:', err);
     return createErrorResponse(500, 'DB_ERROR', 'Failed to verify account uniqueness. Please try again.');
   }
 
-  // 4.5. Hardware-Locked Trial Check
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 4.5. MULTI-LAYER HARDWARE-LOCKED TRIAL CHECK
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CRITICAL SECURITY: This block prevents trial abuse. NEVER REMOVE OR WEAKEN.
+  //
+  // Layer 1: hardwareId (SHA-256 of Android ID + board + brand + device + hardware + manufacturer + model + product)
+  // Layer 2: installationUuid (FlutterSecureStorage UUID — survives app updates but not uninstall)
+  // Layer 3: Firebase UID (anonymous auth — new on each sign-in, but we track historical UIDs)
+  // Layer 4: Registration rate-limit (max 3 accounts per hardware in 24h to block scripted abuse)
+  // ═══════════════════════════════════════════════════════════════════════════
   let trialStartsAt = now;
   let trialExpiresAt = now + THIRTY_DAYS_MS;
   let isHardwareTrialExpired = false;
 
   try {
-    // Check if this physical hardware OR this specific installation UUID has already claimed a trial
+    // --- LAYER 1: Primary check by physical hardware ID ---
     const hardwareTrials = await queryCollection(env, 'hardware_trials', [
       { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
     ]);
@@ -226,6 +255,17 @@ export async function handleCustomerRegistration(
     
     if (!hardwareTrialDoc && hardwareTrials && hardwareTrials.length > 0) {
       hardwareTrialDoc = hardwareTrials[0];
+    }
+
+    // --- LAYER 2: Secondary check by installationUuid (catches reinstalls with same secure storage) ---
+    if (!hardwareTrialDoc && identity.installationUuid) {
+      const uuidTrials = await queryCollection(env, 'hardware_trials', [
+        { field: 'installationUuid', op: 'EQUAL', value: identity.installationUuid }
+      ]);
+      if (uuidTrials && uuidTrials.length > 0) {
+        hardwareTrialDoc = uuidTrials[0];
+        console.warn(`[ABUSE_DETECT] Hardware ID mismatch but installationUuid match. HW=${identity.hardwareId}, UUID=${identity.installationUuid}`);
+      }
     }
 
     if (hardwareTrialDoc) {
@@ -237,9 +277,54 @@ export async function handleCustomerRegistration(
         isHardwareTrialExpired = true;
       }
     }
+
+    // --- LAYER 3: Check how many accounts this hardware has already created (rate limit) ---
+    const existingInstallsForHW = await queryCollection(env, 'installations', [
+      { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
+    ]);
+    if (existingInstallsForHW && existingInstallsForHW.length > 0) {
+      // Count registrations in the last 24 hours from this hardware
+      const recentRegistrations = existingInstallsForHW.filter(
+        (inst: any) => inst.createdAtEpochMs && (now - inst.createdAtEpochMs) < (24 * 60 * 60 * 1000)
+      );
+      if (recentRegistrations.length >= 3) {
+        console.error(`[ABUSE_BLOCK] Hardware ${identity.hardwareId} has ${recentRegistrations.length} registrations in last 24h. Blocking.`);
+        await logAuditEvent(env, {
+          action: 'REGISTRATION_RATE_LIMITED',
+          actorType: 'SYSTEM',
+          actorId: 'anti-abuse',
+          targetType: 'hardware',
+          targetId: identity.hardwareId,
+          details: `Blocked registration: ${recentRegistrations.length} accounts in 24h from same hardware. Phone: ${inputMobileNumber}`,
+          timestampMs: now
+        });
+        return createErrorResponse(429, 'RATE_LIMITED', 'Too many registration attempts from this device. Please try again later.');
+      }
+
+      // If this hardware already has accounts and trial is expired, force expired status
+      if (!hardwareTrialDoc && existingInstallsForHW.length > 0) {
+        // This device has registered before but somehow the trial doc is missing.
+        // Find the oldest installation to reconstruct the trial period.
+        const oldest = existingInstallsForHW.reduce((a: any, b: any) => 
+          ((a.createdAtEpochMs || Infinity) < (b.createdAtEpochMs || Infinity)) ? a : b
+        );
+        if (oldest.createdAtEpochMs) {
+          trialStartsAt = oldest.createdAtEpochMs;
+          trialExpiresAt = oldest.createdAtEpochMs + THIRTY_DAYS_MS;
+          if (now > trialExpiresAt) {
+            isHardwareTrialExpired = true;
+          }
+          console.warn(`[TRIAL_RECOVER] Reconstructed trial period from oldest installation for HW=${identity.hardwareId}`);
+        }
+      }
+    }
   } catch(err) {
      console.error('Hardware Trial check error:', err);
      return createErrorResponse(500, 'DB_ERROR', 'Failed to verify hardware trial status.');
+  }
+
+  if (recoverOnly) {
+    return createErrorResponse(404, 'NO_CUSTOMER_FOUND', 'No active account found with this mobile number. Please register as a new user.');
   }
 
   // 5. Generate immutable entity keys (`cus_xxxxxxxxx`, `inst_xxxxxxxxx`)
@@ -314,6 +399,9 @@ export async function handleCustomerRegistration(
       documentId: identity.hardwareId,
       data: {
         hardwareId: identity.hardwareId,
+        installationUuid: identity.installationUuid,
+        firebaseUid: identity.uid,
+        mobileNumber: inputMobileNumber,
         startedAtEpochMs: trialStartsAt,
         expiresAtEpochMs: trialExpiresAt,
         customerId: customerId,
@@ -419,5 +507,27 @@ export async function handleUpdateFcmToken(request: Request, env: Env, identity:
     console.error('Error updating FCM token:', err);
     return createErrorResponse(500, 'FCM_UPDATE_FAILED', 'Failed to update FCM token');
   }
+}
+
+export async function handleCustomerLogout(request: Request, env: Env, identity: AuthenticatedIdentity): Promise<Response> {
+  const installationId = identity.installationId || identity.installationUuid;
+  if (!installationId) {
+    return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing installation UUID.');
+  }
+
+  try {
+    const inst = await getDocument(env, 'installations', installationId);
+    if (inst) {
+      inst.fcmToken = null;
+      inst.updatedAtEpochMs = Date.now();
+      await setDocument(env, 'installations', installationId, inst);
+    }
+  } catch (err) {
+    console.error('Error logging out from server:', err);
+  }
+
+  return new Response(JSON.stringify({ success: true, message: 'Logged out successfully' }), {
+    status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+  });
 }
 

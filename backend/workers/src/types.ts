@@ -57,5 +57,7 @@ export interface SystemConfigDocument {
   allowRegistrations: boolean;
   allowPayments: boolean;
   allowTransfers: boolean;
+  enforceStrictAppVersion?: boolean;
+  apkDownloadUrl?: string;
   updatedAtEpochMs: number;
 }

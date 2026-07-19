@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,7 +20,7 @@ class PaymentService {
   String? _currentOrderId;
 
   void init() {
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       _razorpay = Razorpay();
       _razorpay!.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
       _razorpay!.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
@@ -49,7 +50,7 @@ class PaymentService {
       'x-installation-uuid': deviceId,
       'x-installation-id': deviceId,
       'x-hardware-id': deviceId,
-      'x-platform': Platform.operatingSystem,
+      'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'x-app-version': '1.0.0'
     };
   }
@@ -147,7 +148,7 @@ class PaymentService {
     _currentOrderId = razorpayOrderId;
 
     // If running on Desktop (Windows/Linux) or when keyId is local mock, simulate capture / verification directly
-    if (!Platform.isAndroid && !Platform.isIOS || keyId == 'rzp_test_local_mock') {
+    if (!kIsWeb && (!Platform.isAndroid && !Platform.isIOS) || keyId == 'rzp_test_local_mock') {
       print('Simulating payment capture for local/desktop environment: $razorpayOrderId');
       final verifyRes = await verifyOrder(
         razorpayOrderId: razorpayOrderId,

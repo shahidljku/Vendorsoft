@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/settings_service.dart';
@@ -52,6 +53,10 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   bool _isPollingTransfers = false;
   late final StreamSubscription _fcmSubscription;
+  
+  String _currentPlanName = '';
+  int _daysLeft = 0;
+  bool _isLifetime = false;
 
   @override
   void initState() {
@@ -64,6 +69,32 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
     _loadFileName();
     _loadPrinterStatus();
     _pollTransfers();
+    _loadPlanInfo();
+  }
+  
+  Future<void> _loadPlanInfo() async {
+    if (widget.isTrialActive) {
+      _currentPlanName = 'Free Trial';
+      _daysLeft = widget.trialDaysRemaining;
+    } else {
+      bool isLicensed = await LicenseService().isLicensed();
+      if (isLicensed) {
+        final info = LicenseService().getLicenseInfo();
+        _daysLeft = LicenseService().getDaysRemaining();
+        final pId = info?['planId'];
+        if (pId == 'PRO_YEARLY') {
+          _currentPlanName = 'Pro Annual';
+        } else if (pId == 'PRO_MONTHLY') {
+          _currentPlanName = 'Pro Monthly';
+        } else if (info?['customerType'] == 'Lifetime') {
+          _currentPlanName = 'Lifetime Access';
+          _isLifetime = true;
+        } else {
+          _currentPlanName = pId ?? 'Active Plan';
+        }
+      }
+    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -451,7 +482,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
     if (!mounted) return;
 
     try {
-      if (Platform.isAndroid) {
+      if (!kIsWeb && Platform.isAndroid) {
         // Grouped native Android permission requests
         await [
           Permission.notification,
@@ -688,17 +719,38 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
           child: ListView(
             padding: EdgeInsets.zero,
             children: [
-              const DrawerHeader(
-                decoration: BoxDecoration(
+              DrawerHeader(
+                decoration: const BoxDecoration(
                   color: Color(0xFF0B1014),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    Icon(Icons.inventory_2, size: 48, color: Color(0xFF00E676)),
-                    SizedBox(height: 16),
-                    Text('VendSoft', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Icon(Icons.inventory_2, size: 48, color: Color(0xFF00E676)),
+                        if (_currentPlanName.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFF00E676).withValues(alpha: 0.3)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(_currentPlanName, style: const TextStyle(color: Color(0xFF00E676), fontSize: 10, fontWeight: FontWeight.bold)),
+                                Text(_isLifetime ? 'Unlimited' : '$_daysLeft Days Left', style: const TextStyle(color: Colors.white70, fontSize: 9)),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('VendSoft', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),

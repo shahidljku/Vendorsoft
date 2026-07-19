@@ -11,7 +11,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'trial_service.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+
 class LicenseService {
   static final LicenseService _instance = LicenseService._internal();
   factory LicenseService() => _instance;
@@ -50,6 +52,10 @@ JQIDAQAB
     _revocationController.add('BANNED');
   }
 
+  void triggerLoginReset() {
+    _revocationController.add('REVOKED');
+  }
+
   /// Generate a stable, un-spoofable Cryptographic Hardware Signature.
   Future<String> getDeviceId() async {
     if (_deviceIdCache != null) return _deviceIdCache!;
@@ -71,19 +77,19 @@ JQIDAQAB
 
     String hardwareString = androidId;
 
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       try {
         final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
         final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
         
         // Combine deep physical hardware properties that survive factory resets and dual-app cloning
+        // Note: intentionally omitting androidInfo.id as it changes with OTA system updates
         hardwareString = '''
           $androidId
           ${androidInfo.board}
           ${androidInfo.brand}
           ${androidInfo.device}
           ${androidInfo.hardware}
-          ${androidInfo.id}
           ${androidInfo.manufacturer}
           ${androidInfo.model}
           ${androidInfo.product}
@@ -91,7 +97,7 @@ JQIDAQAB
       } catch (e) {
         print('Warning: Failed to gather deep hardware fingerprint: $e');
       }
-    } else if (Platform.isWindows) {
+    } else if (!kIsWeb && Platform.isWindows) {
       try {
         final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
         final WindowsDeviceInfo windowsInfo = await deviceInfo.windowsInfo;
@@ -350,6 +356,40 @@ JQIDAQAB
     return _currentLicenseInfo;
   }
 
+  /// Get days remaining on the active subscription
+  int getDaysRemaining() {
+    if (_currentLicenseInfo == null) return 0;
+    
+    // Modern signedLeaseToken check (`expiresAtEpochMs`)
+    if (_currentLicenseInfo!.containsKey('expiresAtEpochMs')) {
+      final expEpoch = _currentLicenseInfo!['expiresAtEpochMs'] as int?;
+      if (expEpoch != null) {
+        final remainingMs = expEpoch - DateTime.now().millisecondsSinceEpoch;
+        final days = remainingMs / (1000 * 60 * 60 * 24);
+        return days > 0 ? days.ceil() : 0;
+      }
+    }
+
+    final customerType = _currentLicenseInfo!['customerType'] as String?;
+    if (customerType == 'Lifetime') {
+      return 9999;
+    }
+    
+    final expiryDateStr = _currentLicenseInfo!['expiryDate'] as String?;
+    if (expiryDateStr != null && expiryDateStr.isNotEmpty) {
+      final expiryDate = DateTime.tryParse(expiryDateStr);
+      if (expiryDate != null) {
+        final today = DateTime.now();
+        final todayDate = DateTime(today.year, today.month, today.day);
+        final expiryDay = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
+        final diff = expiryDay.difference(todayDate).inDays;
+        return diff > 0 ? diff : 0;
+      }
+    }
+    
+    return 0;
+  }
+
   /// Retrieve the business name (customer name) from the license
   String getBusinessName() {
     if (_customBusinessName != null && _customBusinessName!.trim().isNotEmpty) {
@@ -450,7 +490,7 @@ JQIDAQAB
         'x-installation-id': deviceId,
         'x-hardware-id': deviceId,
         'x-app-version': '1.0.0',
-        'x-platform': Platform.operatingSystem,
+        'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       });
 
       if (response.statusCode == 403) {
@@ -472,6 +512,12 @@ JQIDAQAB
           await removeLicense();
           await FirebaseAuth.instance.signOut();
           _revocationController.add('DEACTIVATED');
+        } else if (errorCode == 'TRIAL_EXPIRED' || errorCode == 'SUBSCRIPTION_EXPIRED' || errorCode == 'SUBSCRIPTION_CANCELLED') {
+          print('CRITICAL: Subscription/Trial expired or cancelled. Removing license.');
+          await TrialService().killTrial();
+          await _storage.write(key: 'was_cancelled_on_device', value: 'true');
+          await removeLicense();
+          _revocationController.add('REVOKED');
         }
       } else if (response.statusCode == 404 || response.statusCode == 400) {
         print('CRITICAL: Account or subscription not found on server. Removing license.');

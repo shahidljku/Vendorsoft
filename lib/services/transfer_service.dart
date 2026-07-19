@@ -1,8 +1,10 @@
 // ignore_for_file: avoid_print
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'license_service.dart';
 
 class TransferService {
@@ -16,7 +18,11 @@ class TransferService {
     final deviceId = await LicenseService().getDeviceId();
     String? idToken;
     try {
-      final user = FirebaseAuth.instance.currentUser;
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        final cred = await FirebaseAuth.instance.signInAnonymously();
+        user = cred.user;
+      }
       if (user != null) {
         idToken = await user.getIdToken();
       }
@@ -28,7 +34,7 @@ class TransferService {
       'Content-Type': 'application/json',
       'x-installation-uuid': deviceId,
       'x-hardware-id': deviceId,
-      'x-platform': Platform.operatingSystem,
+      'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'x-app-version': '1.0.0'
     };
     
@@ -45,8 +51,21 @@ class TransferService {
       final headers = await _buildHeaders();
       final url = Uri.parse('$baseUrl/transfers/request');
       
+      String deviceModelName = kIsWeb ? 'web' : Platform.operatingSystem;
+      try {
+        if (!kIsWeb && Platform.isAndroid) {
+          final androidInfo = await DeviceInfoPlugin().androidInfo;
+          deviceModelName = '${androidInfo.manufacturer} ${androidInfo.model}'.trim();
+        } else if (!kIsWeb && Platform.isIOS) {
+          final iosInfo = await DeviceInfoPlugin().iosInfo;
+          deviceModelName = iosInfo.name;
+        }
+      } catch (e) {
+        print('Error getting device info: $e');
+      }
+
       final Map<String, dynamic> bodyMap = {
-        'deviceModel': Platform.operatingSystem
+        'deviceModel': deviceModelName
       };
       if (customerId != null) bodyMap['customerId'] = customerId;
       if (subscriptionId != null) bodyMap['subscriptionId'] = subscriptionId;

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -81,7 +82,7 @@ class _SystemDiagnosticsModalState extends State<SystemDiagnosticsModal> {
       _androidVersion = androidInfo.version.release;
       _sdkLevel = androidInfo.version.sdkInt;
     } catch (_) {
-      _androidVersion = Platform.operatingSystemVersion;
+      _androidVersion = kIsWeb ? 'Web Browser' : Platform.operatingSystemVersion;
     }
 
     // 3. Security / Device ID

@@ -64,4 +64,61 @@ class ConfigService {
     if (_systemConfig == null) return true;
     return _systemConfig!['allowRegistrations'] != false;
   }
+
+  bool get enforceStrictAppVersion {
+    if (_systemConfig == null) return false;
+    return _systemConfig!['enforceStrictAppVersion'] == true;
+  }
+
+  String get minimumSupportedVersion {
+    return _systemConfig?['minimumSupportedVersion'] ?? '1.0.0+1';
+  }
+
+  String get latestVersion {
+    return _systemConfig?['latestVersion'] ?? '1.0.0+1';
+  }
+
+  String get apkDownloadUrl {
+    return _systemConfig?['apkDownloadUrl'] ?? '';
+  }
+
+  bool isUpdateRequired(String currentAppVersion) {
+    if (!enforceStrictAppVersion) return false;
+    
+    // Simple semver comparison (assuming format like "1.0.0+1" or "1.0.0")
+    // If the string exactly matches the minimum or latest, we can consider it.
+    // To make it robust: compare the versions.
+    List<int> parseVersion(String v) {
+      final parts = v.split('+');
+      final numbers = parts[0].split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      if (parts.length > 1) {
+        numbers.add(int.tryParse(parts[1]) ?? 0);
+      } else {
+        numbers.add(0);
+      }
+      return numbers;
+    }
+
+    final current = parseVersion(currentAppVersion);
+    final minimum = parseVersion(minimumSupportedVersion);
+    final latest = parseVersion(latestVersion);
+
+    // If current is less than minimum, definitely require update
+    for (int i = 0; i < minimum.length; i++) {
+      if (i >= current.length) return true; // Current is shorter, e.g. 1.0 vs 1.0.1
+      if (current[i] < minimum[i]) return true;
+      if (current[i] > minimum[i]) return false; // Current is strictly greater
+    }
+    
+    // If we reach here, current >= minimum. 
+    // Wait, the prompt says "enforceStrictAppVersion" forces users to update to latest if they are outdated.
+    // If enforceStrictAppVersion is true, they MUST be on the latest version.
+    for (int i = 0; i < latest.length; i++) {
+      if (i >= current.length) return true;
+      if (current[i] < latest[i]) return true;
+      if (current[i] > latest[i]) return false;
+    }
+
+    return false;
+  }
 }

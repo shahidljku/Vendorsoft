@@ -39,6 +39,8 @@ export async function handleGetSystemConfig(request: Request, env: Env): Promise
           allowRegistrations: typeof firestoreDoc.allowRegistrations === 'boolean' ? firestoreDoc.allowRegistrations : DEFAULT_SYSTEM_CONFIG.allowRegistrations,
           allowPayments: typeof firestoreDoc.allowPayments === 'boolean' ? firestoreDoc.allowPayments : DEFAULT_SYSTEM_CONFIG.allowPayments,
           allowTransfers: typeof firestoreDoc.allowTransfers === 'boolean' ? firestoreDoc.allowTransfers : DEFAULT_SYSTEM_CONFIG.allowTransfers,
+          enforceStrictAppVersion: firestoreDoc.enforceStrictAppVersion,
+          apkDownloadUrl: firestoreDoc.apkDownloadUrl,
           updatedAtEpochMs: firestoreDoc.updatedAtEpochMs || DEFAULT_SYSTEM_CONFIG.updatedAtEpochMs
         }
       : DEFAULT_SYSTEM_CONFIG;

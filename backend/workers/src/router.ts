@@ -1,11 +1,11 @@
 import { Env } from './types';
 import { handleGetSystemConfig } from './routes/config';
 import { handleGetPlans } from './routes/plans';
-import { handleCustomerRegistration, handleUpdateFcmToken } from './routes/customers';
+import { handleCustomerRegistration, handleUpdateFcmToken, handleCustomerLogout } from './routes/customers';
 import { handleGetSubscriptionStatus } from './routes/subscriptions';
 import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer, handleGetTransferStatus, handleCancelTransfer } from './routes/transfers';
 import { handleCreateOrder, handleVerifyOrder } from './routes/orders';
-import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans } from './routes/admin';
+import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans, handleAdminManageSubscription } from './routes/admin';
 import { handleMigrateLegacyKey } from './routes/migrate';
 import { handleRazorpayWebhook } from './webhooks';
 import { localStore } from './services/firestore';
@@ -83,7 +83,11 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') {
       return handleAdminSearchCustomers(request, env);
     }
-    if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT') {
+    if (normalizedPath.startsWith('/v1/admin/customers/') && normalizedPath.endsWith('/subscription') && request.method === 'PUT') {
+      const customerId = normalizedPath.substring('/v1/admin/customers/'.length, normalizedPath.length - '/subscription'.length);
+      return handleAdminManageSubscription(request, env, adminUid, customerId);
+    }
+    if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT' && !normalizedPath.endsWith('/subscription')) {
       const customerId = normalizedPath.substring('/v1/admin/customers/'.length);
       return handleAdminUpdateCustomer(request, env, adminUid, customerId);
     }
@@ -134,6 +138,10 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
 
   if (normalizedPath === '/v1/installations/update-fcm' && request.method === 'POST') {
     return handleUpdateFcmToken(request, env, identity);
+  }
+
+  if (normalizedPath === '/v1/customers/logout' && request.method === 'POST') {
+    return handleCustomerLogout(request, env, identity);
   }
 
   // Phase 2.2: Authoritative Subscription Status & Signed Lease
