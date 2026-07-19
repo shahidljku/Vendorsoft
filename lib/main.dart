@@ -52,7 +52,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
   final TrialService _trialService = TrialService();
   late final SecurityService _securityService;
 
-  ThemeMode _themeMode = ThemeMode.system;
+  ThemeMode _themeMode = ThemeMode.dark;
   bool _isLocked = true;
   bool _isLoading = true;
   bool _pinEnabled = false;

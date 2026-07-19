@@ -96,7 +96,7 @@ class SettingsService extends ChangeNotifier {
 
   Future<String> getThemeMode() async {
     await _init();
-    return _prefs!.getString(_keyThemeMode) ?? 'system';
+    return _prefs!.getString(_keyThemeMode) ?? 'dark';
   }
 
   Future<void> setThemeMode(String value) async {
