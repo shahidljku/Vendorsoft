@@ -41,6 +41,8 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
   bool _isDemoMode = true;
   bool _isTrialActive = false;
   int _trialDaysRemaining = 0;
+  bool _isLifetime = false;
+  int _licenseDaysRemaining = 0;
   String _lastBackupDateText = 'Checking...';
 
   final TextEditingController _cmSearchController = TextEditingController();
@@ -84,12 +86,26 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
     bool demo = await LicenseService().isDemoMode();
     bool trialActive = TrialService().isTrialActive;
     int trialDays = TrialService().daysRemaining;
+    
+    bool isLifetime = false;
+    int licenseDays = 0;
+    if (!demo) {
+      final info = LicenseService().getLicenseInfo();
+      if (info?['customerType'] == 'Lifetime') {
+        isLifetime = true;
+      } else {
+        licenseDays = LicenseService().getDaysRemaining();
+      }
+    }
+
     if (mounted) {
       setState(() {
         excelFileName = lastName;
         _isDemoMode = demo;
         _isTrialActive = trialActive;
         _trialDaysRemaining = trialDays;
+        _isLifetime = isLifetime;
+        _licenseDaysRemaining = licenseDays;
       });
     }
   }
@@ -281,6 +297,61 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
                     child: const Text('Upgrade', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+            
+          if (!_isDemoMode && !_isLifetime && _licenseDaysRemaining <= 7)
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    _licenseDaysRemaining <= 0 ? Colors.red.shade900.withValues(alpha: 0.35) : Colors.orange.shade900.withValues(alpha: 0.35),
+                    const Color(0xFF161B22)
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _licenseDaysRemaining <= 0 ? Colors.redAccent.withValues(alpha: 0.5) : Colors.orangeAccent.withValues(alpha: 0.5)
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _licenseDaysRemaining <= 0 ? Icons.error_outline : Icons.warning_amber_rounded,
+                    color: _licenseDaysRemaining <= 0 ? Colors.redAccent : Colors.orangeAccent,
+                    size: 32
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _licenseDaysRemaining <= 0 ? 'Subscription Expired' : 'Subscription Expiring Soon',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _licenseDaysRemaining <= 0 ? 'Your plan has expired. Please renew to continue using VendSoft.' : 'Your plan expires in $_licenseDaysRemaining days.',
+                          style: TextStyle(color: Colors.grey.shade300, fontSize: 11)
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () => SubscriptionDialog.showPlans(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00E676),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    child: const Text('Renew', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                   ),
                 ],
               ),

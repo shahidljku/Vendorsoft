@@ -167,3 +167,8 @@ sequenceDiagram
 - **Zero Notification Dependency**: Transfer approval **MUST NOT** depend on push notifications. In rural India, aggressive OEM battery savers (`Xiaomi MIUI`, `Realme UI`, `Vivo Funtouch`) frequently kill FCM background listeners or delay push delivery for hours.
 - **Guaranteed Synchronization Path**: Whether FCM is delivered or completely disabled, `inst_OLD` automatically queries `GET /api/v1/transfers/pending` whenever the app returns to the foreground (`didChangeAppLifecycleState`), or via background synchronization ticks. This ensures 100% transfer completion reliability without requiring mandatory push notifications.
 - **Lost or Broken Phone Recovery**: If `inst_OLD` is lost, stolen, or broken (`0% polling possible`), the vendor contacts support and an Admin approves the transfer via Admin Panel (`POST /admin/transfers/approve`). This is the **ONLY** manual recovery flow.
+
+### 6.3 Logout & Account Isolation Strategy
+VendSoft permits users to switch active accounts via a secure **Logout Flow** (`ActivationScreen` & Drawer Menu). To prevent dangerous state-leaks between distinct businesses on the same shared Android tablet:
+- **Cloud Isolation**: The logout routine explicitly hits `POST /api/v1/customers/logout` to aggressively strip FCM Push Tokens in Firestore, preventing the newly logged-out user from receiving thermal print telemetry meant for the next logged-in user.
+- **Local Isolation**: The `ExcelService.clearData()` method must be fired immediately during logout to aggressively flush all active in-memory arrays. This physically destroys all loaded customers and active billing states, ensuring that when the new user logs in, they cannot accidentally view or text the old user's customers.

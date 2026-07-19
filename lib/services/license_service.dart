@@ -520,11 +520,8 @@ JQIDAQAB
           _revocationController.add('REVOKED');
         }
       } else if (response.statusCode == 404 || response.statusCode == 400) {
-        print('CRITICAL: Account or subscription not found on server. Removing license.');
-        await TrialService().killTrial();
-        await removeLicense();
-        await FirebaseAuth.instance.signOut();
-        _revocationController.add('REVOKED');
+        print('WARNING: 400/404 from server. This could be a transient network/identity error on resume. Falling back to offline grace period.');
+        await _checkOfflineGracePeriod();
       } else if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['data']?['signedLeaseToken'] != null) {

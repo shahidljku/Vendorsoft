@@ -74,8 +74,24 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       initialIndex: widget.initialFilter == 'Sent' ? 1 : 0,
     );
     _checkAccessibility();
-    _refreshQueue();
+    _computeQueues();
     _startCooldownTimer();
+  }
+
+  void _computeQueues() {
+    _pendingReceipts = widget.excelService.allCustomers.where((c) {
+      String pst = c.paymentStatus.trim().toLowerCase();
+      String rst = c.receiptStatus.trim().toLowerCase();
+      return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+             (rst != 'sent' && rst != 'message sent');
+    }).toList();
+
+    _submittedReceipts = widget.excelService.allCustomers.where((c) {
+      String pst = c.paymentStatus.trim().toLowerCase();
+      String rst = c.receiptStatus.trim().toLowerCase();
+      return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
+             (rst == 'sent' || rst == 'message sent');
+    }).toList();
   }
 
   void _startCooldownTimer() {
@@ -170,24 +186,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
       _whatsAppCompleter?.complete(result ?? false);
     }
-  }
-
-  void _refreshQueue() {
-    setState(() {
-      _pendingReceipts = widget.excelService.allCustomers.where((c) {
-        String pst = c.paymentStatus.trim().toLowerCase();
-        String rst = c.receiptStatus.trim().toLowerCase();
-        return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
-               (rst != 'sent' && rst != 'message sent');
-      }).toList();
-
-      _submittedReceipts = widget.excelService.allCustomers.where((c) {
-        String pst = c.paymentStatus.trim().toLowerCase();
-        String rst = c.receiptStatus.trim().toLowerCase();
-        return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
-               (rst == 'sent' || rst == 'message sent');
-      }).toList();
-    });
   }
 
   Widget _buildReceiptWidget(Customer customer, String businessName) {
@@ -614,7 +612,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       setState(() {
         _isSending = false;
       });
-      _refreshQueue();
+      _computeQueues();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt sending completed!')));
     }
     WakelockPlus.disable();
@@ -761,7 +759,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                                 customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
                               });
                               await widget.excelService.saveCustomers(widget.excelService.allCustomers);
-                              _refreshQueue();
+                              _computeQueues();
                               if (context.mounted) Navigator.pop(context);
                             },
                             child: const Text('Save', style: TextStyle(color: Colors.black)),
@@ -845,7 +843,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                         c.receiptStatus = 'Sent';
                       });
                       await widget.excelService.saveCustomers(widget.excelService.allCustomers);
-                      _refreshQueue();
+                      _computeQueues();
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt already marked as sent')));
                     }
@@ -1053,7 +1051,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         listenable: widget.excelService,
         builder: (context, _) {
           if (!_isSending) {
-            WidgetsBinding.instance.addPostFrameCallback((_) => _refreshQueue());
+            _computeQueues();
           }
           return TabBarView(
             controller: _tabController,

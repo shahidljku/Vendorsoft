@@ -310,4 +310,13 @@ class ExcelService extends ChangeNotifier {
       return false;
     }
   }
+
+  /// Flushes all cached Excel data from memory and UI state.
+  /// Used during logout to prevent account data merging (Issue 10).
+  Future<void> clearData() async {
+    allCustomers.clear();
+    _documentUri = null;
+    fileName = null;
+    notifyListeners();
+  }
 }

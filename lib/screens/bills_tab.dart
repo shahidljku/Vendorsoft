@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'sending_screen.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
@@ -120,17 +121,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     }
     if (_searchQuery.isNotEmpty) {
       String q = _searchQuery.toLowerCase().trim();
-      if (q == 'unpaid') {
-        result = result.where((c) => c.paymentStatus != 'Successful').toList();
-      } else if (q == 'failed') {
-        result = result.where((c) => c.status.toLowerCase() == 'failed').toList();
-      } else if (q == 'pending') {
-        result = result.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').toList();
-      } else if (q == 'sent') {
-        result = result.where((c) => c.status.toLowerCase() == 'sent' || c.receiptStatus.toLowerCase() == 'sent').toList();
-      } else {
-        result = result.where((c) => c.custName.toLowerCase().contains(q) || c.mobile.contains(q) || c.billNo.toLowerCase().contains(q)).toList();
-      }
+      result = result.where((c) => c.billNo.toLowerCase().contains(q)).toList();
     }
     return result;
   }
@@ -147,9 +138,11 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
             ? TextField(
                 controller: _searchCtrl,
                 autofocus: true,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
-                  hintText: 'Search Name/Mobile/Bill No...',
+                  hintText: 'Search Bill No...',
                   hintStyle: TextStyle(color: Colors.white54),
                   border: InputBorder.none,
                 ),

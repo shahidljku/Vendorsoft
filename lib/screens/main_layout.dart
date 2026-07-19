@@ -19,6 +19,8 @@ import 'reminders_modal.dart';
 import '../services/transfer_service.dart';
 import '../services/license_service.dart';
 import '../services/push_notification_service.dart';
+import '../services/registration_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class MainLayout extends StatefulWidget {
   final SettingsService settingsService;
@@ -112,13 +114,20 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
     }
   }
 
+  bool _isTransferModalOpen = false;
+
   Future<void> _pollTransfers() async {
     if (_isPollingTransfers) return;
     _isPollingTransfers = true;
     try {
       final transfers = await TransferService().pollPendingTransfers();
-      if (transfers.isNotEmpty && mounted) {
-        _showTransferApprovalModal(transfers.first);
+      if (mounted) {
+        if (transfers.isNotEmpty) {
+          _showTransferApprovalModal(transfers.first);
+        } else if (_isTransferModalOpen) {
+          Navigator.of(context, rootNavigator: true).pop();
+          _isTransferModalOpen = false;
+        }
       }
     } catch (e) {
       debugPrint('Poll transfers error: $e');
@@ -127,6 +136,8 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   }
 
   void _showTransferApprovalModal(Map<String, dynamic> transfer) {
+    if (_isTransferModalOpen) return;
+    _isTransferModalOpen = true;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -153,6 +164,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () async {
+              _isTransferModalOpen = false;
               Navigator.pop(ctx);
               await TransferService().rejectTransfer(transfer['transferId']);
             },
@@ -161,6 +173,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.black),
             onPressed: () async {
+              _isTransferModalOpen = false;
               Navigator.pop(ctx);
               showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.orange)));
               try {
@@ -183,6 +196,24 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  Future<void> _performLogout() async {
+    Navigator.pop(context); // Close drawer
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676))),
+    );
+    try {
+      await widget.excelService.clearData();
+      await RegistrationService().logoutFromServer();
+      await LicenseService().removeLicense();
+      await FirebaseAuth.instance.signOut();
+      LicenseService().triggerDeviceBan(); // Re-use stream to force UI to logout screen
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+    }
   }
 
   Future<void> _loadFileName() async {
@@ -454,6 +485,8 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 _PermissionInfoRow(icon: Icons.notifications_active, title: 'Notifications', desc: 'Required to show real-time status alerts and background message progress.'),
                 SizedBox(height: 12),
                 _PermissionInfoRow(icon: Icons.bluetooth_connected, title: 'Bluetooth', desc: 'Required to scan and connect to your native ESC/POS thermal printers.'),
+                SizedBox(height: 12),
+                _PermissionInfoRow(icon: Icons.location_on, title: 'Location', desc: 'Required by Android to detect nearby Bluetooth printers on older devices.'),
               ],
             ),
           ),
@@ -865,6 +898,11 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                   Navigator.pop(context); // Close drawer
                   Navigator.push(context, MaterialPageRoute(builder: (_) => LogsTab(settingsService: widget.settingsService)));
                 },
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout, color: Colors.redAccent),
+                title: const Text('Log Out', style: TextStyle(color: Colors.redAccent)),
+                onTap: _performLogout,
               ),
               ListTile(
                 leading: const Icon(Icons.info_outline, color: Colors.white70),

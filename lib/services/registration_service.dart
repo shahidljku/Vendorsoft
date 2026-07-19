@@ -87,8 +87,13 @@ class RegistrationService {
         final resJson = jsonDecode(response.body);
         if (resJson['success'] == true) {
           final data = resJson['data'];
-          if (data['signedLeaseToken'] != null) {
+          if (data != null && data is Map && data['signedLeaseToken'] != null) {
             await LicenseService().verifySignedLeaseToken(data['signedLeaseToken'], saveToStorage: true);
+            return true;
+          } else {
+            // Fallback: Registration/Login succeeded but token was missing from payload.
+            // Force a poll to pull the latest token from the server.
+            await LicenseService().pollOnlineSubscriptionStatus(force: true);
             return true;
           }
         }

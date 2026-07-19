@@ -1,7 +1,7 @@
 # VendSoft Project Handover & Continuation Guide
 
 > **Last Updated**: July 18, 2026
-> **Architecture Version**: v1.1.0 (Phase 6 Complete)
+> **Architecture Version**: v1.0.0 (Phase 6 Complete)
 > **Production Status**: LIVE on Cloudflare Workers
 
 ---
@@ -342,3 +342,52 @@ npm run deploy
 cd e:\image_sender
 git add -A && git commit -m "description" && git push origin main
 ```
+
+---
+
+## 13. Current Production Status
+
+### 13.1 Current Project Version
+**v1.0.0** (Production Release Candidate). 
+
+### 13.2 Overall Implementation Status
+All backend Cloudflare Worker phases and all frontend migration/refactoring goals (Phases 1-5 + UI Polish) are **100% complete and frozen**. The app is structurally complete and ready for QA testing on physical Android devices.
+
+### 13.3 Completed Implementation Phases
+- **Phase 1-3:** Cloudflare Workers, Firebase Identity, Hardware Binding, P2P Transfers, Razorpay Pipeline.
+- **Phase 4:** Receipts list sync & WhatsApp concurrency fixes (`ExcelService` architecture enforcement).
+- **Phase 5:** Admin Panel enhancements, device transfer teardowns, Bills numeric-only search isolation, UI Expiration banners, PDF tabular layout fixes, and Android Location permission explanations.
+
+### 13.4 Remaining Known Limitations
+- The Android permissions flow requires sequential foreground interaction. Users must aggressively accept Location & BT permissions on Android 10+ or the thermal printer driver fails silently.
+- Storage logic heavily relies on `SharedPreferences`. Since there's no native "clear app data" hook exposed directly to Flutter beyond `ExcelService.clearData()`, OS-level app data clearing remains the ultimate reset vector. 
+- WhatsApp automation relies on Accessibility Services which Android occasionally kills in the background; user may need to toggle it manually if the app is force-stopped.
+
+### 13.5 Recommended QA Checklist Before Release
+1. **Full Install/Uninstall Flow**: Perform a virgin install, grant permissions, and run a full thermal print.
+2. **Device Transfer (P2P)**: Start transfer on phone A, approve on phone B, and ensure phone A locks out and phone B activates flawlessly.
+3. **Admin Transfer (Lost Phone)**: Hit `POST /api/v1/admin/transfers/:id/approve` and ensure the target device logs in natively without hardware ID mismatch errors.
+4. **Automated WhatsApp Run**: Load a 100-row Excel sheet and allow the background `AccessibilityService` to run end-to-end to verify the UI does not flicker or slip index tracking.
+5. **PDF Report Check**: Generate a monthly PDF report and verify "Amount" aligns right and tables do not bleed off the page.
+
+### 13.6 Recommended Release Sequence
+1. Deploy Cloudflare Workers to production (`npm run deploy`).
+2. Build Android AppBundle (`flutter build appbundle --release`).
+3. Deploy to Google Play Console (Internal Testing Track).
+4. Validate across min/max OS versions (Android 8.0 to Android 14).
+5. Promote to Production Track.
+
+### 13.7 Recommended Rollback Strategy
+- **Frontend App**: Use Google Play Console to halt the rollout and push the last known stable APK.
+- **Backend Edge**: Run `npx wrangler rollback` inside the `backend/workers` directory to instantly flip the global Cloudflare V8 isolate to the previous deployment block.
+- **System Configs**: If Cloudflare rollback fails, mutate `system_configs/global` in Firestore to set `maintenanceMode: true` to defensively lock all client checkouts/transfers while investigating.
+
+### 13.8 Critical Files/Modules (Modify With Extreme Caution)
+- `lib/services/excel_service.dart`: The definitive local state provider. Altering `.notifyListeners()` dispatch timing here causes catastrophic UI race conditions in WhatsApp loops.
+- `lib/screens/receipts_tab.dart`: Contains strict synchronous getter loops (`_computeQueues()`) to lock state during accessibility dispatch. Do not inject async `addPostFrameCallback` here.
+- `backend/workers/src/routes/admin.ts`: Handles the delicate de-coupling of hardware keys during device transfers. A failure here allows cloned devices.
+
+### 13.9 Highly Stable Areas (Do Not Change Without Strong Justification)
+- `backend/workers/src/cryptoEngine.ts`: Native Web Crypto RSA/HMAC implementation.
+- `lib/services/license_service.dart`: The 3-tier local evaluation cascade (Lease -> RSA -> Trial).
+- `backend/workers/src/webhooks.ts`: Razorpay idempotent state machines.

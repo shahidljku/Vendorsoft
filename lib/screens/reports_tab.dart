@@ -218,10 +218,23 @@ class _ReportsTabState extends State<ReportsTab> {
   pw.Widget _buildTable(List<Customer> list) {
     return pw.TableHelper.fromTextArray(
       headers: ['Sr.No', 'Bill No', 'Cust.No', 'Name of Customer', 'Amount'],
-      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14),
+      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13),
       cellStyle: const pw.TextStyle(fontSize: 12),
-      cellAlignment: pw.Alignment.centerLeft,
       headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+      cellAlignments: {
+        0: pw.Alignment.center,
+        1: pw.Alignment.center,
+        2: pw.Alignment.center,
+        3: pw.Alignment.centerLeft,
+        4: pw.Alignment.centerRight,
+      },
+      headerAlignments: {
+        0: pw.Alignment.center,
+        1: pw.Alignment.center,
+        2: pw.Alignment.center,
+        3: pw.Alignment.centerLeft,
+        4: pw.Alignment.centerRight,
+      },
       data: list.asMap().entries.map((e) {
         return [
           (e.key + 1).toString(),
@@ -233,10 +246,10 @@ class _ReportsTabState extends State<ReportsTab> {
       }).toList(),
       columnWidths: {
         0: const pw.FlexColumnWidth(1),
-        1: const pw.FlexColumnWidth(2),
-        2: const pw.FlexColumnWidth(2),
-        3: const pw.FlexColumnWidth(4),
-        4: const pw.FlexColumnWidth(2),
+        1: const pw.FlexColumnWidth(1.5),
+        2: const pw.FlexColumnWidth(1.5),
+        3: const pw.FlexColumnWidth(4.5),
+        4: const pw.FlexColumnWidth(1.5),
       },
     );
   }

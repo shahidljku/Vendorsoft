@@ -437,7 +437,9 @@ Returns all `PENDING` device transfer requests for the Admin Portal. Used for ma
 `POST /api/v1/admin/transfers/:transferId/reject`
 
 #### Purpose
-Allows administrators to forcibly approve or reject a device transfer. Used when the old device is lost/stolen/broken and cannot approve the transfer itself. On approval, a new `signedLeaseToken` is issued for the target device.
+Allows administrators to forcibly approve or reject a device transfer. Used when the old device is lost/stolen/broken and cannot approve the transfer itself. On approval:
+1. A new `signedLeaseToken` is issued for the target device.
+2. The target customer document is aggressively cleansed of legacy device bindings (`deviceId`, `modelName`, `hardwareId`, `licenseKey`, `pushToken`) to guarantee a pristine state for the new device and avoid push token leakage.
 
 #### Request Headers
 *Headers*: `x-admin-secret: <ADMIN_SECRET>`.

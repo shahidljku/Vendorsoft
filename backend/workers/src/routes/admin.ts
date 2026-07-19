@@ -203,6 +203,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
         hardwareId: targetInstallationId,
         installationUuid: targetInstallationId,
         platform: 'android',
+        deviceModel: transferDoc.deviceModel || 'Unknown Device',
         appVersion: '1.0.0',
         status: 'ACTIVE',
         createdAtEpochMs: now,
@@ -563,7 +564,19 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
       const days = body.daysToAdd || 0;
       if (days <= 0) return createErrorResponse(400, 'INVALID_DAYS', 'daysToAdd must be greater than 0.');
       
-      const additionalMs = days * 24 * 60 * 60 * 1000;
+      let baseDate = new Date();
+      if (activeSub && activeSub.status !== 'CANCELLED' && activeSub.expiresAtEpochMs && activeSub.expiresAtEpochMs > now) {
+        baseDate = new Date(activeSub.expiresAtEpochMs);
+      }
+      
+      if (days === 30 || days === 31) {
+        baseDate.setMonth(baseDate.getMonth() + 1);
+      } else if (days === 365 || days === 366) {
+        baseDate.setFullYear(baseDate.getFullYear() + 1);
+      } else {
+        baseDate.setDate(baseDate.getDate() + days);
+      }
+      const newExpiresAt = baseDate.getTime();
       
       if (!activeSub) {
         // Create a new subscription if none exists
@@ -584,18 +597,15 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
           planId: 'FREE_TRIAL_30', // default fallback plan
           status: 'ACTIVE',
           startsAtEpochMs: now,
-          expiresAtEpochMs: now + additionalMs,
+          expiresAtEpochMs: newExpiresAt,
           createdAtEpochMs: now,
           updatedAtEpochMs: now
         };
         await setDocument(env, 'subscriptions', newSubId, activeSub);
       } else {
-        // If the subscription was cancelled, reactivate it and start the timer from NOW
-        if (activeSub!.status === 'CANCELLED' || (activeSub!.expiresAtEpochMs && activeSub!.expiresAtEpochMs < now)) {
-           activeSub!.expiresAtEpochMs = now;
-        }
-        activeSub!.expiresAtEpochMs = (activeSub!.expiresAtEpochMs || now) + additionalMs;
-        activeSub!.status = 'ACTIVE';
+        activeSub.expiresAtEpochMs = newExpiresAt;
+        activeSub.status = 'ACTIVE';
+        activeSub.updatedAtEpochMs = now;
         
         if (isTrial) {
           await setDocument(env, 'hardware_trials', trialId, activeSub);
@@ -620,10 +630,18 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
           }
         }
         
-        // Determine days based on plan
         let planDays = 30; // default
         if (body.newPlanId.includes('YEAR')) planDays = 365;
         if (body.newPlanId === 'FREE_TRIAL_30') planDays = 30;
+        
+        let baseDate = new Date();
+        if (planDays === 30) {
+          baseDate.setMonth(baseDate.getMonth() + 1);
+        } else if (planDays === 365) {
+          baseDate.setFullYear(baseDate.getFullYear() + 1);
+        } else {
+          baseDate.setDate(baseDate.getDate() + planDays);
+        }
         
         const newSubId = `SUB_${crypto.randomUUID()}`;
         const newSub = {
@@ -633,7 +651,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
           planId: body.newPlanId,
           status: 'ACTIVE',
           startsAtEpochMs: now,
-          expiresAtEpochMs: now + (planDays * 24 * 60 * 60 * 1000),
+          expiresAtEpochMs: baseDate.getTime(),
           createdAtEpochMs: now,
           updatedAtEpochMs: now
         };
@@ -649,9 +667,21 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
         if (body.newPlanId.includes('YEAR')) planDays = 365;
         if (body.newPlanId === 'FREE_TRIAL_30') planDays = 30;
         
+        let baseDate = new Date();
+        if (activeSub.status !== 'CANCELLED' && activeSub.expiresAtEpochMs && activeSub.expiresAtEpochMs > now) {
+          baseDate = new Date(activeSub.expiresAtEpochMs);
+        }
+        if (planDays === 30) {
+          baseDate.setMonth(baseDate.getMonth() + 1);
+        } else if (planDays === 365) {
+          baseDate.setFullYear(baseDate.getFullYear() + 1);
+        } else {
+          baseDate.setDate(baseDate.getDate() + planDays);
+        }
+        
         activeSub.planId = body.newPlanId;
         activeSub.status = 'ACTIVE';
-        activeSub.expiresAtEpochMs = now + (planDays * 24 * 60 * 60 * 1000);
+        activeSub.expiresAtEpochMs = baseDate.getTime();
         activeSub.updatedAtEpochMs = now;
         await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
       }
@@ -668,6 +698,21 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
         activeSub.activeInstallationId = body.newHardwareId;
         activeSub.updatedAtEpochMs = now;
         await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+        
+        // Fix Issue 4: Approve any pending P2P transfers for this subscription
+        const pendingTransfers = await queryCollection(env, 'device_transfers', [
+          { field: 'subscriptionId', op: 'EQUAL', value: activeSub.subscriptionId }
+        ]);
+        for (const pt of pendingTransfers) {
+          if (pt.status === 'PENDING') {
+            await setDocument(env, 'device_transfers', pt.transferId, {
+              ...pt,
+              status: 'APPROVED',
+              approvedBy: `ADMIN_${adminUid}`,
+              updatedAtEpochMs: now
+            });
+          }
+        }
       }
       
       // Revoke old installation

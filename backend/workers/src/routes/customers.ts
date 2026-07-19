@@ -289,8 +289,7 @@ export async function handleCustomerRegistration(
       );
       if (recentRegistrations.length >= 3) {
         console.error(`[ABUSE_BLOCK] Hardware ${identity.hardwareId} has ${recentRegistrations.length} registrations in last 24h. Blocking.`);
-        await logAuditEvent(env, {
-          action: 'REGISTRATION_RATE_LIMITED',
+        await logAuditEvent(env, 'REGISTRATION_RATE_LIMITED', {
           actorType: 'SYSTEM',
           actorId: 'anti-abuse',
           targetType: 'hardware',
@@ -298,7 +297,7 @@ export async function handleCustomerRegistration(
           details: `Blocked registration: ${recentRegistrations.length} accounts in 24h from same hardware. Phone: ${inputMobileNumber}`,
           timestampMs: now
         });
-        return createErrorResponse(429, 'RATE_LIMITED', 'Too many registration attempts from this device. Please try again later.');
+        return createErrorResponse(429, 'RATE_LIMITED', 'Too many registrations from this device. Please try again tomorrow or contact support.');
       }
 
       // If this hardware already has accounts and trial is expired, force expired status
@@ -509,7 +508,7 @@ export async function handleUpdateFcmToken(request: Request, env: Env, identity:
   }
 }
 
-export async function handleCustomerLogout(request: Request, env: Env, identity: AuthenticatedIdentity): Promise<Response> {
+export async function handleCustomerLogout(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   const installationId = identity.installationId || identity.installationUuid;
   if (!installationId) {
     return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing installation UUID.');
