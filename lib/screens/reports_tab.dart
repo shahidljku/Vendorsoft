@@ -10,6 +10,7 @@ import '../services/excel_service.dart';
 import '../services/license_service.dart';
 import '../reports/framework/report_config.dart';
 import '../reports/framework/report_framework.dart';
+import '../reports/cm_pending_report.dart';
 
 class ReportsTab extends StatefulWidget {
   final ExcelService excelService;
@@ -22,6 +23,8 @@ class ReportsTab extends StatefulWidget {
 
 class _ReportsTabState extends State<ReportsTab> {
   DateTime _selectedDate = DateTime.now();
+  String _selectedReport = 'Recovery Register';
+  String _selectedCmName = 'All';
 
   Future<void> _pickDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -51,6 +54,10 @@ class _ReportsTabState extends State<ReportsTab> {
   }
 
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
+    if (_selectedReport == 'CM Pending') {
+      return CmPendingReport.generate(format, widget.excelService, _selectedCmName == 'All' ? '' : _selectedCmName);
+    }
+
     String formattedDate = DateFormat('dd/MM/yyyy').format(_selectedDate);
     
     // 1. Filter Data
@@ -200,27 +207,86 @@ class _ReportsTabState extends State<ReportsTab> {
           onPressed: () => Scaffold.of(context).openDrawer(),
         ),
         backgroundColor: const Color(0xFF161B22),
-        title: const Text('Recovery Register', style: TextStyle(color: Colors.white)),
-        actions: [
-          TextButton.icon(
-            onPressed: () => _pickDate(context),
-            icon: const Icon(Icons.calendar_month, color: Color(0xFF00E676)),
-            label: Text(formattedDate, style: const TextStyle(color: Colors.white)),
+        title: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: _selectedReport,
+            dropdownColor: const Color(0xFF161B22),
+            icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            items: const [
+              DropdownMenuItem(value: 'Recovery Register', child: Text('Recovery Register')),
+              DropdownMenuItem(value: 'CM Pending', child: Text('CM Pending')),
+            ],
+            onChanged: (val) {
+              if (val != null) setState(() => _selectedReport = val);
+            },
           ),
+        ),
+        actions: [
+          if (_selectedReport == 'Recovery Register')
+            TextButton.icon(
+              onPressed: () => _pickDate(context),
+              icon: const Icon(Icons.calendar_month, color: Color(0xFF00E676)),
+              label: Text(formattedDate, style: const TextStyle(color: Colors.white)),
+            ),
           const SizedBox(width: 8),
         ],
       ),
       body: ListenableBuilder(
         listenable: widget.excelService,
         builder: (context, child) {
-          return PdfPreview(
-            build: (format) => _generatePdf(format),
-            allowSharing: true,
-            allowPrinting: true,
-            canChangeOrientation: false,
-            canChangePageFormat: false,
-            canDebug: false,
-            pdfFileName: 'Recovery_Register_$formattedDate.pdf'.replaceAll('/', '-'),
+          Set<String> cms = {'All'};
+          for (var c in widget.excelService.allCustomers) {
+            if (c.cmName.isNotEmpty) cms.add(c.cmName.toUpperCase());
+          }
+          if (!cms.contains(_selectedCmName.toUpperCase()) && _selectedCmName != 'All') {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _selectedCmName = 'All');
+            });
+          }
+
+          return Column(
+            children: [
+              if (_selectedReport == 'CM Pending')
+                Container(
+                  color: const Color(0xFF0B1014),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      const Text('Collection Man: ', style: TextStyle(color: Colors.grey)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: DropdownButton<String>(
+                          value: _selectedCmName,
+                          isExpanded: true,
+                          dropdownColor: const Color(0xFF161B22),
+                          style: const TextStyle(color: Colors.white),
+                          items: cms.map((cm) {
+                            return DropdownMenuItem(
+                              value: cm,
+                              child: Text(cm, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) setState(() => _selectedCmName = val);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: PdfPreview(
+                  build: (format) => _generatePdf(format),
+                  allowSharing: true,
+                  allowPrinting: true,
+                  canChangeOrientation: false,
+                  canChangePageFormat: false,
+                  canDebug: false,
+                  pdfFileName: '${_selectedReport.replaceAll(' ', '_')}_$formattedDate.pdf'.replaceAll('/', '-'),
+                ),
+              ),
+            ],
           );
         },
       ),
