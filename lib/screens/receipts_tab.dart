@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:screenshot/screenshot.dart';
 
 import '../models/customer.dart';
+import '../models/payment_status_helper.dart';
 import '../services/excel_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
@@ -80,17 +81,13 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   void _computeQueues() {
     _pendingReceipts = widget.excelService.allCustomers.where((c) {
-      String pst = c.paymentStatus.trim().toLowerCase();
       String rst = c.receiptStatus.trim().toLowerCase();
-      return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
-             (rst != 'sent' && rst != 'message sent');
+      return c.isPaid && (rst != 'sent' && rst != 'message sent');
     }).toList();
 
     _submittedReceipts = widget.excelService.allCustomers.where((c) {
-      String pst = c.paymentStatus.trim().toLowerCase();
       String rst = c.receiptStatus.trim().toLowerCase();
-      return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
-             (rst == 'sent' || rst == 'message sent');
+      return c.isPaid && (rst == 'sent' || rst == 'message sent');
     }).toList();
   }
 
@@ -749,9 +746,9 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                             onPressed: () async {
                               setState(() {
                                 if (paymentStatus == 'Unpaid') {
-                                  customer.paymentStatus = 'Pending';
+                                  customer.paymentStatus = PaymentStatusHelper.pending;
                                 } else {
-                                  customer.paymentStatus = 'Successful';
+                                  customer.paymentStatus = PaymentStatusHelper.successful;
                                 }
                                 customer.receiptNo = receiptNoCtrl.text.trim();
                                 customer.amountPaid = amountCtrl.text;

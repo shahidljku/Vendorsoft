@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'sending_screen.dart';
 import '../models/customer.dart';
+import '../models/payment_status_helper.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/whatsapp_service.dart';
@@ -401,9 +402,8 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
     Color receiptStatusColor = Colors.grey;
     String receiptText = '';
-    String pst = customer.paymentStatus.trim().toLowerCase();
     String rst = customer.receiptStatus.trim().toLowerCase();
-    if (pst == 'successful' || pst.contains('success') || pst == 'paid') {
+    if (customer.isPaid) {
       if (rst == 'sent') {
         receiptStatusColor = const Color(0xFF00E676);
         receiptText = 'Receipt Sent';
@@ -445,7 +445,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
-          if (customer.paymentStatus != 'Successful') {
+          if (!customer.isPaid) {
             _showPaymentDialog(context, customer);
           } else {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already marked as paid')));
@@ -568,13 +568,13 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   _buildTimelineNode(
                     title: 'Payment',
                     status: customer.paymentStatus.isNotEmpty ? customer.paymentStatus : 'Unpaid',
-                    isSuccess: customer.paymentStatus == 'Successful',
+                    isSuccess: customer.isPaid,
                     isFailed: false,
                   ),
-                  _buildTimelineLine(isActive: customer.paymentStatus == 'Successful'),
+                  _buildTimelineLine(isActive: customer.isPaid),
                   _buildTimelineNode(
                     title: 'Receipt',
-                    status: (customer.receiptStatus.isEmpty && customer.paymentStatus != 'Successful') ? '-' : (customer.receiptStatus.isEmpty ? 'Pending' : customer.receiptStatus),
+                    status: (customer.receiptStatus.isEmpty && !customer.isPaid) ? '-' : (customer.receiptStatus.isEmpty ? 'Pending' : customer.receiptStatus),
                     isSuccess: customer.receiptStatus == 'Sent',
                     isFailed: customer.receiptStatus == 'Failed',
                   ),
@@ -601,7 +601,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                       const Divider(color: Colors.white12, height: 24),
                       if (customer.status == 'Sent') _buildDetailRow('Sent Time', customer.sentTime),
                       if (customer.status == 'Failed') _buildDetailRow('Error', customer.lastError),
-                      if (customer.paymentStatus == 'Successful') ...[
+                      if (customer.isPaid) ...[
                         _buildDetailRow('Amount Paid', customer.amountPaid),
                         _buildDetailRow('Transaction ID', customer.transactionId),
                         _buildDetailRow('Payment Method', customer.paymentMethod),
@@ -879,7 +879,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
                   onPressed: () async {
                     setState(() {
-                      customer.paymentStatus = 'Successful';
+                      customer.paymentStatus = PaymentStatusHelper.successful;
                       customer.amountPaid = amountCtrl.text;
                       customer.transactionId = txCtrl.text;
                       customer.paymentMethod = paymentMethod;

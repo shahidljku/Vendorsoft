@@ -151,8 +151,7 @@ class _RemindersModalState extends State<RemindersModal> {
   }
 
   static bool isCustomerPaid(Customer c) {
-    String pst = c.paymentStatus.trim().toLowerCase();
-    if (pst == 'successful' || pst.contains('success') || pst == 'paid') return true;
+    if (c.isPaid) return true;
     if (c.status.trim().toLowerCase() == 'paid') return true;
     if (c.clBalance.isNotEmpty) {
       double bal = double.tryParse(c.clBalance) ?? 1.0;

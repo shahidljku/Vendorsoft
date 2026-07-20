@@ -1,3 +1,5 @@
+import 'payment_status_helper.dart';
+
 class Customer {
   String mobile;
   String custName;
@@ -24,6 +26,8 @@ class Customer {
   String receiptStatus;
   String paymentDate;
   String receiptNo;
+
+  bool get isPaid => PaymentStatusHelper.isPaid(paymentStatus);
 
   String get resolvedImagePath {
     if (imagePath.isEmpty) return '';

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/customer.dart';
+import '../models/payment_status_helper.dart';
 import '../services/excel_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
@@ -81,13 +82,12 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     if (_statusFilter != 'All') {
       result = result.where((c) {
         String st = c.status.trim().toLowerCase();
-        String pst = c.paymentStatus.trim().toLowerCase();
         String rst = c.receiptStatus.trim().toLowerCase();
         if (_statusFilter == 'Pending Bills') return st == 'pending' || st == 'waiting' || st == 'processing';
         if (_statusFilter == 'Sent Bills') return st == 'sent' || st == 'message sent';
         if (_statusFilter == 'Failed Bills') return st == 'failed';
-        if (_statusFilter == 'Unpaid Bills') return pst != 'successful' && !pst.contains('success') && pst != 'paid';
-        if (_statusFilter == 'Receipts Pending') return (pst == 'successful' || pst.contains('success') || pst == 'paid') && rst != 'sent';
+        if (_statusFilter == 'Unpaid Bills') return !c.isPaid;
+        if (_statusFilter == 'Receipts Pending') return c.isPaid && rst != 'sent';
         return true;
       }).toList();
     }
@@ -97,10 +97,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     if (_searchQuery.isNotEmpty) {
       String q = _searchQuery.toLowerCase().trim();
       if (q == 'unpaid') {
-        result = result.where((c) {
-          String pst = c.paymentStatus.trim().toLowerCase();
-          return pst != 'successful' && !pst.contains('success') && pst != 'paid';
-        }).toList();
+        result = result.where((c) => !c.isPaid).toList();
       } else if (q == 'failed') {
         result = result.where((c) => c.status.trim().toLowerCase() == 'failed').toList();
       } else if (q == 'pending') {
@@ -192,15 +189,10 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           int pendingBillsCount = widget.excelService.allCustomers.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').length;
           int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Failed').length;
           int sentBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Sent' || c.status == 'Message Sent').length;
-          int unpaidCount = widget.excelService.allCustomers.where((c) {
-            String pst = c.paymentStatus.trim().toLowerCase();
-            return pst != 'successful' && !pst.contains('success') && pst != 'paid';
-          }).length;
+          int unpaidCount = widget.excelService.allCustomers.where((c) => !c.isPaid).length;
           int receiptPendingCount = widget.excelService.allCustomers.where((c) {
-            String pst = c.paymentStatus.trim().toLowerCase();
             String rst = c.receiptStatus.trim().toLowerCase();
-            return (pst == 'successful' || pst.contains('success') || pst == 'paid') &&
-                   (rst != 'sent' && rst != 'message sent');
+            return c.isPaid && (rst != 'sent' && rst != 'message sent');
           }).length;
 
           // Compute unique collection men
@@ -369,9 +361,8 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
 
     Color receiptStatusColor = Colors.grey;
     String receiptText = '';
-    String pst = customer.paymentStatus.trim().toLowerCase();
     String rst = customer.receiptStatus.trim().toLowerCase();
-    if (pst == 'successful' || pst.contains('success') || pst == 'paid') {
+    if (customer.isPaid) {
       if (rst == 'sent') {
         receiptStatusColor = const Color(0xFF00E676);
         receiptText = 'Receipt Sent';
@@ -413,7 +404,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
       ),
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.startToEnd) {
-          if (customer.paymentStatus != 'Successful') {
+          if (!customer.isPaid) {
             _showPaymentDialog(context, customer);
           } else {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Already marked as paid')));
@@ -565,13 +556,13 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                   _buildTimelineNode(
                     title: 'Payment',
                     status: customer.paymentStatus.isNotEmpty ? customer.paymentStatus : 'Unpaid',
-                    isSuccess: customer.paymentStatus == 'Successful',
+                    isSuccess: customer.isPaid,
                     isFailed: false,
                   ),
-                  _buildTimelineLine(isActive: customer.paymentStatus == 'Successful'),
+                  _buildTimelineLine(isActive: customer.isPaid),
                   _buildTimelineNode(
                     title: 'Receipt',
-                    status: (customer.receiptStatus.isEmpty && customer.paymentStatus != 'Successful') ? '-' : (customer.receiptStatus.isEmpty ? 'Pending' : customer.receiptStatus),
+                    status: (customer.receiptStatus.isEmpty && !customer.isPaid) ? '-' : (customer.receiptStatus.isEmpty ? 'Pending' : customer.receiptStatus),
                     isSuccess: customer.receiptStatus == 'Sent',
                     isFailed: customer.receiptStatus == 'Failed',
                   ),
@@ -598,7 +589,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       const Divider(color: Colors.white12, height: 24),
                       if (customer.status == 'Sent') _buildDetailRow('Sent Time', customer.sentTime),
                       if (customer.status == 'Failed') _buildDetailRow('Error', customer.lastError),
-                      if (customer.paymentStatus == 'Successful') ...[
+                      if (customer.isPaid) ...[
                         _buildDetailRow('Amount Paid', customer.amountPaid),
                         _buildDetailRow('Transaction ID', customer.transactionId),
                         _buildDetailRow('Payment Method', customer.paymentMethod),
@@ -648,19 +639,19 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                 child: ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    if (customer.paymentStatus != 'Successful') {
+                    if (!customer.isPaid) {
                       _showPaymentDialog(context, customer);
                     }
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: customer.paymentStatus == 'Successful' ? Colors.grey.withValues(alpha: 0.2) : const Color(0xFF00E676),
+                    backgroundColor: customer.isPaid ? Colors.grey.withValues(alpha: 0.2) : const Color(0xFF00E676),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     elevation: 0,
                   ),
                   child: Text(
-                    customer.paymentStatus == 'Successful' ? 'Payment Completed' : 'Mark as Paid', 
+                    customer.isPaid ? 'Payment Completed' : 'Mark as Paid', 
                     style: TextStyle(
-                      color: customer.paymentStatus == 'Successful' ? Colors.white54 : Colors.black,
+                      color: customer.isPaid ? Colors.white54 : Colors.black,
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
                     ),
@@ -800,7 +791,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                   style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
                   onPressed: () async {
                     setState(() {
-                      customer.paymentStatus = 'Successful';
+                      customer.paymentStatus = PaymentStatusHelper.successful;
                       customer.amountPaid = amountCtrl.text;
                       customer.transactionId = txCtrl.text;
                       customer.paymentMethod = paymentMethod;

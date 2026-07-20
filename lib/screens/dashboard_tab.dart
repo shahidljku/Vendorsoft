@@ -243,9 +243,8 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
     for (var c in currentCustomers) {
       double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
       double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
-      String pst = c.paymentStatus.trim().toLowerCase();
       String rst = c.receiptStatus.trim().toLowerCase();
-      bool isPaid = pst == 'successful' || pst.contains('success') || pst == 'paid';
+      bool isPaid = c.isPaid;
 
       if (paid < bill && !isPaid) {
         pendingCollectionAmount += (bill - paid).clamp(0.0, double.infinity);
@@ -493,8 +492,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
 
       double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
       double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
-      String pst = c.paymentStatus.trim().toLowerCase();
-      bool isPaid = pst == 'successful' || pst.contains('success') || pst == 'paid';
+      bool isPaid = c.isPaid;
       if (paid == 0.0 && isPaid && bill > 0.0) {
         paid = bill;
       }

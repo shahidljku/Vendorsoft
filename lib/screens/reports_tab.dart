@@ -8,6 +8,8 @@ import 'package:printing/printing.dart';
 import '../models/customer.dart';
 import '../services/excel_service.dart';
 import '../services/license_service.dart';
+import '../reports/framework/report_config.dart';
+import '../reports/framework/report_framework.dart';
 
 class ReportsTab extends StatefulWidget {
   final ExcelService excelService;
@@ -49,14 +51,11 @@ class _ReportsTabState extends State<ReportsTab> {
   }
 
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
-    final pdf = pw.Document();
-
     String formattedDate = DateFormat('dd/MM/yyyy').format(_selectedDate);
     
-    // Make filtering highly forgiving to account for Excel formatting variations
+    // 1. Filter Data
     List<Customer> dayCustomers = widget.excelService.allCustomers.where((c) {
-      bool isSuccessful = c.paymentStatus.trim().toLowerCase().contains('success') || 
-                          c.paymentStatus.trim().toLowerCase() == 'paid';
+      bool isSuccessful = c.isPaid;
       
       String d1 = DateFormat('dd/MM/yyyy').format(_selectedDate); // 02/07/2026
       String d2 = DateFormat('d/M/yyyy').format(_selectedDate);   // 2/7/2026
@@ -65,7 +64,6 @@ class _ReportsTabState extends State<ReportsTab> {
       String pDate = c.paymentDate.trim();
       String vDate = c.vouchDate.trim();
       
-      // If paymentDate is empty, we fallback to the vouchDate
       String dateToCheck = pDate.isNotEmpty ? pDate : vDate;
 
       bool isCorrectDate = dateToCheck.contains(d1) || 
@@ -76,7 +74,7 @@ class _ReportsTabState extends State<ReportsTab> {
       return isCorrectDate && isSuccessful;
     }).toList();
 
-    // Group by Collection Man
+    // 2. Group by Collection Man
     Map<String, List<Customer>> groupedByCm = {};
     for (var c in dayCustomers) {
       String cm = c.cmName.isNotEmpty ? c.cmName.toUpperCase() : 'UNKNOWN';
@@ -88,162 +86,93 @@ class _ReportsTabState extends State<ReportsTab> {
     double dayOnlineTotal = 0;
     double dayCashTotal = 0;
 
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: format,
-        margin: const pw.EdgeInsets.all(32),
-        header: (context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.center,
-            children: [
-              pw.Text(businessName, style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 4),
-              pw.Text('Recovery Register', style: pw.TextStyle(fontSize: 14)),
-              pw.Divider(),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text('Collection Date: $formattedDate', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                  pw.Text('Page : ${context.pageNumber}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                ]
-              ),
-              pw.SizedBox(height: 10),
-            ],
-          );
-        },
-        build: (context) {
-          List<pw.Widget> widgets = [];
-          
-          if (dayCustomers.isEmpty) {
-            widgets.add(pw.Center(child: pw.Text('No successful payments recorded for $formattedDate')));
-            return widgets;
-          }
+    // 3. Build Sections
+    List<ReportSection> sections = [];
+    final sortedCmKeys = groupedByCm.keys.toList()..sort();
 
-          final sortedCmKeys = groupedByCm.keys.toList()..sort();
+    for (String cm in sortedCmKeys) {
+      List<Customer> cmCustomers = groupedByCm[cm]!;
+      List<Customer> onlineList = cmCustomers.where((c) => c.paymentMethod.toLowerCase() == 'online').toList();
+      List<Customer> cashList = cmCustomers.where((c) => c.paymentMethod.toLowerCase() == 'cash').toList();
+      
+      double cmOnlineTotal = 0;
+      double cmCashTotal = 0;
 
-          for (String cm in sortedCmKeys) {
-            List<Customer> cmCustomers = groupedByCm[cm]!;
-            
-            List<Customer> onlineList = cmCustomers.where((c) => c.paymentMethod.toLowerCase() == 'online').toList();
-            List<Customer> cashList = cmCustomers.where((c) => c.paymentMethod.toLowerCase() == 'cash').toList();
-            
-            double cmOnlineTotal = 0;
-            double cmCashTotal = 0;
-
-            widgets.add(pw.Container(
-              padding: const pw.EdgeInsets.symmetric(vertical: 8),
-              color: PdfColors.grey200,
-              width: double.infinity,
-              child: pw.Padding(
-                padding: const pw.EdgeInsets.symmetric(horizontal: 8),
-                child: pw.Text('Collection Man: $cm', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
-              ),
-            ));
-            
-            widgets.add(pw.SizedBox(height: 8));
-
-            // Online Section
-            if (onlineList.isNotEmpty) {
-              widgets.add(pw.Text('** Payment Mode: ONLINE **', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)));
-              widgets.add(pw.SizedBox(height: 4));
-              
-              widgets.add(_buildTable(onlineList));
-              
-              cmOnlineTotal = onlineList.fold(0.0, (sum, c) => sum + (double.tryParse(c.amountPaid) ?? 0));
-              dayOnlineTotal += cmOnlineTotal;
-              
-              widgets.add(pw.SizedBox(height: 4));
-              widgets.add(pw.Align(
-                alignment: pw.Alignment.centerRight,
-                child: pw.Text('Online Total ($cm): ${cmOnlineTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-              ));
-              widgets.add(pw.SizedBox(height: 12));
-            }
-
-            // Cash Section
-            if (cashList.isNotEmpty) {
-              widgets.add(pw.Text('** Payment Mode: CASH **', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)));
-              widgets.add(pw.SizedBox(height: 4));
-              
-              widgets.add(_buildTable(cashList));
-              
-              cmCashTotal = cashList.fold(0.0, (sum, c) => sum + (double.tryParse(c.amountPaid) ?? 0));
-              dayCashTotal += cmCashTotal;
-              
-              widgets.add(pw.SizedBox(height: 4));
-              widgets.add(pw.Align(
-                alignment: pw.Alignment.centerRight,
-                child: pw.Text('Cash Total ($cm): ${cmCashTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-              ));
-              widgets.add(pw.SizedBox(height: 12));
-            }
-            
-            double cmGrandTotal = cmOnlineTotal + cmCashTotal;
-            widgets.add(pw.Align(
-              alignment: pw.Alignment.centerRight,
-              child: pw.Text('Total for $cm: ${cmGrandTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 15, color: PdfColors.blue800)),
-            ));
-            
-            widgets.add(pw.Divider(thickness: 1.5));
-            widgets.add(pw.SizedBox(height: 16));
-          }
-
-          // Grand Totals at end of report
-          double grandTotal = dayOnlineTotal + dayCashTotal;
-          widgets.add(pw.SizedBox(height: 20));
-          widgets.add(pw.Divider(thickness: 2));
-          widgets.add(pw.SizedBox(height: 4));
-          widgets.add(pw.Align(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.end,
-              children: [
-                pw.Text('TOTAL ONLINE COLLECTION: ${dayOnlineTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 15)),
-                pw.Text('TOTAL CASH COLLECTION: ${dayCashTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 15)),
-                pw.SizedBox(height: 4),
-                pw.Text('GRAND TOTAL: ${grandTotal.toStringAsFixed(2)}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 18)),
-              ]
-            )
-          ));
-          widgets.add(pw.Divider(thickness: 2));
-
-          return widgets;
+      // Online Section
+      if (onlineList.isNotEmpty) {
+        List<List<String>> rows = [];
+        for (int i = 0; i < onlineList.length; i++) {
+          final c = onlineList[i];
+          rows.add([
+            (i + 1).toString(),
+            c.billNo,
+            c.custNo,
+            c.custName,
+            double.tryParse(c.amountPaid)?.toStringAsFixed(2) ?? '0.00'
+          ]);
         }
-      )
-    );
+        cmOnlineTotal = onlineList.fold(0.0, (sum, c) => sum + (double.tryParse(c.amountPaid) ?? 0));
+        dayOnlineTotal += cmOnlineTotal;
+        
+        sections.add(ReportSection(
+          title: 'Collection Man: $cm',
+          subtitle: '** Payment Mode: ONLINE **',
+          rows: rows,
+          summaryLines: ['Online Total ($cm): ${cmOnlineTotal.toStringAsFixed(2)}'],
+        ));
+      }
 
-    return pdf.save();
-  }
+      // Cash Section
+      if (cashList.isNotEmpty) {
+        List<List<String>> rows = [];
+        for (int i = 0; i < cashList.length; i++) {
+          final c = cashList[i];
+          rows.add([
+            (i + 1).toString(),
+            c.billNo,
+            c.custNo,
+            c.custName,
+            double.tryParse(c.amountPaid)?.toStringAsFixed(2) ?? '0.00'
+          ]);
+        }
+        cmCashTotal = cashList.fold(0.0, (sum, c) => sum + (double.tryParse(c.amountPaid) ?? 0));
+        dayCashTotal += cmCashTotal;
+        
+        sections.add(ReportSection(
+          title: onlineList.isEmpty ? 'Collection Man: $cm' : '', 
+          subtitle: '** Payment Mode: CASH **',
+          rows: rows,
+          summaryLines: [
+            'Cash Total ($cm): ${cmCashTotal.toStringAsFixed(2)}',
+            if (onlineList.isNotEmpty) 'Total for $cm: ${(cmOnlineTotal + cmCashTotal).toStringAsFixed(2)}'
+          ],
+        ));
+      } else if (onlineList.isNotEmpty) {
+        sections.last.summaryLines.add('Total for $cm: ${cmOnlineTotal.toStringAsFixed(2)}');
+      }
+    }
 
-  pw.Widget _buildTable(List<Customer> list) {
-    return pw.TableHelper.fromTextArray(
+    double grandTotal = dayOnlineTotal + dayCashTotal;
+    List<String> grandTotals = dayCustomers.isEmpty ? [] : [
+      'TOTAL ONLINE COLLECTION: ${dayOnlineTotal.toStringAsFixed(2)}',
+      'TOTAL CASH COLLECTION: ${dayCashTotal.toStringAsFixed(2)}',
+      'GRAND TOTAL: ${grandTotal.toStringAsFixed(2)}'
+    ];
+
+    // 4. Create Config
+    final config = ReportConfig(
+      reportTitle: 'Recovery Register',
+      businessName: businessName,
+      filters: ['Collection Date: $formattedDate'],
+      pageFormat: format,
       headers: ['Sr.No', 'Bill No', 'Cust.No', 'Name of Customer', 'Amount'],
-      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 13),
-      cellStyle: const pw.TextStyle(fontSize: 12),
-      headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
-      cellAlignments: {
+      columnAlignments: {
         0: pw.Alignment.center,
         1: pw.Alignment.center,
         2: pw.Alignment.center,
         3: pw.Alignment.centerLeft,
         4: pw.Alignment.centerRight,
       },
-      headerAlignments: {
-        0: pw.Alignment.center,
-        1: pw.Alignment.center,
-        2: pw.Alignment.center,
-        3: pw.Alignment.centerLeft,
-        4: pw.Alignment.centerRight,
-      },
-      data: list.asMap().entries.map((e) {
-        return [
-          (e.key + 1).toString(),
-          e.value.billNo,
-          e.value.custNo,
-          e.value.custName,
-          double.tryParse(e.value.amountPaid)?.toStringAsFixed(2) ?? '0.00'
-        ];
-      }).toList(),
       columnWidths: {
         0: const pw.FlexColumnWidth(1),
         1: const pw.FlexColumnWidth(1.5),
@@ -251,7 +180,12 @@ class _ReportsTabState extends State<ReportsTab> {
         3: const pw.FlexColumnWidth(4.5),
         4: const pw.FlexColumnWidth(1.5),
       },
+      sections: sections,
+      grandTotals: grandTotals,
     );
+
+    // 5. Generate PDF using Framework
+    return ReportFramework.generate(config);
   }
 
   @override
