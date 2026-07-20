@@ -11,6 +11,7 @@ import '../services/license_service.dart';
 import '../reports/framework/report_config.dart';
 import '../reports/framework/report_framework.dart';
 import '../reports/cm_pending_report.dart';
+import '../reports/monthly_collection_report.dart';
 
 class ReportsTab extends StatefulWidget {
   final ExcelService excelService;
@@ -54,6 +55,9 @@ class _ReportsTabState extends State<ReportsTab> {
   }
 
   Future<Uint8List> _generatePdf(PdfPageFormat format) async {
+    if (_selectedReport == 'Monthly Collection') {
+      return MonthlyCollectionReport.generate(format, widget.excelService);
+    }
     if (_selectedReport == 'CM Pending') {
       return CmPendingReport.generate(format, widget.excelService, _selectedCmName == 'All' ? '' : _selectedCmName);
     }
@@ -216,6 +220,7 @@ class _ReportsTabState extends State<ReportsTab> {
             items: const [
               DropdownMenuItem(value: 'Recovery Register', child: Text('Recovery Register')),
               DropdownMenuItem(value: 'CM Pending', child: Text('CM Pending')),
+              DropdownMenuItem(value: 'Monthly Collection', child: Text('Monthly Collection')),
             ],
             onChanged: (val) {
               if (val != null) setState(() => _selectedReport = val);
