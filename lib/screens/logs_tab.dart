@@ -137,12 +137,11 @@ class _LogsTabState extends State<LogsTab> {
               final logFile = File('${directory.path}/VendSoft/logs.txt');
               if (await logFile.exists()) {
                 await logFile.delete();
-                if (context.mounted) {
-                  setState(() {
-                    _logLines = [];
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logs cleared')));
-                }
+                if (!context.mounted) return;
+                setState(() {
+                  _logLines = [];
+                });
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logs cleared')));
               }
             },
           ),

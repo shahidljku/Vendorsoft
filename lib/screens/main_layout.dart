@@ -64,6 +64,9 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkCorruptionRecovery();
+    });
     _fcmSubscription = PushNotificationService().onMessageStream.listen((_) {
       if (mounted) _pollTransfers();
     });
@@ -74,6 +77,58 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
     _loadPlanInfo();
   }
   
+  Future<void> _checkCorruptionRecovery() async {
+    final lastUri = await widget.settingsService.getLastExcelUri();
+    if (lastUri != null && _excelService.isCorrupted) {
+      if (await _excelService.hasRecoverableBackup(lastUri)) {
+        if (!mounted) return;
+        final restore = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF161B22),
+            title: const Text('Data Corruption Detected', style: TextStyle(color: Colors.white)),
+            content: const Text(
+              'Your Excel file was corrupted during the last save (likely due to the app closing unexpectedly).\n\nA safe backup was found. Would you like to restore it now?',
+              style: TextStyle(color: Colors.white70)
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Ignore', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Restore Backup', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+
+        if (restore == true) {
+          if (!mounted) return;
+          showDialog(
+            context: context, 
+            barrierDismissible: false, 
+            builder: (_) => const Center(child: CircularProgressIndicator(color: Color(0xFF00E676)))
+          );
+          
+          final success = await _excelService.restoreFromBackup(lastUri);
+          if (!mounted) return;
+          Navigator.pop(context); // close loading
+          
+          if (success) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup restored successfully!')));
+            setState(() {});
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to restore backup.', style: TextStyle(color: Colors.white)), backgroundColor: Colors.redAccent));
+          }
+        }
+      }
+    }
+  }
+
   Future<void> _loadPlanInfo() async {
     if (widget.isTrialActive) {
       _currentPlanName = 'Free Trial';
@@ -210,7 +265,15 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
       await RegistrationService().logoutFromServer();
       await LicenseService().removeLicense();
       await FirebaseAuth.instance.signOut();
-      LicenseService().triggerDeviceBan(); // Re-use stream to force UI to logout screen
+      
+      // Clear terms acceptance to navigate to the normal Welcome/Login screen
+      await widget.settingsService.setHasAcceptedTerms(false);
+      
+      // Dismiss the loading dialog BEFORE triggering the root rebuild to guarantee we only pop the dialog
+      if (mounted) Navigator.pop(context);
+      
+      // Force UI refresh without simulating a hardware ban
+      LicenseService().triggerLoginReset(); 
     } catch (e) {
       if (mounted) Navigator.pop(context);
     }

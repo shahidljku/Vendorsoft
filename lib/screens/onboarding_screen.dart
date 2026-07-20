@@ -59,6 +59,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         mobileNumber: mobileNumber,
       );
 
+      if (!mounted) return;
+
       setState(() => _isRegistering = false);
 
       if (!success) {
@@ -68,9 +70,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         return;
       }
     } on TransferRequiredException catch (e) {
+      if (!mounted) return;
       setState(() => _isRegistering = false);
-      if (mounted) {
-        showDialog(
+      
+      showDialog(
           context: context,
           barrierDismissible: false,
           builder: (ctx) => AlertDialog(
@@ -117,7 +120,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ],
           ),
         );
-      }
       return;
     } catch (e) {
       setState(() => _isRegistering = false);

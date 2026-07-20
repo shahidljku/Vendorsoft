@@ -583,7 +583,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         await LogService().writeLog(customer.mobile, "Receipt Failed - $e");
       }
 
-      await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+      await widget.excelService.saveCustomers(customers: widget.excelService.allCustomers, notify: false);
 
       if (!_isSending || !mounted) break;
 
@@ -613,6 +613,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         _isSending = false;
       });
       _computeQueues();
+      widget.excelService.triggerNotify();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt sending completed!')));
     }
     WakelockPlus.disable();
@@ -758,7 +759,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                                 customer.paymentMethod = paymentMethod;
                                 customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
                               });
-                              await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                              await widget.excelService.saveCustomers(customers: widget.excelService.allCustomers);
                               _computeQueues();
                               if (context.mounted) Navigator.pop(context);
                             },
@@ -842,7 +843,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                       setState(() {
                         c.receiptStatus = 'Sent';
                       });
-                      await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                      await widget.excelService.saveCustomers();
                       _computeQueues();
                     } else {
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Receipt already marked as sent')));
@@ -920,7 +921,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                                                   updated = true;
                                                 }
                                                 if (updated) {
-                                                  await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                                                  await widget.excelService.saveCustomers();
                                                 }
                                                 
                                                 final imageBytes = await _screenshotController.captureFromWidget(
@@ -978,7 +979,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                                                   updated = true;
                                                 }
                                                 if (updated) {
-                                                  await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                                                  await widget.excelService.saveCustomers();
                                                 }
                                                 
                                                 final imageBytes = await _screenshotController.captureFromWidget(

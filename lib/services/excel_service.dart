@@ -4,6 +4,9 @@ import '../models/customer.dart';
 import 'package:excel/excel.dart';
 import 'package:flutter/foundation.dart';
 import 'file_access_service.dart';
+import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 // ignore: unused_import
 import 'license_service.dart';
 
@@ -41,11 +44,24 @@ class ExcelService extends ChangeNotifier {
     return fileName;
   }
 
+  bool _isCorrupted = false;
+  bool get isCorrupted => _isCorrupted;
+
   /// Attempts to load the Excel file from a previously saved URI.
   /// Returns true if successful, false otherwise.
   Future<bool> loadFromUri(String uri, String name) async {
+    while (_activeSaveFuture != null) {
+      try {
+        await _activeSaveFuture;
+      } catch (_) {}
+    }
+    
+    _isCorrupted = false;
     final bytes = await FileAccessService.readFromUri(uri);
-    if (bytes == null) return false;
+    if (bytes == null || bytes.isEmpty) {
+      _isCorrupted = true;
+      return false;
+    }
 
     _documentUri = uri;
     fileName = name;
@@ -55,6 +71,39 @@ class ExcelService extends ChangeNotifier {
       return true;
     } catch (e) {
       print('ExcelService loadFromUri error: $e');
+      _isCorrupted = true;
+      return false;
+    }
+  }
+
+  Future<bool> hasRecoverableBackup(String uri) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final backupUri = prefs.getString('backup_uri_key');
+      if (backupUri != uri) return false;
+
+      final dir = await getApplicationDocumentsDirectory();
+      final validFile = File('${dir.path}/VendSoft_Backup/valid_backup.xlsx');
+      return await validFile.exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> restoreFromBackup(String uri) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final validFile = File('${dir.path}/VendSoft_Backup/valid_backup.xlsx');
+      if (!await validFile.exists()) return false;
+
+      final bytes = await validFile.readAsBytes();
+      bool saved = await FileAccessService.saveToUri(uri, bytes);
+      if (saved) {
+        return await loadFromUri(uri, fileName ?? 'Restored_File');
+      }
+      return false;
+    } catch (e) {
+      print('Restore error: $e');
       return false;
     }
   }
@@ -178,7 +227,7 @@ class ExcelService extends ChangeNotifier {
   /// Saves all customers back to the ORIGINAL Excel file via SAF.
   /// Uses a mutex lock to serialize concurrent save requests to prevent file corruption.
   /// Returns true on success, false on failure.
-  Future<bool> saveCustomers([List<Customer>? customers]) async {
+  Future<bool> saveCustomers({List<Customer>? customers, bool notify = true}) async {
     while (_activeSaveFuture != null) {
       try {
         await _activeSaveFuture;
@@ -190,7 +239,7 @@ class ExcelService extends ChangeNotifier {
 
     try {
       final targetCustomers = customers ?? allCustomers;
-      final result = await _executeSave(targetCustomers);
+      final result = await _executeSave(targetCustomers, notify);
       completer.complete(result);
       return result;
     } catch (e) {
@@ -204,102 +253,56 @@ class ExcelService extends ChangeNotifier {
     }
   }
 
-  Future<bool> _executeSave(List<Customer> customers) async {
+  Future<bool> _executeSave(List<Customer> customers, bool notify) async {
     if (_documentUri == null) {
       print('ExcelService save error: no document URI');
       return false;
     }
 
     try {
-      var excel = Excel.createExcel();
-
-      // Get the default sheet name created by createExcel()
-      String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
-
-      // Rename default sheet to 'Sheet1' if it has a different name
-      if (defaultSheet != 'Sheet1') {
-        excel.rename(defaultSheet, 'Sheet1');
-      }
-
-      Sheet sheet = excel['Sheet1'];
-
-      // Write header row
-      sheet.appendRow([
-        TextCellValue('mobile_no'),
-        TextCellValue('custname'),
-        TextCellValue('YesNo'),
-        TextCellValue('Status'),
-        TextCellValue('jpg_Path'),
-        TextCellValue('message'),
-        TextCellValue('vouch_date'),
-        TextCellValue('cust_no'),
-        TextCellValue('bill_no'),
-        TextCellValue('bill_amount'),
-        TextCellValue('cl_balance'),
-        TextCellValue('cm_code'),
-        TextCellValue('cm_name'),
-        TextCellValue('Month_nm'),
-        TextCellValue('SentTime'),
-        TextCellValue('PaymentStatus'),
-        TextCellValue('AmountPaid'),
-        TextCellValue('TransactionId'),
-        TextCellValue('PaymentMethod'),
-        TextCellValue('ReceiptStatus'),
-        TextCellValue('PaymentDate'),
-        TextCellValue('ReceiptNo'),
-      ]);
-
-      // Write all customer data
-      for (Customer c in customers) {
-        sheet.appendRow([
-          TextCellValue(c.mobile),
-          TextCellValue(c.custName),
-          TextCellValue(c.yesNo),
-          TextCellValue(c.status),
-          TextCellValue(c.imagePath),
-          TextCellValue(c.message),
-          TextCellValue(c.vouchDate),
-          TextCellValue(c.custNo),
-          TextCellValue(c.billNo),
-          TextCellValue(c.billAmount),
-          TextCellValue(c.clBalance),
-          TextCellValue(c.cmCode),
-          TextCellValue(c.cmName),
-          TextCellValue(c.monthNm),
-          TextCellValue(c.sentTime),
-          TextCellValue(c.paymentStatus),
-          TextCellValue(c.amountPaid),
-          TextCellValue(c.transactionId),
-          TextCellValue(c.paymentMethod),
-          TextCellValue(c.receiptStatus),
-          TextCellValue(c.paymentDate),
-          TextCellValue(c.receiptNo),
-        ]);
-      }
-
-      // Remove any extra default sheets
-      for (String sheetName in excel.tables.keys.toList()) {
-        if (sheetName != 'Sheet1') {
-          excel.delete(sheetName);
-        }
-      }
-
-      List<int>? bytes = excel.encode();
+      final serializedCustomers = customers.map((c) => c.toJson()).toList();
+      final Uint8List? bytes = await compute(_buildExcelBytesInBackground, serializedCustomers);
 
       if (bytes == null) {
         print('ExcelService save error: encode() returned null');
         return false;
       }
 
+      // -- QA-001 Transactional Backup --
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final backupDir = Directory('${dir.path}/VendSoft_Backup');
+        if (!await backupDir.exists()) {
+          await backupDir.create(recursive: true);
+        }
+        final tempFile = File('${backupDir.path}/temp_backup.xlsx');
+        final validFile = File('${backupDir.path}/valid_backup.xlsx');
+
+        await tempFile.writeAsBytes(bytes, flush: true);
+        if (await tempFile.length() > 0) {
+          if (await validFile.exists()) {
+            await validFile.delete();
+          }
+          await tempFile.rename(validFile.path);
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('backup_uri_key', _documentUri!);
+        }
+      } catch (e) {
+        print('ExcelService backup error: $e');
+      }
+      // ---------------------------------
+
       // Write back to the ORIGINAL file via SAF content URI
       bool saved = await FileAccessService.saveToUri(
         _documentUri!,
-        Uint8List.fromList(bytes),
+        bytes,
       );
 
       if (saved) {
         print('ExcelService: Saved ${customers.length} customers to original file');
-        notifyListeners();
+        if (notify) {
+          notifyListeners();
+        }
       } else {
         print('ExcelService save error: SAF write failed');
       }
@@ -318,5 +321,93 @@ class ExcelService extends ChangeNotifier {
     _documentUri = null;
     fileName = null;
     notifyListeners();
+  }
+  
+  void triggerNotify() {
+    notifyListeners();
+  }
+}
+
+Future<Uint8List?> _buildExcelBytesInBackground(List<Map<String, dynamic>> serializedCustomers) async {
+  try {
+    var excel = Excel.createExcel();
+
+    // Get the default sheet name created by createExcel()
+    String defaultSheet = excel.getDefaultSheet() ?? 'Sheet1';
+
+    // Rename default sheet to 'Sheet1' if it has a different name
+    if (defaultSheet != 'Sheet1') {
+      excel.rename(defaultSheet, 'Sheet1');
+    }
+
+    Sheet sheet = excel['Sheet1'];
+
+    // Write header row
+    sheet.appendRow([
+      TextCellValue('mobile_no'),
+      TextCellValue('custname'),
+      TextCellValue('YesNo'),
+      TextCellValue('Status'),
+      TextCellValue('jpg_Path'),
+      TextCellValue('message'),
+      TextCellValue('vouch_date'),
+      TextCellValue('cust_no'),
+      TextCellValue('bill_no'),
+      TextCellValue('bill_amount'),
+      TextCellValue('cl_balance'),
+      TextCellValue('cm_code'),
+      TextCellValue('cm_name'),
+      TextCellValue('Month_nm'),
+      TextCellValue('SentTime'),
+      TextCellValue('PaymentStatus'),
+      TextCellValue('AmountPaid'),
+      TextCellValue('TransactionId'),
+      TextCellValue('PaymentMethod'),
+      TextCellValue('ReceiptStatus'),
+      TextCellValue('PaymentDate'),
+      TextCellValue('ReceiptNo'),
+    ]);
+
+    // Write all customer data
+    for (var c in serializedCustomers) {
+      sheet.appendRow([
+        TextCellValue(c['mobile'] ?? ''),
+        TextCellValue(c['custName'] ?? ''),
+        TextCellValue(c['yesNo'] ?? ''),
+        TextCellValue(c['status'] ?? ''),
+        TextCellValue(c['imagePath'] ?? ''),
+        TextCellValue(c['message'] ?? ''),
+        TextCellValue(c['vouchDate'] ?? ''),
+        TextCellValue(c['custNo'] ?? ''),
+        TextCellValue(c['billNo'] ?? ''),
+        TextCellValue(c['billAmount'] ?? ''),
+        TextCellValue(c['clBalance'] ?? ''),
+        TextCellValue(c['cmCode'] ?? ''),
+        TextCellValue(c['cmName'] ?? ''),
+        TextCellValue(c['monthNm'] ?? ''),
+        TextCellValue(c['sentTime'] ?? ''),
+        TextCellValue(c['paymentStatus'] ?? ''),
+        TextCellValue(c['amountPaid'] ?? ''),
+        TextCellValue(c['transactionId'] ?? ''),
+        TextCellValue(c['paymentMethod'] ?? ''),
+        TextCellValue(c['receiptStatus'] ?? ''),
+        TextCellValue(c['paymentDate'] ?? ''),
+        TextCellValue(c['receiptNo'] ?? ''),
+      ]);
+    }
+
+    // Remove any extra default sheets
+    for (String sheetName in excel.tables.keys.toList()) {
+      if (sheetName != 'Sheet1') {
+        excel.delete(sheetName);
+      }
+    }
+
+    List<int>? bytes = excel.encode();
+    if (bytes == null) return null;
+    return Uint8List.fromList(bytes);
+  } catch (e) {
+    print('Excel encoding error in isolate: $e');
+    return null;
   }
 }

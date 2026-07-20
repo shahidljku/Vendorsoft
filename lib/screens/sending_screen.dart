@@ -92,6 +92,7 @@ class _SendingScreenState
     if (AccessibilityService.activeSendingMode == 'bill') {
       AccessibilityService.activeSendingMode = 'none';
     }
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -241,7 +242,15 @@ class _SendingScreenState
           customer.status = "Waiting";
         });
 
+        // Add timeout to prevent infinite hang if Accessibility Service fails
+        Timer timeoutTimer = Timer(const Duration(seconds: 45), () {
+          if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+            _whatsAppCompleter!.complete(false);
+          }
+        });
+
         bool wasSent = await _whatsAppCompleter!.future;
+        timeoutTimer.cancel();
 
         if (!isSending || _sendingSessionId != sessionId) {
           setState(() {
@@ -262,10 +271,12 @@ class _SendingScreenState
               setState(() {
                 isSending = false;
               });
+              Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Cooldown limit reached (30 messages). Pausing sending.')),
               );
             }
+            WakelockPlus.disable();
             break;
           }
         } else {
@@ -288,7 +299,7 @@ class _SendingScreenState
 
       // Always save to Excel after processing the customer, whether success or failure
       bool saved = await widget.excelService.saveCustomers(
-        widget.excelService.allCustomers,
+        notify: false,
       );
 
       if (!isSending || _sendingSessionId != sessionId || !mounted) break;
@@ -348,8 +359,10 @@ class _SendingScreenState
       setState(() {
         isSending = false;
       });
+      widget.excelService.triggerNotify();
 
       if (mounted) {
+        Navigator.pop(context);
         ScaffoldMessenger.of(context)
             .showSnackBar(
           const SnackBar(

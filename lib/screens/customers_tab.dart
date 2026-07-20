@@ -677,7 +677,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                         customer.status = 'Pending';
                         customer.lastError = '';
                       });
-                      await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                      await widget.excelService.saveCustomers();
                       if (context.mounted) Navigator.pop(context);
                     },
                     style: OutlinedButton.styleFrom(
@@ -806,7 +806,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       customer.paymentMethod = paymentMethod;
                       customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
                     });
-                    await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                    await widget.excelService.saveCustomers();
                     if (context.mounted) Navigator.pop(context);
                   },
                   child: const Text('Save', style: TextStyle(color: Colors.black)),
@@ -1062,7 +1062,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       widget.excelService.allCustomers.add(newCust);
                     }
 
-                    await widget.excelService.saveCustomers(widget.excelService.allCustomers);
+                    await widget.excelService.saveCustomers();
                     if (context.mounted) Navigator.pop(context);
                     setState(() {});
                   },

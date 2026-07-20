@@ -98,7 +98,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
               _isOfflineLocked = false;
             });
           }
-          _loadSettings();
+          _loadSettings(isLifecycleReload: true);
         } else if (reason == 'BANNED') {
           setState(() {
             _isBanned = true;
@@ -119,9 +119,9 @@ class _ImageSenderAppState extends State<ImageSenderApp>
             _isBanned = false;
             _isOfflineLocked = false;
           });
-          _loadSettings();
+          _loadSettings(isLifecycleReload: true);
         } else {
-          _loadSettings();
+          _loadSettings(isLifecycleReload: true);
         }
       }
     });
@@ -185,7 +185,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     }
   }
 
-  Future<void> _loadSettings() async {
+  Future<void> _loadSettings({bool isLifecycleReload = false}) async {
     String themeStr = await _settingsService.getThemeMode();
     _pinEnabled = await _securityService.isPinEnabled();
     _hasPinSet = await _securityService.hasPinSet();
@@ -234,7 +234,10 @@ class _ImageSenderAppState extends State<ImageSenderApp>
     String? lastUri = await _settingsService.getLastExcelUri();
     String? lastName = await _settingsService.getLastExcelFileName();
     if (lastUri != null && lastUri.isNotEmpty && lastName != null) {
-      await _excelService.loadFromUri(lastUri, lastName);
+      // Prevent unintended background reloads from overwriting in-memory state
+      if (!isLifecycleReload || _excelService.allCustomers.isEmpty) {
+        await _excelService.loadFromUri(lastUri, lastName);
+      }
     }
 
     await _checkAppVersion();
