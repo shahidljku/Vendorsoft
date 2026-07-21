@@ -13,3 +13,7 @@ ENVIRONMENT = "production"
 # - RAZORPAY_KEY_ID: Razorpay Production/Test Key ID.
 # - RAZORPAY_KEY_SECRET: Razorpay Production/Test Key Secret.
 # - RAZORPAY_WEBHOOK_SECRET: Razorpay Webhook Secret for HMAC SHA-256 validation.
+
+[[kv_namespaces]]
+binding = "APK_STORE"
+id = "90d2c06b34a14527a66b1d40f41a3064"

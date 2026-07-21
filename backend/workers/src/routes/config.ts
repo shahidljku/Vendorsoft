@@ -8,7 +8,7 @@ import { createErrorResponse } from '../authGuard';
  */
 const DEFAULT_SYSTEM_CONFIG: SystemConfigDocument = {
   minimumSupportedVersion: '1.0.0+1',
-  latestVersion: '1.0.2+3',
+  latestVersion: '1.0.0+1',
   maintenanceMode: false,
   maintenanceMessage: 'VendSoft servers are undergoing scheduled maintenance. Offline billing continues normally.',
   allowRegistrations: true,

@@ -212,23 +212,65 @@
             </label>
           </div>
 
-          <div class="config-card glass" style="grid-column: 1 / -1; padding-top: 16px;">
-            <div class="config-info">
-              <h3>OTA Update Settings</h3>
-              <p>Provide the version information and Direct Download Link for the latest APK.</p>
+          <div class="config-card glass" style="grid-column: 1 / -1; display: block; padding: 24px;">
+            <div class="config-info" style="margin-bottom: 20px;">
+              <h3>APK Distribution</h3>
+              <p style="max-width: 100%;">Configure the active APK for Force Update. Choose to provide a manual URL or upload directly.</p>
             </div>
-            <div style="display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap;">
+            
+            <div style="display: flex; gap: 24px; margin-top: 12px; flex-wrap: wrap;">
               <div class="form-group" style="flex: 1; min-width: 200px;">
-                <label>Latest App Version</label>
+                <label>Latest App Version <span id="lblCurrentActiveVersion" style="font-weight: normal; color: var(--accent-blue); font-size: 0.85rem; margin-left: 8px;"></span></label>
                 <input type="text" id="txtLatestAppVersion" placeholder="e.g. 1.0.2+3" />
               </div>
               <div class="form-group" style="flex: 1; min-width: 200px;">
                 <label>Minimum App Version</label>
                 <input type="text" id="txtMinimumAppVersion" placeholder="e.g. 1.0.1+2" />
               </div>
-              <div class="form-group" style="flex: 2; min-width: 300px;">
+            </div>
+
+            <div class="apk-distribution-methods" style="margin-top: 24px;">
+              <div class="radio-group" style="display: flex; gap: 24px; margin-bottom: 16px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="radio" name="apkMethod" value="manual" checked />
+                  Manual Download URL
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="radio" name="apkMethod" value="upload" />
+                  Upload APK
+                </label>
+              </div>
+
+              <!-- Manual Method -->
+              <div id="methodManual" class="form-group">
                 <label>APK Direct Download Link (Firebase Storage / GitHub)</label>
                 <input type="text" id="txtApkDownloadUrl" placeholder="https://..." />
+              </div>
+
+              <!-- Upload Method -->
+              <div id="methodUpload" class="form-group" style="display: none; border: 1px dashed rgba(255,255,255,0.2); padding: 16px; border-radius: 8px; background: rgba(0,0,0,0.2);">
+                <label style="margin-bottom: 12px;">Select APK File</label>
+                <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+                  <input type="file" id="fileApkUpload" accept=".apk" style="display: none;" />
+                  <button class="btn secondary" id="btnChooseApk">Choose APK</button>
+                  <span id="lblSelectedFile" style="font-size: 0.9em; opacity: 0.7;">No file selected</span>
+                  
+                  <div style="flex-grow: 1;"></div>
+                  <button class="btn primary" id="btnUploadApk" style="background: var(--primary);">
+                    Upload & Apply
+                  </button>
+                </div>
+                
+                <!-- Progress & Status -->
+                <div id="uploadProgressContainer" style="display: none; margin-top: 16px;">
+                  <div style="display: flex; justify-content: space-between; font-size: 0.8em; margin-bottom: 4px;">
+                    <span id="lblUploadStatus">Uploading...</span>
+                    <span id="lblUploadPercent">0%</span>
+                  </div>
+                  <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                    <div id="barUploadProgress" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.2s ease;"></div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

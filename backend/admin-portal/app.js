@@ -124,6 +124,143 @@ function setupEventListeners() {
       alert(`Network Error: ${err.message}`);
     }
   });
+
+  // --- APK Distribution Logic ---
+  const apkMethods = document.querySelectorAll('input[name="apkMethod"]');
+  apkMethods.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      document.getElementById('methodManual').style.display = e.target.value === 'manual' ? 'block' : 'none';
+      document.getElementById('methodUpload').style.display = e.target.value === 'upload' ? 'block' : 'none';
+    });
+  });
+
+  const fileApkUpload = document.getElementById('fileApkUpload');
+  if (fileApkUpload) {
+    document.getElementById('btnChooseApk').addEventListener('click', () => {
+      fileApkUpload.click();
+    });
+    
+    fileApkUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const lbl = document.getElementById('lblSelectedFile');
+      if (file) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+        lbl.textContent = `${file.name} (${sizeMb} MB)`;
+      } else {
+        lbl.textContent = 'No file selected';
+      }
+    });
+
+    document.getElementById('btnUploadApk').addEventListener('click', async () => {
+      const file = fileApkUpload.files[0];
+      if (!file) {
+        alert('Please select an APK file first.');
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith('.apk')) {
+        alert('Only .apk files are allowed.');
+        return;
+      }
+
+      const version = document.getElementById('txtLatestAppVersion').value.trim();
+      if (!version) {
+        alert('Please enter the Latest App Version first (e.g. 1.0.2+3).');
+        return;
+      }
+      
+      const currentUrl = document.getElementById('txtApkDownloadUrl').value;
+      if (currentUrl && currentUrl.includes(`public/apks/${version}.apk`)) {
+        if (!confirm(`Warning: It looks like version ${version} might already exist. Overwrite?`)) {
+          return;
+        }
+      }
+
+      const btn = document.getElementById('btnUploadApk');
+      const progressContainer = document.getElementById('uploadProgressContainer');
+      const progressBar = document.getElementById('barUploadProgress');
+      const percentLbl = document.getElementById('lblUploadPercent');
+      const statusLbl = document.getElementById('lblUploadStatus');
+
+      btn.disabled = true;
+      btn.textContent = 'Uploading...';
+      progressContainer.style.display = 'block';
+      progressBar.style.width = '0%';
+      percentLbl.textContent = '0%';
+      statusLbl.textContent = 'Uploading...';
+      statusLbl.style.color = '';
+
+      const chunkSize = 20 * 1024 * 1024; // 20MB
+      const totalChunks = Math.ceil(file.size / chunkSize);
+      let finalDownloadUrl = '';
+
+      try {
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, file.size);
+          const chunk = file.slice(start, end);
+
+          const formData = new FormData();
+          formData.append('chunk', chunk);
+          formData.append('version', version);
+          formData.append('chunkIndex', i.toString());
+          formData.append('totalChunks', totalChunks.toString());
+          formData.append('totalSize', file.size.toString());
+
+          const response = await fetch(`${apiBaseUrl}/admin/upload-apk-chunk`, {
+            method: 'POST',
+            headers: {
+              'x-admin-secret': authHeaders['x-admin-secret']
+            },
+            body: formData
+          });
+
+          if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Upload failed on chunk ${i + 1}: ${errText}`);
+          }
+
+          const resData = await response.json();
+          if (!resData.success) {
+            throw new Error(resData.error?.message || 'Upload failed');
+          }
+
+          if (resData.downloadUrl) {
+            finalDownloadUrl = resData.downloadUrl;
+          }
+
+          const percent = Math.round(((i + 1) / totalChunks) * 100);
+          progressBar.style.width = `${percent}%`;
+          percentLbl.textContent = `${percent}%`;
+        }
+
+        statusLbl.textContent = 'Upload Complete! Saving configuration...';
+        statusLbl.style.color = 'var(--success)';
+        
+        document.getElementById('txtApkDownloadUrl').value = finalDownloadUrl;
+        
+        await saveSystemConfigs();
+        
+        document.querySelector('input[name="apkMethod"][value="manual"]').checked = true;
+        document.getElementById('methodManual').style.display = 'block';
+        document.getElementById('methodUpload').style.display = 'none';
+        
+        alert('APK uploaded successfully and configuration updated.');
+        fileApkUpload.value = '';
+        document.getElementById('lblSelectedFile').textContent = 'No file selected';
+
+      } catch (err) {
+        console.error(err);
+        statusLbl.textContent = `Error: ${err.message}`;
+        statusLbl.style.color = 'var(--error)';
+        alert(`Error: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Upload & Apply';
+        setTimeout(() => { progressContainer.style.display = 'none'; }, 5000);
+      }
+    });
+  }
+
 }
 
 /**
@@ -404,9 +541,18 @@ async function loadSystemConfigs() {
     document.getElementById('chkMaintenanceMode').checked = config.maintenanceMode === true;
     document.getElementById('chkStrictAppVersion').checked = config.enforceStrictAppVersion === true;
     
-    document.getElementById('txtLatestAppVersion').value = config.latestVersion || '1.0.0+1';
-    document.getElementById('txtMinimumAppVersion').value = config.minimumSupportedVersion || '1.0.0+1';
+    document.getElementById('txtLatestAppVersion').value = config.latestVersion || '';
+    document.getElementById('txtMinimumAppVersion').value = config.minimumSupportedVersion || '';
     document.getElementById('txtApkDownloadUrl').value = config.apkDownloadUrl || '';
+
+    const currentVersionLabel = document.getElementById('lblCurrentActiveVersion');
+    if (currentVersionLabel) {
+      if (config.latestVersion) {
+        currentVersionLabel.textContent = `(Currently Active: ${config.latestVersion})`;
+      } else {
+        currentVersionLabel.textContent = '';
+      }
+    }
   } catch (err) {
     console.warn('Could not inspect initial configs:', err);
   }

@@ -14,7 +14,8 @@ class CmPendingReport {
     // Current Month Only (implied by loaded Excel), cmName match, !isPaid, billAmount > 0
     List<Customer> pendingCustomers = [];
     for (var c in excelService.allCustomers) {
-      if (c.cmName.trim().toUpperCase() == cmName.trim().toUpperCase() && !c.isPaid) {
+      bool cmMatch = cmName.trim().isEmpty || c.cmName.trim().toUpperCase() == cmName.trim().toUpperCase();
+      if (cmMatch && !c.isPaid) {
         double amt = double.tryParse(c.billAmount) ?? 0;
         if (amt > 0) {
           pendingCustomers.add(c);
@@ -38,7 +39,7 @@ class CmPendingReport {
       final emptyConfig = ReportConfig(
         reportTitle: 'Pending Collection Report – $monthStr',
         businessName: businessName,
-        filters: ['Collection Man: $cmName', 'No pending customers found.'],
+        filters: ['Collection Man: ${cmName.trim().isEmpty ? "All" : cmName}', 'No pending customers found.'],
         pageFormat: format,
         headers: [],
         columnAlignments: {},
@@ -74,9 +75,9 @@ class CmPendingReport {
     final config = ReportConfig(
       reportTitle: 'Pending Collection Report – $monthStr',
       businessName: businessName,
-      filters: ['Collection Man: $cmName'],
+      filters: ['Collection Man: ${cmName.trim().isEmpty ? "All" : cmName}'],
       pageFormat: format,
-      headers: ['S.No', 'Customer No', 'Customer Name', 'Mobile', 'Bill Amount', 'Collected', 'Remarks'],
+      headers: ['S.No', 'Cust. No', 'Customer Name', 'Mobile', 'Bill Amt', 'Collected', 'Remarks'],
       columnAlignments: {
         0: pw.Alignment.center,
         1: pw.Alignment.center,
@@ -87,13 +88,13 @@ class CmPendingReport {
         6: pw.Alignment.centerLeft,
       },
       columnWidths: {
-        0: const pw.FlexColumnWidth(1),
+        0: const pw.FlexColumnWidth(1.0),
         1: const pw.FlexColumnWidth(1.5),
-        2: const pw.FlexColumnWidth(3),
-        3: const pw.FlexColumnWidth(2),
-        4: const pw.FlexColumnWidth(1.5),
-        5: const pw.FlexColumnWidth(2),
-        6: const pw.FlexColumnWidth(3),
+        2: const pw.FlexColumnWidth(5.5),
+        3: const pw.FlexColumnWidth(2.0),
+        4: const pw.FlexColumnWidth(1.6),
+        5: const pw.FlexColumnWidth(1.6),
+        6: const pw.FlexColumnWidth(2.0),
       },
       sections: [
         ReportSection(

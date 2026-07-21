@@ -1,5 +1,5 @@
 import { Env, ApiResponse } from '../types';
-import { getDocument, setDocument, deleteDocument, queryCollection, logAuditEvent } from '../services/firestore';
+import { getDocument, setDocument, deleteDocument, queryCollection, logAuditEvent, getFirestoreAccessToken } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateSignedLeaseToken } from '../cryptoEngine';
 
@@ -768,5 +768,74 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
   } catch (err: any) {
     console.error('Error in handleAdminManageSubscription:', err);
     return createErrorResponse(500, 'ADMIN_MANAGE_SUB_FAILED', `Failed to manage subscription: ${err.message || err}`);
+  }
+}
+
+/**
+ * Handles POST /api/v1/admin/upload-apk-chunk
+ * Uploads an APK chunk directly into Cloudflare KV.
+ */
+export async function handleAdminUploadApkChunk(request: Request, env: Env, adminUid: string): Promise<Response> {
+  try {
+    const formData = await request.formData();
+    const chunk = formData.get('chunk') as File;
+    const version = formData.get('version') as string;
+    const chunkIndexStr = formData.get('chunkIndex') as string;
+    const totalChunksStr = formData.get('totalChunks') as string;
+    const totalSizeStr = formData.get('totalSize') as string;
+
+    if (!chunk || !version || !chunkIndexStr || !totalChunksStr) {
+      return createErrorResponse(400, 'BAD_REQUEST', 'Missing chunk, version, chunkIndex, or totalChunks in form data.');
+    }
+
+    const chunkIndex = parseInt(chunkIndexStr, 10);
+    const totalChunks = parseInt(totalChunksStr, 10);
+    const totalSize = parseInt(totalSizeStr, 10);
+
+    const chunkBuffer = await chunk.arrayBuffer();
+
+    // Store the chunk directly into KV
+    const chunkKey = `apk-${version}-chunk-${chunkIndex}`;
+    await env.APK_STORE.put(chunkKey, chunkBuffer);
+
+    let downloadUrl = null;
+
+    // If this is the last chunk, write the metadata
+    if (chunkIndex === totalChunks - 1) {
+      const metaKey = `apk-${version}-meta`;
+      const metadata = {
+        version,
+        totalChunks,
+        totalSize,
+        fileName: `vendorsoft-v${version}.apk`,
+        contentType: 'application/vnd.android.package-archive',
+        uploadedAt: Date.now()
+      };
+      
+      await env.APK_STORE.put(metaKey, JSON.stringify(metadata));
+
+      await logAuditEvent(env, 'ADMIN_UPLOAD_APK_KV', {
+        adminUid,
+        version,
+        totalSize,
+        totalChunks
+      });
+      
+      // Construct the final public download URL
+      const host = new URL(request.url).origin;
+      downloadUrl = `${host}/v1/public/apks/${version}.apk`;
+    }
+
+    return new Response(JSON.stringify({ 
+      success: true, 
+      message: `Chunk ${chunkIndex + 1}/${totalChunks} uploaded successfully.`,
+      downloadUrl
+    }), {
+      status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+    });
+
+  } catch (err: any) {
+    console.error('Error in handleAdminUploadApkChunk:', err);
+    return createErrorResponse(500, 'UPLOAD_FAILED', `Failed to upload APK chunk: ${err.message || err}`);
   }
 }

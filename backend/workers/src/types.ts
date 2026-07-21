@@ -14,6 +14,9 @@ export interface Env {
   RSA_PRIVATE_KEY?: string;
   ADMIN_SECRET?: string;
   ALLOW_MOCK_KEYS?: string;
+  
+  // KV Namespaces
+  APK_STORE: KVNamespace;
 }
 
 /**

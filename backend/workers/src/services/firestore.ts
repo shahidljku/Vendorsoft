@@ -53,7 +53,7 @@ export async function getFirestoreAccessToken(env: Env): Promise<string> {
     aud: 'https://oauth2.googleapis.com/token',
     iat,
     exp,
-    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging'
+    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/devstorage.read_write'
   };
 
   const base64Header = base64UrlEncode(JSON.stringify(header));

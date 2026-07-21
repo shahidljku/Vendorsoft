@@ -5,7 +5,8 @@ import { handleCustomerRegistration, handleUpdateFcmToken, handleCustomerLogout 
 import { handleGetSubscriptionStatus } from './routes/subscriptions';
 import { handleRequestTransfer, handleGetPendingTransfers, handleApproveTransfer, handleRejectTransfer, handleGetTransferStatus, handleCancelTransfer } from './routes/transfers';
 import { handleCreateOrder, handleVerifyOrder } from './routes/orders';
-import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans, handleAdminManageSubscription } from './routes/admin';
+import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminApproveTransfer, handleAdminRejectTransfer, handleAdminUpdateSystemConfig, handleAdminGetAuditLogs, handleAdminGetPendingTransfers, handleAdminBanDevice, handleAdminUnbanDevice, handleAdminUpdatePlans, handleAdminManageSubscription, handleAdminUploadApkChunk } from './routes/admin';
+import { handlePublicDownloadApk } from './routes/public';
 import { handleMigrateLegacyKey } from './routes/migrate';
 import { handleRazorpayWebhook } from './webhooks';
 import { localStore } from './services/firestore';
@@ -44,6 +45,10 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
       return await handleGetPlans(request, env);
     }
 
+    if (normalizedPath.startsWith('/v1/public/apks/') && request.method === 'GET') {
+      return await handlePublicDownloadApk(request, env);
+    }
+
 
 
   // Phase 3: Razorpay Webhook Receiver (`POST /v1/webhooks/razorpay`)
@@ -78,6 +83,10 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     const { adminUid, errorResponse: adminError } = await authenticateAdminRequest(request, env);
     if (adminError || !adminUid) {
       return adminError || createErrorResponse(403, 'ADMIN_UNAUTHORIZED', 'Access denied.');
+    }
+
+    if (normalizedPath === '/v1/admin/upload-apk-chunk' && request.method === 'POST') {
+      return handleAdminUploadApkChunk(request, env, adminUid);
     }
 
     if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') {

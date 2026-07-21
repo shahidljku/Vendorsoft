@@ -2,165 +2,165 @@ import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
-import '../models/customer.dart';
 import '../services/excel_service.dart';
-import '../services/license_service.dart';
-import 'framework/report_config.dart';
-import 'framework/report_framework.dart';
+
+class _DailyCollection {
+  final String date;
+  double cashAmount = 0;
+  int cashCount = 0;
+  double bankAmount = 0;
+  int bankCount = 0;
+  double unknownAmount = 0;
+  int unknownCount = 0;
+
+  _DailyCollection(this.date);
+
+  double get totalAmount => cashAmount + bankAmount + unknownAmount;
+  int get totalCount => cashCount + bankCount + unknownCount;
+}
 
 class MonthlyCollectionReport {
+  static String _standardizeDate(String dateStr) {
+    if (dateStr.isEmpty) return 'Unknown Date';
+    String s = dateStr.split(' ')[0].replaceAll('-', '/');
+    List<String> parts = s.split('/');
+    if (parts.length == 3) {
+      if (parts[0].length == 4) {
+        return '${parts[2].padLeft(2, '0')}/${parts[1].padLeft(2, '0')}/${parts[0]}';
+      } else {
+        return '${parts[0].padLeft(2, '0')}/${parts[1].padLeft(2, '0')}/${parts[2]}';
+      }
+    }
+    return s;
+  }
+
+  static String _formatAmount(double a) {
+    String s = a.toStringAsFixed(0);
+    if (a > 0 && s.length < 4) {
+      return s.padLeft(4, '0');
+    }
+    return s;
+  }
+
+  static String _formatCount(int c) {
+    if (c == 0) return '00';
+    return c.toString().padLeft(2, '0');
+  }
+
   static Future<Uint8List> generate(PdfPageFormat format, ExcelService excelService) async {
-    // 1. Filter Data
+    final pdf = pw.Document();
+
     final paidCustomers = excelService.allCustomers.where((c) => c.isPaid).toList();
 
-    List<Customer> cashList = [];
-    List<Customer> onlineList = [];
-    List<Customer> unknownList = [];
-
-    double cashTotal = 0;
-    double onlineTotal = 0;
-    double unknownTotal = 0;
+    Map<String, _DailyCollection> grouped = {};
 
     for (var c in paidCustomers) {
       final method = c.paymentMethod.trim().toLowerCase();
       double amt = double.tryParse(c.amountPaid) ?? 0;
-
+      
+      String dateStr = c.paymentDate.trim().isNotEmpty ? c.paymentDate.trim() : c.vouchDate.trim();
+      String stdDate = _standardizeDate(dateStr);
+      
+      grouped.putIfAbsent(stdDate, () => _DailyCollection(stdDate));
+      final daily = grouped[stdDate]!;
+      
       if (method == 'cash') {
-        cashList.add(c);
-        cashTotal += amt;
+        daily.cashAmount += amt;
+        daily.cashCount += 1;
       } else if (method == 'online') {
-        onlineList.add(c);
-        onlineTotal += amt;
+        daily.bankAmount += amt;
+        daily.bankCount += 1;
       } else {
-        unknownList.add(c);
-        unknownTotal += amt;
+        daily.unknownAmount += amt;
+        daily.unknownCount += 1;
       }
     }
 
-    // 2. Identify Month from the first valid record
-    String monthStr = 'Current Month';
-    if (excelService.allCustomers.isNotEmpty) {
-      final sample = excelService.allCustomers.firstWhere((c) => c.monthNm.isNotEmpty, orElse: () => excelService.allCustomers.first);
-      if (sample.monthNm.isNotEmpty) {
-        monthStr = sample.monthNm;
+    final sortedKeys = grouped.keys.toList()..sort((a, b) {
+      DateTime parse(String d) {
+        if (d == 'Unknown Date') return DateTime(1900);
+        List<String> p = d.split('/');
+        if (p.length == 3) {
+          return DateTime(int.tryParse(p[2]) ?? 1900, int.tryParse(p[1]) ?? 1, int.tryParse(p[0]) ?? 1);
+        }
+        return DateTime(1900);
       }
-    }
+      return parse(a).compareTo(parse(b));
+    });
 
-    final String businessName = LicenseService().getBusinessName();
-
-    // 3. Build Sections
-    List<ReportSection> sections = [];
-
-    // Helper to map rows
-    List<List<String>> mapRows(List<Customer> list) {
-      List<List<String>> rows = [];
-      for (int i = 0; i < list.length; i++) {
-        final c = list[i];
-        double amt = double.tryParse(c.amountPaid) ?? 0;
-        rows.add([
-          (i + 1).toString(),
-          c.custNo,
-          c.custName,
-          c.paymentMethod,
-          amt.toStringAsFixed(2),
-        ]);
-      }
-      return rows;
-    }
-
-    // Cash Section
-    if (cashList.isEmpty) {
-      sections.add(ReportSection(
-        title: 'CASH COLLECTION',
-        subtitle: 'No Cash Collections',
-        rows: [],
-        summaryLines: [],
-      ));
-    } else {
-      sections.add(ReportSection(
-        title: 'CASH COLLECTION',
-        subtitle: '',
-        rows: mapRows(cashList),
-        summaryLines: [
-          'Cash Count: ${cashList.length}',
-          'Total Cash: ${cashTotal.toStringAsFixed(2)}',
-        ],
-      ));
-    }
-
-    // Online Section
-    if (onlineList.isEmpty) {
-      sections.add(ReportSection(
-        title: 'ONLINE COLLECTION',
-        subtitle: 'No Online Collections',
-        rows: [],
-        summaryLines: [],
-      ));
-    } else {
-      sections.add(ReportSection(
-        title: 'ONLINE COLLECTION',
-        subtitle: '',
-        rows: mapRows(onlineList),
-        summaryLines: [
-          'Online Count: ${onlineList.length}',
-          'Total Online: ${onlineTotal.toStringAsFixed(2)}',
-        ],
-      ));
-    }
-
-    // Unknown Section
-    if (unknownList.isNotEmpty) {
-      sections.add(ReportSection(
-        title: 'UNKNOWN PAYMENT METHOD',
-        subtitle: '',
-        rows: mapRows(unknownList),
-        summaryLines: [
-          'Unknown Count: ${unknownList.length}',
-          'Total Unknown: ${unknownTotal.toStringAsFixed(2)}',
-        ],
-      ));
-    }
-
-    double grandTotal = cashTotal + onlineTotal + unknownTotal;
+    List<pw.TableRow> tableRows = [];
     
-    List<String> grandTotals = [
-      'Cash Collection Total: ${cashTotal.toStringAsFixed(2)}',
-      'Online Collection Total: ${onlineTotal.toStringAsFixed(2)}',
-    ];
-    if (unknownList.isNotEmpty) {
-      grandTotals.add('Unknown Collection Total: ${unknownTotal.toStringAsFixed(2)}');
-    }
-    grandTotals.addAll([
-      'Grand Total Collection: ${grandTotal.toStringAsFixed(2)}',
-      'Total Paid Customers: ${paidCustomers.length}',
-    ]);
+    for (int i = 0; i < sortedKeys.length; i += 2) {
+      final left = grouped[sortedKeys[i]]!;
+      final right = (i + 1 < sortedKeys.length) ? grouped[sortedKeys[i + 1]]! : null;
+      
+      pw.Widget buildCell(_DailyCollection? daily) {
+        if (daily == null) {
+          return pw.Container(padding: const pw.EdgeInsets.all(5));
+        }
 
-    // 4. Build Config
-    final config = ReportConfig(
-      reportTitle: 'Monthly Collection Report – $monthStr',
-      businessName: businessName,
-      filters: [],
-      pageFormat: format,
-      headers: ['S.No', 'Customer No', 'Customer Name', 'Payment Method', 'Amount Paid'],
-      columnAlignments: {
-        0: pw.Alignment.center,
-        1: pw.Alignment.center,
-        2: pw.Alignment.centerLeft,
-        3: pw.Alignment.center,
-        4: pw.Alignment.centerRight,
-      },
-      columnWidths: {
-        0: const pw.FlexColumnWidth(1),
-        1: const pw.FlexColumnWidth(2),
-        2: const pw.FlexColumnWidth(4),
-        3: const pw.FlexColumnWidth(3),
-        4: const pw.FlexColumnWidth(2),
-      },
-      sections: sections,
-      grandTotals: grandTotals,
+        return pw.Container(
+          padding: const pw.EdgeInsets.all(5),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('Date :-${daily.date}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11)),
+              pw.SizedBox(height: 2),
+              pw.Text('Cash Amount : ${_formatAmount(daily.cashAmount)}  Count ${_formatCount(daily.cashCount)}', style: const pw.TextStyle(fontSize: 10)),
+              pw.SizedBox(height: 2),
+              pw.Text('Bank Amount : ${_formatAmount(daily.bankAmount)}  Count ${_formatCount(daily.bankCount)}', style: const pw.TextStyle(fontSize: 10)),
+              if (daily.unknownCount > 0) ...[
+                pw.SizedBox(height: 2),
+                pw.Text('Unknown Amount : ${_formatAmount(daily.unknownAmount)}  Count ${_formatCount(daily.unknownCount)}', style: const pw.TextStyle(fontSize: 10)),
+              ],
+              pw.SizedBox(height: 2),
+              pw.Text('Total Amount : ${_formatAmount(daily.totalAmount)}  Count ${_formatCount(daily.totalCount)}', style: const pw.TextStyle(fontSize: 10)),
+            ]
+          )
+        );
+      }
+
+      tableRows.add(
+        pw.TableRow(
+          children: [
+            buildCell(left),
+            buildCell(right),
+          ]
+        )
+      );
+    }
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: format,
+        margin: const pw.EdgeInsets.all(30),
+        header: (context) {
+          return pw.Container(
+            alignment: pw.Alignment.center,
+            margin: const pw.EdgeInsets.only(bottom: 20),
+            child: pw.Text(
+              'Monthly Payment Summary',
+              style: pw.TextStyle(
+                fontSize: 14,
+                fontWeight: pw.FontWeight.bold,
+                decoration: pw.TextDecoration.underline,
+              ),
+            ),
+          );
+        },
+        build: (context) => [
+          pw.Table(
+            border: pw.TableBorder.all(color: PdfColors.black, width: 0.5),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(1),
+              1: const pw.FlexColumnWidth(1),
+            },
+            children: tableRows,
+          ),
+        ],
+      ),
     );
 
-    // 5. Generate PDF
-    return ReportFramework.generate(config);
+    return pdf.save();
   }
 }
