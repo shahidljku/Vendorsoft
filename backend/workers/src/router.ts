@@ -12,6 +12,11 @@ import { handleRazorpayWebhook } from './webhooks';
 import { localStore } from './services/firestore';
 import { authenticateRequest, authenticateAdminRequest, createErrorResponse } from './authGuard';
 
+// Simple in-memory rate limiter for Admin API (per Worker isolate)
+const adminRateLimitMap = new Map<string, { count: number, resetTime: number }>();
+const ADMIN_RATE_LIMIT_MAX = 60; // 60 requests
+const ADMIN_RATE_LIMIT_WINDOW = 60000; // per 1 minute
+
 /**
  * Main API Gateway Router for VendSoft Cloudflare Workers Control Plane.
  * Enforces CORS and cleanly splits public endpoints from protected composite-identity endpoints.
@@ -22,10 +27,20 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
 
   // 1. Handle CORS Preflight (`OPTIONS`) requests cleanly
   if (request.method === 'OPTIONS') {
+    let allowedOrigin = '*';
+    if (path.includes('/api/v1/admin/') || path.includes('/v1/admin/')) {
+      const origin = request.headers.get('Origin') || '';
+      if (origin === 'https://vendsoft-admin.pages.dev' || origin.startsWith('http://127.0.0.1:') || origin.startsWith('http://localhost:')) {
+        allowedOrigin = origin;
+      } else {
+        allowedOrigin = 'https://vendsoft-admin.pages.dev'; // Default secure origin
+      }
+    }
+    
     return new Response(null, {
       status: 204,
       headers: {
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin': allowedOrigin,
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type, x-customer-id, x-installation-id, x-hardware-id, x-installation-uuid, x-app-version, x-platform, x-idempotency-key, x-razorpay-signature, x-admin-secret, cf-access-jwt-assertion',
         'Access-Control-Max-Age': '86400'
@@ -64,72 +79,110 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     });
   }
 
-  // Local Dev Store Inspection (`GET /v1/dev/store`)
-  if (normalizedPath === '/v1/dev/store' && !env.FIRESTORE_SA_KEY) {
-    const storeData: Record<string, any> = {};
-    for (const [key, val] of localStore.entries()) {
-      storeData[key] = val;
-    }
-    return new Response(JSON.stringify({ success: true, count: localStore.size, documents: storeData }, null, 2), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
-  }
+
 
   // ---------------------------------------------------------------------------
   // ADMIN PORTAL ENDPOINTS (`Phase 4 - Security Hardening & Control Plane`)
   // ---------------------------------------------------------------------------
   if (normalizedPath.startsWith('/v1/admin/')) {
-    const { adminUid, errorResponse: adminError } = await authenticateAdminRequest(request, env);
-    if (adminError || !adminUid) {
-      return adminError || createErrorResponse(403, 'ADMIN_UNAUTHORIZED', 'Access denied.');
+    // 1. Secure CORS for Admin Endpoints
+    const origin = request.headers.get('Origin') || '';
+    let allowedOrigin = 'https://vendsoft-admin.pages.dev';
+    if (origin === 'https://vendsoft-admin.pages.dev' || origin.startsWith('http://127.0.0.1:') || origin.startsWith('http://localhost:')) {
+      allowedOrigin = origin;
     }
+
+    if (origin && origin !== allowedOrigin) {
+      return new Response(JSON.stringify({ success: false, error: { code: 'CORS_ERROR', message: 'Origin not allowed' } }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': allowedOrigin }
+      });
+    }
+
+    // 2. Authenticate
+    const { adminUid, role, errorResponse: adminError } = await authenticateAdminRequest(request, env);
+    if (adminError || !adminUid) {
+      const resp = adminError || createErrorResponse(403, 'ADMIN_UNAUTHORIZED', 'Access denied.');
+      // Patch the CORS header on the error response
+      const newHeaders = new Headers(resp.headers);
+      newHeaders.set('Access-Control-Allow-Origin', allowedOrigin);
+      return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: newHeaders });
+    }
+
+    // 3. Simple Rate Limiting (Cloudflare KV for global persistence)
+    const now = Date.now();
+    const rlKey = `ratelimit:${adminUid}`;
+    let rlCount = 0;
+    try {
+      const rlStr = await env.APK_STORE.get(rlKey);
+      if (rlStr) {
+        rlCount = parseInt(rlStr, 10);
+      }
+      if (rlCount > ADMIN_RATE_LIMIT_MAX) {
+        return new Response(JSON.stringify({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Rate limit exceeded. Try again later.' } }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': allowedOrigin }
+        });
+      }
+      await env.APK_STORE.put(rlKey, (rlCount + 1).toString(), { expirationTtl: 60 }); // 60 seconds TTL
+    } catch (err) {
+      console.error('KV Rate Limit Error:', err);
+    }
+
+    let adminResponse: Response | null = null;
 
     if (normalizedPath === '/v1/admin/upload-apk-chunk' && request.method === 'POST') {
-      return handleAdminUploadApkChunk(request, env, adminUid);
-    }
-
-    if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') {
-      return handleAdminSearchCustomers(request, env);
-    }
-    if (normalizedPath.startsWith('/v1/admin/customers/') && normalizedPath.endsWith('/subscription') && request.method === 'PUT') {
+      adminResponse = await handleAdminUploadApkChunk(request, env, adminUid);
+    } else if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') {
+      adminResponse = await handleAdminSearchCustomers(request, env);
+    } else if (normalizedPath.startsWith('/v1/admin/customers/') && normalizedPath.endsWith('/subscription') && request.method === 'PUT') {
       const customerId = normalizedPath.substring('/v1/admin/customers/'.length, normalizedPath.length - '/subscription'.length);
-      return handleAdminManageSubscription(request, env, adminUid, customerId);
-    }
-    if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT' && !normalizedPath.endsWith('/subscription')) {
+      adminResponse = await handleAdminManageSubscription(request, env, adminUid, customerId);
+    } else if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT' && !normalizedPath.endsWith('/subscription')) {
       const customerId = normalizedPath.substring('/v1/admin/customers/'.length);
-      return handleAdminUpdateCustomer(request, env, adminUid, customerId);
-    }
-    if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/approve') && request.method === 'POST') {
+      adminResponse = await handleAdminUpdateCustomer(request, env, adminUid, customerId);
+    } else if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/approve') && request.method === 'POST') {
       const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/approve'.length);
-      return handleAdminApproveTransfer(request, env, adminUid, transferId);
-    }
-    if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/reject') && request.method === 'POST') {
+      adminResponse = await handleAdminApproveTransfer(request, env, adminUid, transferId);
+    } else if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/reject') && request.method === 'POST') {
       const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/reject'.length);
-      return handleAdminRejectTransfer(request, env, adminUid, transferId);
-    }
-    if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/ban') && request.method === 'PUT') {
+      adminResponse = await handleAdminRejectTransfer(request, env, adminUid, transferId);
+    } else if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/ban') && request.method === 'PUT') {
       const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/ban'.length);
-      return handleAdminBanDevice(request, env, adminUid, hardwareId);
-    }
-    if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/unban') && request.method === 'PUT') {
+      adminResponse = await handleAdminBanDevice(request, env, adminUid, hardwareId);
+    } else if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/unban') && request.method === 'PUT') {
       const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/unban'.length);
-      return handleAdminUnbanDevice(request, env, adminUid, hardwareId);
-    }
-    if (normalizedPath === '/v1/admin/config/system' && request.method === 'PUT') {
-      return handleAdminUpdateSystemConfig(request, env, adminUid);
-    }
-    if (normalizedPath === '/v1/admin/audit-logs' && request.method === 'GET') {
-      return handleAdminGetAuditLogs(request, env);
-    }
-    if (normalizedPath === '/v1/admin/transfers/pending' && request.method === 'GET') {
-      return handleAdminGetPendingTransfers(request, env);
-    }
-    if (normalizedPath === '/v1/admin/plans' && request.method === 'POST') {
-      return handleAdminUpdatePlans(request, env, adminUid);
+      adminResponse = await handleAdminUnbanDevice(request, env, adminUid, hardwareId);
+    } else if (normalizedPath === '/v1/admin/config/system' && request.method === 'PUT') {
+      adminResponse = await handleAdminUpdateSystemConfig(request, env, adminUid);
+    } else if (normalizedPath === '/v1/admin/audit-logs' && request.method === 'GET') {
+      adminResponse = await handleAdminGetAuditLogs(request, env);
+    } else if (normalizedPath === '/v1/admin/transfers/pending' && request.method === 'GET') {
+      adminResponse = await handleAdminGetPendingTransfers(request, env);
+    } else if (normalizedPath === '/v1/admin/plans' && request.method === 'POST') {
+      adminResponse = await handleAdminUpdatePlans(request, env, adminUid);
+    } else if (normalizedPath === '/v1/admin/auth/verify' && request.method === 'GET') {
+      // The authenticateAdminRequest already verified the token and role.
+      // We log SUCCESSFUL_LOGIN here, once per frontend initialization.
+      const { logAuditEvent } = await import('./services/firestore');
+      await logAuditEvent(env, 'SUCCESSFUL_LOGIN', { adminUid, role });
+      const payload = { success: true, data: { authorized: true, uid: adminUid, role: role } };
+      adminResponse = new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
     }
 
-    return createErrorResponse(404, 'ADMIN_ENDPOINT_NOT_FOUND', `Admin endpoint ${normalizedPath} not found.`);
+    if (!adminResponse) {
+      adminResponse = createErrorResponse(404, 'ADMIN_ENDPOINT_NOT_FOUND', `Admin endpoint ${normalizedPath} not found.`);
+    }
+
+    // Rewrite headers to enforce secure CORS
+    const secureHeaders = new Headers(adminResponse.headers);
+    secureHeaders.set('Access-Control-Allow-Origin', allowedOrigin);
+    return new Response(adminResponse.body, { status: adminResponse.status, statusText: adminResponse.statusText, headers: secureHeaders });
   }
 
   // ---------------------------------------------------------------------------

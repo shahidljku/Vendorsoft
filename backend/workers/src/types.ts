@@ -12,8 +12,6 @@ export interface Env {
   RAZORPAY_KEY_SECRET?: string;
   RAZORPAY_WEBHOOK_SECRET?: string;
   RSA_PRIVATE_KEY?: string;
-  ADMIN_SECRET?: string;
-  ALLOW_MOCK_KEYS?: string;
   
   // KV Namespaces
   APK_STORE: KVNamespace;

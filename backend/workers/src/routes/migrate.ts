@@ -22,7 +22,8 @@ MQIDAQAB
 export async function handleMigrateLegacyKey(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     const body: any = await request.json();
-    const { legacyLicenseKey } = body;
+    let { legacyLicenseKey } = body;
+    legacyLicenseKey = typeof legacyLicenseKey === 'string' ? legacyLicenseKey.substring(0, 10000) : legacyLicenseKey;
 
     if (!legacyLicenseKey || typeof legacyLicenseKey !== 'string') {
       return createErrorResponse(400, 'MISSING_LEGACY_KEY', 'legacyLicenseKey (Base64 string) is required.');
@@ -31,10 +32,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
     // 1. Decode base64 JSON structure
     let licenseObj: any;
     try {
-      const base64Part = legacyLicenseKey.startsWith('MOCK_DEV_LEGACY_KEY_')
-        ? legacyLicenseKey.replace('MOCK_DEV_LEGACY_KEY_', '')
-        : legacyLicenseKey;
-      const decodedStr = atob(base64Part);
+      const decodedStr = atob(legacyLicenseKey);
       licenseObj = JSON.parse(decodedStr);
     } catch (err) {
       return createErrorResponse(400, 'INVALID_LEGACY_KEY_FORMAT', 'Legacy license key is not valid Base64 encoded JSON.');
@@ -46,14 +44,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       return createErrorResponse(400, 'INVALID_LEGACY_KEY_STRUCTURE', 'Legacy key missing payload or signature fields.');
     }
 
-    // 2. Verify RSA SHA-256 signature using Web Crypto API (or Dev/Local test environment mock)
-    let isValidSignature = false;
-    const authHeader = request.headers.get('Authorization') || '';
-    if (legacyLicenseKey.startsWith('MOCK_DEV_LEGACY_KEY_') && (authHeader.includes('test_local_token') || env.ENVIRONMENT === 'development' || env.ALLOW_MOCK_KEYS === 'true')) {
-      isValidSignature = true;
-    } else {
-      isValidSignature = await verifyRsaSha256Signature(payloadStr, signatureBase64, RSA_PUBLIC_KEY_PEM);
-    }
+    const isValidSignature = await verifyRsaSha256Signature(payloadStr, signatureBase64, RSA_PUBLIC_KEY_PEM);
     if (!isValidSignature) {
       return createErrorResponse(403, 'INVALID_LEGACY_SIGNATURE', 'Cryptographic signature verification failed for this legacy license key.');
     }

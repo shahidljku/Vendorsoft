@@ -138,7 +138,8 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
         activeInstallationId: identity.installationId,
         planId: 'FREE_TRIAL_30',
         startsAtEpochMs: trialStartsAt,
-        expiresAtEpochMs: trialExpiresAt
+        expiresAtEpochMs: trialExpiresAt,
+        signedLeaseToken: hardwareTrialDoc ? hardwareTrialDoc.signedLeaseToken : undefined
       };
     } else {
       sub = activeSubs[0];
@@ -165,7 +166,18 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
 
     // 6. Generate cryptographic signedLeaseToken using Web Crypto HMAC-SHA256
     const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+    const offlineGracePeriodMs = 48 * 60 * 60 * 1000;
     const leasePayload = {
+      // V1 Protocol Fields
+      version: 1,
+      licenseId: sub.subscriptionId,
+      deviceId: sub.activeInstallationId || identity.installationId,
+      status: "active",
+      issuedAtEpochMs: now,
+      expiresAtEpochMs: sub.expiresAtEpochMs,
+      offlineValidUntilEpochMs: now + offlineGracePeriodMs,
+
+      // Legacy Fields (for backward compatibility)
       subscriptionId: sub.subscriptionId,
       customerId: sub.customerId,
       activeInstallationId: sub.activeInstallationId || identity.installationId,
@@ -173,13 +185,59 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       planId: sub.planId,
       planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : sub.planId === 'FREE_TRIAL_30' ? '30-Day Pro Trial' : 'Pro Monthly License',
       startsAtEpochMs: sub.startsAtEpochMs || now,
-      expiresAtEpochMs: sub.expiresAtEpochMs,
-      maxCustomers: 10000, // Full access during trial
+      maxCustomers: 10000,
       allowWhatsAppAutoSend: true,
       allowThermalPrinting: true,
       issuedAt: now
     };
-    const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
+
+    // Pillar 2: CPU & Database Exhaustion Patch
+    let signedLeaseToken = sub.signedLeaseToken;
+    let needsNewToken = false;
+
+    if (signedLeaseToken) {
+      try {
+        const parts = signedLeaseToken.split('.');
+        const payloadStr = atob(parts[0].replace(/-/g, '+').replace(/_/g, '/'));
+        const parsed = JSON.parse(payloadStr);
+        // Only regenerate if offline validity drops below 24 hours or key details change
+        if (
+          !parsed.offlineValidUntilEpochMs || 
+          parsed.offlineValidUntilEpochMs < now + (24 * 60 * 60 * 1000) ||
+          parsed.planId !== sub.planId ||
+          parsed.deviceId !== leasePayload.deviceId
+        ) {
+          needsNewToken = true;
+        }
+      } catch (e) {
+        needsNewToken = true;
+      }
+    } else {
+      needsNewToken = true;
+    }
+
+    if (needsNewToken) {
+      signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
+      
+      // Save the generated token so future requests skip the RSA signing
+      if (sub.subscriptionId && sub.subscriptionId.startsWith('TRIAL_')) {
+        const hardwareId = sub.subscriptionId.replace('TRIAL_', '');
+        const trialDoc = await getDocument(env, 'hardware_trials', hardwareId);
+        if (trialDoc) {
+          await setDocument(env, 'hardware_trials', hardwareId, {
+            ...trialDoc,
+            signedLeaseToken,
+            updatedAtEpochMs: now
+          });
+        }
+      } else if (sub.subscriptionId) {
+        await setDocument(env, 'subscriptions', sub.subscriptionId, {
+          ...sub,
+          signedLeaseToken,
+          updatedAtEpochMs: now
+        });
+      }
+    }
 
     const responseData = {
       customerId: sub.customerId,

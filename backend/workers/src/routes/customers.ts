@@ -63,6 +63,23 @@ export async function handleCustomerRegistration(
     }
   }
 
+  // Handle security headers for hardware fingerprint
+  const reqHardwareId = request.headers.get('x-hardware-id');
+  const nonce = request.headers.get('x-registration-nonce');
+  const timestampStr = request.headers.get('x-timestamp');
+  const ipAddress = request.headers.get('cf-connecting-ip') || 'unknown';
+
+  if (!reqHardwareId || !/^[A-F0-9]{32,64}$/.test(reqHardwareId)) {
+    return createErrorResponse(400, 'INVALID_HARDWARE_ID', 'Missing or invalid hardware identifier format.');
+  }
+
+  if (nonce && timestampStr) {
+    const reqTime = parseInt(timestampStr, 10);
+    if (isNaN(reqTime) || Math.abs(Date.now() - reqTime) > 5 * 60 * 1000) {
+      return createErrorResponse(403, 'REPLAY_DETECTED', 'Registration request expired or invalid.');
+    }
+  }
+
   // 3. Parse and validate request body payload
   let body: any;
   try {
@@ -72,15 +89,27 @@ export async function handleCustomerRegistration(
   }
 
   // Handle both `phoneNumber` (from older Flutter app) and `mobileNumber`
-  const inputMobileNumber = (body.mobileNumber || body.phoneNumber || '').trim();
-  const businessName = (body.businessName || '').trim();
-  const ownerName = (body.ownerName || '').trim();
+  const rawMobileNumber = (body.mobileNumber || body.phoneNumber || '').trim();
+  const inputMobileNumber = rawMobileNumber.replace(/\D/g, ''); // Strip non-numeric
+
+  // Pillar 4: Payload Bloat Protection
+  const businessName = (body.businessName || '').trim().substring(0, 100);
+  const ownerName = (body.ownerName || '').trim().substring(0, 100);
 
   if (!businessName || !ownerName || !inputMobileNumber) {
     return createErrorResponse(
       400,
       'MISSING_REQUIRED_FIELDS',
       'Payload must contain businessName, ownerName, and mobileNumber.'
+    );
+  }
+
+  // Pillar 10: Strict Phone Validation
+  if (!/^\d{10}$/.test(inputMobileNumber)) {
+    return createErrorResponse(
+      400,
+      'INVALID_MOBILE_NUMBER',
+      'Mobile number must be exactly 10 digits.'
     );
   }
 
@@ -135,21 +164,21 @@ export async function handleCustomerRegistration(
         latestSub = {
           subscriptionId: `SUB_NONE_${oldCust.customerId}`,
           planId: 'FREE_TRIAL_30',
-          activeInstallationId: identity.hardwareId || identity.installationId,
+          activeInstallationId: reqHardwareId || identity.installationId,
           status: 'CANCELLED',
           expiresAtEpochMs: 0
         };
       }
 
       if (latestSub) {
-        let isSameDevice = (latestSub.activeInstallationId === identity.hardwareId || latestSub.activeInstallationId === identity.installationId);
+        let isSameDevice = (latestSub.activeInstallationId === reqHardwareId || latestSub.activeInstallationId === identity.installationId);
         
         // Data healing for legacy trials that were missing hardwareId
         if (!latestSub.activeInstallationId && latestSub.planId === 'FREE_TRIAL_30') {
           isSameDevice = true;
           try {
-            await setDocument(env, 'hardware_trials', identity.hardwareId, {
-              hardwareId: identity.hardwareId,
+            await setDocument(env, 'hardware_trials', reqHardwareId, {
+              hardwareId: reqHardwareId,
               startedAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
               expiresAtEpochMs: latestSub.expiresAtEpochMs,
               customerId: oldCust.customerId,
@@ -160,13 +189,13 @@ export async function handleCustomerRegistration(
 
         if (!isSameDevice) {
           const activeInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
-          if (activeInst && activeInst.hardwareId === identity.hardwareId) {
+          if (activeInst && activeInst.hardwareId === reqHardwareId) {
             isSameDevice = true;
           } else if (latestSub.status === 'EXPIRED' || latestSub.status === 'CANCELLED' || (latestSub.expiresAtEpochMs && now > latestSub.expiresAtEpochMs)) {
             // If subscription is dead, allow login on new device so they can purchase a new one
             isSameDevice = true;
             if (latestSub.planId !== 'FREE_TRIAL_30') {
-              latestSub.activeInstallationId = identity.hardwareId || identity.installationId;
+              latestSub.activeInstallationId = reqHardwareId || identity.installationId;
               latestSub.updatedAtEpochMs = now;
               await setDocument(env, 'subscriptions', latestSub.subscriptionId, latestSub);
             }
@@ -234,88 +263,30 @@ export async function handleCustomerRegistration(
   // ═══════════════════════════════════════════════════════════════════════════
   // 4.5. MULTI-LAYER HARDWARE-LOCKED TRIAL CHECK
   // ═══════════════════════════════════════════════════════════════════════════
-  // CRITICAL SECURITY: This block prevents trial abuse. NEVER REMOVE OR WEAKEN.
-  //
-  // Layer 1: hardwareId (SHA-256 of Android ID + board + brand + device + hardware + manufacturer + model + product)
-  // Layer 2: installationUuid (FlutterSecureStorage UUID — survives app updates but not uninstall)
-  // Layer 3: Firebase UID (anonymous auth — new on each sign-in, but we track historical UIDs)
-  // Layer 4: Registration rate-limit (max 3 accounts per hardware in 24h to block scripted abuse)
-  // ═══════════════════════════════════════════════════════════════════════════
   let trialStartsAt = now;
   let trialExpiresAt = now + THIRTY_DAYS_MS;
   let isHardwareTrialExpired = false;
 
   try {
-    // --- LAYER 1: Primary check by physical hardware ID ---
-    const hardwareTrials = await queryCollection(env, 'hardware_trials', [
-      { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
-    ]);
+    const hardwareTrialDoc = await getDocument(env, 'hardware_trials', reqHardwareId);
     
-    let hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.hardwareId);
-    
-    if (!hardwareTrialDoc && hardwareTrials && hardwareTrials.length > 0) {
-      hardwareTrialDoc = hardwareTrials[0];
-    }
-
-    // --- LAYER 2: Secondary check by installationUuid (catches reinstalls with same secure storage) ---
-    if (!hardwareTrialDoc && identity.installationUuid) {
-      const uuidTrials = await queryCollection(env, 'hardware_trials', [
-        { field: 'installationUuid', op: 'EQUAL', value: identity.installationUuid }
-      ]);
-      if (uuidTrials && uuidTrials.length > 0) {
-        hardwareTrialDoc = uuidTrials[0];
-        console.warn(`[ABUSE_DETECT] Hardware ID mismatch but installationUuid match. HW=${identity.hardwareId}, UUID=${identity.installationUuid}`);
-      }
-    }
-
     if (hardwareTrialDoc) {
-      // If they already claimed a trial on this device, we DO NOT give them a fresh 30 days
-      // even if they entered a brand new phone number.
-      trialStartsAt = hardwareTrialDoc.startedAtEpochMs || now;
-      trialExpiresAt = hardwareTrialDoc.expiresAtEpochMs || (now + THIRTY_DAYS_MS);
-      if (now > trialExpiresAt) {
-        isHardwareTrialExpired = true;
-      }
-    }
-
-    // --- LAYER 3: Check how many accounts this hardware has already created (rate limit) ---
-    const existingInstallsForHW = await queryCollection(env, 'installations', [
-      { field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }
-    ]);
-    if (existingInstallsForHW && existingInstallsForHW.length > 0) {
-      // Count registrations in the last 24 hours from this hardware
-      const recentRegistrations = existingInstallsForHW.filter(
-        (inst: any) => inst.createdAtEpochMs && (now - inst.createdAtEpochMs) < (24 * 60 * 60 * 1000)
-      );
-      if (recentRegistrations.length >= 3) {
-        console.error(`[ABUSE_BLOCK] Hardware ${identity.hardwareId} has ${recentRegistrations.length} registrations in last 24h. Blocking.`);
-        await logAuditEvent(env, 'REGISTRATION_RATE_LIMITED', {
-          actorType: 'SYSTEM',
-          actorId: 'anti-abuse',
-          targetType: 'hardware',
-          targetId: identity.hardwareId,
-          details: `Blocked registration: ${recentRegistrations.length} accounts in 24h from same hardware. Phone: ${inputMobileNumber}`,
-          timestampMs: now
-        });
-        return createErrorResponse(429, 'RATE_LIMITED', 'Too many registrations from this device. Please try again tomorrow or contact support.');
-      }
-
-      // If this hardware already has accounts and trial is expired, force expired status
-      if (!hardwareTrialDoc && existingInstallsForHW.length > 0) {
-        // This device has registered before but somehow the trial doc is missing.
-        // Find the oldest installation to reconstruct the trial period.
-        const oldest = existingInstallsForHW.reduce((a: any, b: any) => 
-          ((a.createdAtEpochMs || Infinity) < (b.createdAtEpochMs || Infinity)) ? a : b
-        );
-        if (oldest.createdAtEpochMs) {
-          trialStartsAt = oldest.createdAtEpochMs;
-          trialExpiresAt = oldest.createdAtEpochMs + THIRTY_DAYS_MS;
-          if (now > trialExpiresAt) {
-            isHardwareTrialExpired = true;
-          }
-          console.warn(`[TRIAL_RECOVER] Reconstructed trial period from oldest installation for HW=${identity.hardwareId}`);
-        }
-      }
+      // MANDATORY SECURITY: IMMUTABLE TRIAL ENFORCEMENT
+      // If a trial document exists for this physical hardware, NEVER issue a new one.
+      await logAuditEvent(env, 'REGISTRATION_REJECTED', {
+          actorType: 'USER',
+          actorId: identity.customerId || 'unknown',
+          targetType: 'hardware_trials',
+          targetId: reqHardwareId,
+          details: 'Device has already consumed its lifetime trial.',
+          timestampMs: now,
+          mobileNumber: inputMobileNumber,
+          businessName: businessName,
+          reason: 'TRIAL_ALREADY_USED',
+          ipAddress,
+          appVersion: request.headers.get('x-app-version') || 'unknown'
+      });
+      return createErrorResponse(409, 'TRIAL_ALREADY_USED', 'This device has already consumed its lifetime trial.');
     }
   } catch(err) {
      console.error('Hardware Trial check error:', err);
@@ -380,7 +351,7 @@ export async function handleCustomerRegistration(
       data: {
         installationId,
         customerId,
-        hardwareId: identity.hardwareId,
+        hardwareId: reqHardwareId,
         installationUuid: identity.installationUuid,
         firebaseUid: identity.uid,
         platform: identity.platform,
@@ -395,17 +366,19 @@ export async function handleCustomerRegistration(
     },
     {
       collectionPath: 'hardware_trials',
-      documentId: identity.hardwareId,
+      documentId: reqHardwareId,
       data: {
-        hardwareId: identity.hardwareId,
+        hardwareId: reqHardwareId,
         installationUuid: identity.installationUuid,
         firebaseUid: identity.uid,
         mobileNumber: inputMobileNumber,
         startedAtEpochMs: trialStartsAt,
         expiresAtEpochMs: trialExpiresAt,
         customerId: customerId,
-        trialUsed: true
-      }
+        trialUsed: true,
+        lastSeenAtEpochMs: now,
+      },
+      requireDoesNotExist: true // Guarantees atomic one-time trial creation
     }
   ];
 
@@ -429,6 +402,20 @@ export async function handleCustomerRegistration(
       success: true,
       data: responsePayloadData
     };
+
+    // SUCCESS AUDIT LOG
+    await logAuditEvent(env, 'REGISTRATION_SUCCESS', {
+        actorType: 'USER',
+        actorId: identity.customerId || 'unknown',
+        targetType: 'hardware_trials',
+        targetId: reqHardwareId,
+        details: 'Issued new hardware trial.',
+        timestampMs: now,
+        mobileNumber: inputMobileNumber,
+        businessName: businessName,
+        ipAddress,
+        appVersion: request.headers.get('x-app-version') || 'unknown'
+    });
 
     return new Response(JSON.stringify(responseWrapper), {
       status: 201,
@@ -474,7 +461,7 @@ export async function handleUpdateFcmToken(request: Request, env: Env, identity:
       return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing x-installation-uuid');
     }
     const body = await request.json() as any;
-    const fcmToken = body.fcmToken;
+    const fcmToken = typeof body.fcmToken === 'string' ? body.fcmToken.substring(0, 255) : body.fcmToken;
     if (!fcmToken) {
       return createErrorResponse(400, 'MISSING_FCM_TOKEN', 'Missing fcmToken in body');
     }
