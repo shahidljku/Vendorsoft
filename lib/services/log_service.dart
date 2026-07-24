@@ -27,8 +27,16 @@ class LogService extends ChangeNotifier {
 
       File file = File('${logDir.path}/logs.txt');
 
+      String maskedMobile = mobile;
+      if (mobile.length > 6) {
+        String start = mobile.substring(0, 3);
+        String end = mobile.substring(mobile.length - 3);
+        String stars = '*' * (mobile.length - 6);
+        maskedMobile = '$start$stars$end';
+      }
+
       await file.writeAsString(
-        '${DateTime.now()} | $mobile | $status\n',
+        '${DateTime.now()} | $maskedMobile | $status\n',
         mode: FileMode.append,
       );
       

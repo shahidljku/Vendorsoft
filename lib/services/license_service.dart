@@ -13,6 +13,17 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'clock_guard_service.dart';
+import 'hardware_fingerprint_service.dart';
+
+enum TokenValidationResult {
+  valid,
+  offlineExpired,
+  clockRollback,
+  invalidSignature,
+  serverRevoked,
+  expired
+}
 
 class LicenseService {
   static final LicenseService _instance = LicenseService._internal();
@@ -44,6 +55,7 @@ JQIDAQAB
   String? _cachedLicenseKey;
   bool? _cachedIsValid;
   String? _customBusinessName;
+  bool _skipReminderThisSession = false;
 
   final StreamController<String?> _revocationController = StreamController<String?>.broadcast();
   Stream<String?> get onLicenseRevoked => _revocationController.stream;
@@ -59,60 +71,8 @@ JQIDAQAB
   /// Generate a stable, un-spoofable Cryptographic Hardware Signature.
   Future<String> getDeviceId() async {
     if (_deviceIdCache != null) return _deviceIdCache!;
-
-    String? androidId;
-    try {
-      androidId = await _androidIdPlugin.getId();
-    } catch (e) {
-      print('Warning: Failed to get Android ID: $e');
-    }
-
-    if (androidId == null || androidId.isEmpty) {
-      androidId = await _storage.read(key: 'fallback_device_id');
-      if (androidId == null || androidId.isEmpty) {
-        androidId = 'FB_${DateTime.now().millisecondsSinceEpoch}';
-        await _storage.write(key: 'fallback_device_id', value: androidId);
-      }
-    }
-
-    String hardwareString = androidId;
-
-    if (!kIsWeb && Platform.isAndroid) {
-      try {
-        final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-        final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-        
-        // Combine deep physical hardware properties that survive factory resets and dual-app cloning
-        // Note: intentionally omitting androidInfo.id as it changes with OTA system updates
-        hardwareString = '''
-          $androidId
-          ${androidInfo.board}
-          ${androidInfo.brand}
-          ${androidInfo.device}
-          ${androidInfo.hardware}
-          ${androidInfo.manufacturer}
-          ${androidInfo.model}
-          ${androidInfo.product}
-        ''';
-      } catch (e) {
-        print('Warning: Failed to gather deep hardware fingerprint: $e');
-      }
-    } else if (!kIsWeb && Platform.isWindows) {
-      try {
-        final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
-        final WindowsDeviceInfo windowsInfo = await deviceInfo.windowsInfo;
-        hardwareString = '$androidId-${windowsInfo.deviceId}';
-      } catch (e) {}
-    }
-
-    // Hash the composite physical hardware string
-    final bytes = utf8.encode(hardwareString);
-    final digest = sha256.convert(bytes);
-    // Keep it short and readable but cryptographically tied to the hardware
-    final shortId = digest.toString().substring(0, 16).toUpperCase();
-
-    _deviceIdCache = shortId;
-    return shortId;
+    _deviceIdCache = await HardwareFingerprintService().getFingerprint();
+    return _deviceIdCache!;
   }
 
   /// Verifies a license key (base64 encoded JSON containing payload and signature)
@@ -164,10 +124,10 @@ JQIDAQAB
   }
 
   /// Verifies and stores a modern Base64url signedLeaseToken (`Phase 2.1 & 2.2`)
-  Future<bool> verifySignedLeaseToken(String leaseTokenBase64, {bool saveToStorage = true}) async {
+  Future<TokenValidationResult> verifySignedLeaseToken(String leaseTokenBase64, {bool saveToStorage = true}) async {
     try {
       final parts = leaseTokenBase64.split('.');
-      if (parts.length < 2) return false;
+      if (parts.length < 2) return TokenValidationResult.invalidSignature;
 
       // Cryptographically verify the signature first using the authoritative Public Key
       String base64Signature = parts[1].replaceAll('-', '+').replaceAll('_', '/');
@@ -184,7 +144,7 @@ JQIDAQAB
 
       if (!isValidSignature) {
         print('CRITICAL SECURITY ALERT: signedLeaseToken cryptographic verification failed! Possible forgery attempt.');
-        return false;
+        return TokenValidationResult.invalidSignature;
       }
 
       // If signature is mathematically proven, decode payload and check expiration
@@ -197,12 +157,42 @@ JQIDAQAB
       final payload = jsonDecode(jsonStr);
 
       final expiresAtEpochMs = payload['expiresAtEpochMs'] as int?;
-      if (expiresAtEpochMs != null && DateTime.now().millisecondsSinceEpoch > expiresAtEpochMs) {
-        return false;
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      if (expiresAtEpochMs != null && now > expiresAtEpochMs) {
+        return TokenValidationResult.expired;
+      }
+
+      // Check offline grace period explicitly from the server-signed token (V1 Protocol)
+      if (payload['version'] == 1) {
+        final offlineValidUntilEpochMs = payload['offlineValidUntilEpochMs'] as int?;
+        if (offlineValidUntilEpochMs != null && now > offlineValidUntilEpochMs) {
+          // Send explicit event for UI to handle this gracefully
+          _revocationController.add('OFFLINE_EXPIRED');
+          return TokenValidationResult.offlineExpired;
+        }
+        
+        // Use ClockGuardService merely to detect malicious rollback that bypasses the above check
+        final clockTrustworthy = await ClockGuardService().checkClockIntegrity();
+        if (!clockTrustworthy) {
+           _revocationController.add('OFFLINE_EXPIRED');
+           return TokenValidationResult.clockRollback;
+        }
       }
 
       if (saveToStorage) {
         try {
+          // Iteration 2.2: explicit reminder reset on renewal & skip on fresh activation
+          if (_currentLicenseInfo != null && _currentLicenseInfo!['expiresAtEpochMs'] != null && expiresAtEpochMs != null) {
+            final oldExp = _currentLicenseInfo!['expiresAtEpochMs'] as int;
+            if (expiresAtEpochMs > oldExp) {
+              await _storage.delete(key: 'last_reminder_date');
+              _skipReminderThisSession = true;
+            }
+          } else if (_currentLicenseInfo == null) {
+            _skipReminderThisSession = true;
+          }
+
           await _storage.write(key: _signedLeaseTokenPref, value: leaseTokenBase64);
         } catch (e) {
           print('Storage write error for signed lease token: $e');
@@ -213,11 +203,11 @@ JQIDAQAB
       _cachedIsValid = true;
       _currentLicenseInfo = payload;
       _customBusinessName ??= await _storage.read(key: _customBusinessNamePref);
-      return true;
+      return TokenValidationResult.valid;
     } catch (e) {
       print('Signed lease verification failed: $e');
     }
-    return false;
+    return TokenValidationResult.invalidSignature;
   }
 
   /// Helper to retrieve stored offline RSA license key for migration or inspection
@@ -261,7 +251,7 @@ JQIDAQAB
         if (resJson['success'] == true && resJson['data']?['signedLeaseToken'] != null) {
           final newLease = resJson['data']['signedLeaseToken'] as String;
           await verifySignedLeaseToken(newLease, saveToStorage: true);
-          return true;
+          return true; // Migration successful if server issued it
         }
       }
     } catch (e) {
@@ -280,12 +270,22 @@ JQIDAQAB
     try {
       final savedLeaseToken = await _storage.read(key: _signedLeaseTokenPref);
       if (savedLeaseToken != null && savedLeaseToken.isNotEmpty) {
-        final isValidLease = await verifySignedLeaseToken(savedLeaseToken, saveToStorage: false);
-        if (isValidLease) {
+        final validationResult = await verifySignedLeaseToken(savedLeaseToken, saveToStorage: false);
+        
+        if (validationResult == TokenValidationResult.valid) {
           // Asynchronously poll the backend to ensure device hasn't been remotely superseded
           pollOnlineSubscriptionStatus();
           return true;
+        } else if (validationResult == TokenValidationResult.offlineExpired || validationResult == TokenValidationResult.clockRollback) {
+          // Cryptographically valid, but locked due to offline constraints.
+          // Keep the token. Return true so the app recognizes the subscription and shows the Offline UI.
+          return true;
+        } else if (validationResult == TokenValidationResult.expired) {
+          // Subscription naturally expired. Keep it so the UI can show the "Expired" screen.
+          return true;
         }
+        
+        // Only delete on Invalid Signature or Server Revoked
         await _storage.delete(key: _signedLeaseTokenPref);
       }
     } catch (e) {
@@ -323,11 +323,20 @@ JQIDAQAB
   bool isLicenseExpired() {
     if (_currentLicenseInfo == null) return true;
     
-    // Modern signedLeaseToken check (`expiresAtEpochMs`)
+    // Modern signedLeaseToken check (`expiresAtEpochMs` & `offlineValidUntilEpochMs`)
     if (_currentLicenseInfo!.containsKey('expiresAtEpochMs')) {
       final expEpoch = _currentLicenseInfo!['expiresAtEpochMs'] as int?;
-      if (expEpoch != null) {
-        return DateTime.now().millisecondsSinceEpoch > expEpoch;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (expEpoch != null && now > expEpoch) {
+        return true;
+      }
+      
+      // Enforce V1 offline token limits locally
+      if (_currentLicenseInfo!['version'] == 1) {
+        final offlineValidUntilEpochMs = _currentLicenseInfo!['offlineValidUntilEpochMs'] as int?;
+        if (offlineValidUntilEpochMs != null && now > offlineValidUntilEpochMs) {
+          return true; // Lock out until they sync
+        }
       }
     }
 
@@ -364,9 +373,12 @@ JQIDAQAB
     if (_currentLicenseInfo!.containsKey('expiresAtEpochMs')) {
       final expEpoch = _currentLicenseInfo!['expiresAtEpochMs'] as int?;
       if (expEpoch != null) {
-        final remainingMs = expEpoch - DateTime.now().millisecondsSinceEpoch;
-        final days = remainingMs / (1000 * 60 * 60 * 24);
-        return days > 0 ? days.ceil() : 0;
+        final today = DateTime.now();
+        final todayDate = DateTime(today.year, today.month, today.day);
+        final expiryDate = DateTime.fromMillisecondsSinceEpoch(expEpoch);
+        final expiryDay = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
+        final diff = expiryDay.difference(todayDate).inDays;
+        return diff > 0 ? diff : 0;
       }
     }
 
@@ -388,6 +400,38 @@ JQIDAQAB
     }
     
     return 0;
+  }
+
+  /// Iteration 2.2: Check if we should show a subscription expiry reminder today
+  Future<bool> shouldShowExpiryReminder() async {
+    if (_skipReminderThisSession) {
+      return false; // Activated or renewed during this session
+    }
+
+    final days = getDaysRemaining();
+    if (![7, 5, 3, 1, 0].contains(days)) {
+      return false; // Only show on these specific thresholds
+    }
+
+    try {
+      final lastShownStr = await _storage.read(key: 'last_reminder_date');
+      final todayStr = DateTime.now().toIso8601String().substring(0, 10); // YYYY-MM-DD
+      
+      if (lastShownStr == todayStr) {
+        return false; // Already shown today
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Iteration 2.2: Mark the reminder as shown for today
+  Future<void> markExpiryReminderShown() async {
+    try {
+      final todayStr = DateTime.now().toIso8601String().substring(0, 10); // YYYY-MM-DD
+      await _storage.write(key: 'last_reminder_date', value: todayStr);
+    } catch (_) {}
   }
 
   /// Retrieve the business name (customer name) from the license
@@ -446,18 +490,25 @@ JQIDAQAB
   void startBackgroundPolling() {
     _pollingTimer?.cancel();
     pollOnlineSubscriptionStatus(); // Fire immediately on boot
-    _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      pollOnlineSubscriptionStatus();
-    });
+    // Timer removed in Iteration 2. Will be cleaned up later.
   }
 
   void stopBackgroundPolling() {
     _pollingTimer?.cancel();
   }
 
+  int _lastPollAttemptMs = 0;
+
   /// Periodically checks the backend to enforce the "One Active Device" rule.
   /// If the server returns 403 INSTALLATION_SUPERSEDED, this device was revoked.
   Future<void> pollOnlineSubscriptionStatus({bool force = false}) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Rate limit polls to once every 6 hours unless forced
+    if (!force && (nowMs - _lastPollAttemptMs) < 6 * 60 * 60 * 1000) {
+      return; 
+    }
+    _lastPollAttemptMs = nowMs;
+
     try {
       final hasLic = await isLicensed();
       final hasTrial = await TrialService().checkTrialState();
@@ -530,13 +581,36 @@ JQIDAQAB
           await _storage.write(key: _lastSyncPref, value: DateTime.now().millisecondsSinceEpoch.toString());
           _revocationController.add('RESTORED');
         }
+      } else if (response.statusCode >= 500) {
+        print('Temporary Server Error (500/503). Retaining cached token.');
+        await _checkOfflineGracePeriodFallback();
       } else {
-        // Unhandled server error (500, etc), treat as network issue and use grace period
-        await _checkOfflineGracePeriod();
+        // Unhandled client error (400, 404), treat as soft failure
+        await _checkOfflineGracePeriodFallback();
       }
+    } on SocketException catch (e) {
+      print('Network offline (SocketException): $e');
+      await _checkOfflineGracePeriodFallback();
+    } on TimeoutException catch (e) {
+      print('Network timeout (TimeoutException): $e');
+      await _checkOfflineGracePeriodFallback();
     } catch (e) {
-      print('Online subscription status polling failed (offline?): $e');
+      print('Online subscription status polling failed (unknown): $e');
+      await _checkOfflineGracePeriodFallback();
+    }
+  }
+
+  Future<void> _checkOfflineGracePeriodFallback() async {
+    // If using V1, the token itself enforces offline expiry via verifySignedLeaseToken
+    // If using Legacy, fallback to the old method
+    if (_currentLicenseInfo?['version'] != 1) {
       await _checkOfflineGracePeriod();
+    } else {
+      // Re-evaluate the token against the current time to trigger OFFLINE_EXPIRED if needed
+      final savedLeaseToken = await _storage.read(key: _signedLeaseTokenPref);
+      if (savedLeaseToken != null) {
+        await verifySignedLeaseToken(savedLeaseToken, saveToStorage: false);
+      }
     }
   }
 

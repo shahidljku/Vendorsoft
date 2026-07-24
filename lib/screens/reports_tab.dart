@@ -23,9 +23,78 @@ class ReportsTab extends StatefulWidget {
 }
 
 class _ReportsTabState extends State<ReportsTab> {
-  DateTime _selectedDate = DateTime.now();
+DateTime _selectedDate = DateTime.now();
   String _selectedReport = 'Recovery Register';
   String _selectedCmName = 'All';
+
+  // Caches for Recovery Register
+  DateTime? _cachedDate;
+  List<Customer>? _cachedDateCustomers;
+  Map<String, List<Customer>>? _cachedGroupedByCm;
+  
+  // Caches for CMS
+  List<String> _cms = ['All'];
+
+  @override
+  void initState() {
+    super.initState();
+    _calculateCms();
+    widget.excelService.addListener(_onExcelDataChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.excelService.removeListener(_onExcelDataChanged);
+    super.dispose();
+  }
+
+  void _onExcelDataChanged() {
+    _calculateCms();
+    // Invalidate caches
+    _cachedDate = null;
+    _cachedDateCustomers = null;
+    _cachedGroupedByCm = null;
+    if (mounted) setState(() {});
+  }
+
+  void _calculateCms() {
+    Set<String> cms = {'All'};
+    for (var c in widget.excelService.allCustomers) {
+      if (c.cmName.isNotEmpty) cms.add(c.cmName.toUpperCase());
+    }
+    _cms = cms.toList();
+    if (!_cms.contains(_selectedCmName.toUpperCase()) && _selectedCmName != 'All') {
+      _selectedCmName = 'All';
+    }
+  }
+
+  void _prepareRecoveryRegisterCache() {
+    if (_cachedDate == _selectedDate && _cachedGroupedByCm != null) return;
+    
+    String d1 = DateFormat('dd/MM/yyyy').format(_selectedDate);
+    String d2 = DateFormat('d/M/yyyy').format(_selectedDate);
+    String d3 = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+    // Cache A: Date-Filtered Customers (References only)
+    _cachedDateCustomers = widget.excelService.allCustomers.where((c) {
+      if (!c.isPaid) return false;
+      String pDate = c.paymentDate;
+      String vDate = c.vouchDate;
+      String dateToCheck = pDate.isNotEmpty ? pDate : vDate;
+      if (dateToCheck.contains(d1) || dateToCheck.contains(d2) || dateToCheck.contains(d3)) return true;
+      String normalizedDate = dateToCheck.replaceAll('-', '/');
+      return normalizedDate.contains(d1) || normalizedDate.contains(d2);
+    }).toList();
+
+    // Cache B: Grouped By CM (References only)
+    Map<String, List<Customer>> groupedByCm = {};
+    for (var c in _cachedDateCustomers!) {
+      String cm = c.cmName.isNotEmpty ? c.cmName.toUpperCase() : 'UNKNOWN';
+      groupedByCm.putIfAbsent(cm, () => []).add(c);
+    }
+    _cachedGroupedByCm = groupedByCm;
+    _cachedDate = _selectedDate;
+  }
 
   Future<void> _pickDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -54,7 +123,7 @@ class _ReportsTabState extends State<ReportsTab> {
     }
   }
 
-  Future<Uint8List> _generatePdf(PdfPageFormat format) async {
+Future<Uint8List> _generatePdf(PdfPageFormat format) async {
     if (_selectedReport == 'Monthly Collection') {
       return MonthlyCollectionReport.generate(format, widget.excelService);
     }
@@ -62,35 +131,11 @@ class _ReportsTabState extends State<ReportsTab> {
       return CmPendingReport.generate(format, widget.excelService, _selectedCmName == 'All' ? '' : _selectedCmName);
     }
 
-    String formattedDate = DateFormat('dd/MM/yyyy').format(_selectedDate);
+    _prepareRecoveryRegisterCache();
     
-    // 1. Filter Data
-    List<Customer> dayCustomers = widget.excelService.allCustomers.where((c) {
-      bool isSuccessful = c.isPaid;
-      
-      String d1 = DateFormat('dd/MM/yyyy').format(_selectedDate); // 02/07/2026
-      String d2 = DateFormat('d/M/yyyy').format(_selectedDate);   // 2/7/2026
-      String d3 = DateFormat('yyyy-MM-dd').format(_selectedDate); // 2026-07-02
-      
-      String pDate = c.paymentDate.trim();
-      String vDate = c.vouchDate.trim();
-      
-      String dateToCheck = pDate.isNotEmpty ? pDate : vDate;
-
-      bool isCorrectDate = dateToCheck.contains(d1) || 
-                           dateToCheck.contains(d2) || 
-                           dateToCheck.contains(d3) ||
-                           dateToCheck.replaceAll('-', '/').contains(d1);
-                           
-      return isCorrectDate && isSuccessful;
-    }).toList();
-
-    // 2. Group by Collection Man
-    Map<String, List<Customer>> groupedByCm = {};
-    for (var c in dayCustomers) {
-      String cm = c.cmName.isNotEmpty ? c.cmName.toUpperCase() : 'UNKNOWN';
-      groupedByCm.putIfAbsent(cm, () => []).add(c);
-    }
+    String formattedDate = DateFormat('dd/MM/yyyy').format(_selectedDate);
+    Map<String, List<Customer>> groupedByCm = _cachedGroupedByCm!;
+    List<Customer> dayCustomers = _cachedDateCustomers!;
 
     final String businessName = LicenseService().getBusinessName();
     
@@ -199,7 +244,7 @@ class _ReportsTabState extends State<ReportsTab> {
     return ReportFramework.generate(config);
   }
 
-  @override
+@override
   Widget build(BuildContext context) {
     String formattedDate = DateFormat('dd/MM/yyyy').format(_selectedDate);
 
@@ -237,20 +282,7 @@ class _ReportsTabState extends State<ReportsTab> {
           const SizedBox(width: 8),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: widget.excelService,
-        builder: (context, child) {
-          Set<String> cms = {'All'};
-          for (var c in widget.excelService.allCustomers) {
-            if (c.cmName.isNotEmpty) cms.add(c.cmName.toUpperCase());
-          }
-          if (!cms.contains(_selectedCmName.toUpperCase()) && _selectedCmName != 'All') {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() => _selectedCmName = 'All');
-            });
-          }
-
-          return Column(
+body: Column(
             children: [
               if (_selectedReport == 'CM Pending')
                 Container(
@@ -266,7 +298,7 @@ class _ReportsTabState extends State<ReportsTab> {
                           isExpanded: true,
                           dropdownColor: const Color(0xFF161B22),
                           style: const TextStyle(color: Colors.white),
-                          items: cms.map((cm) {
+                          items: _cms.map((cm) {
                             return DropdownMenuItem(
                               value: cm,
                               child: Text(cm, maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -292,9 +324,7 @@ class _ReportsTabState extends State<ReportsTab> {
                 ),
               ),
             ],
-          );
-        },
-      ),
+          ),
     );
   }
 }

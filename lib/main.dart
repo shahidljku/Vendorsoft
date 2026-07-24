@@ -11,6 +11,7 @@ import 'screens/device_banned_screen.dart';
 import 'screens/maintenance_screen.dart';
 import 'screens/offline_locked_screen.dart';
 import 'screens/device_transferred_screen.dart';
+import 'screens/subscription_reminder_dialog.dart';
 import 'services/settings_service.dart';
 import 'services/security_service.dart';
 import 'services/license_service.dart';
@@ -103,7 +104,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
           setState(() {
             _isBanned = true;
           });
-        } else if (reason == 'OFFLINE_LOCKED') {
+        } else if (reason == 'OFFLINE_LOCKED' || reason == 'OFFLINE_EXPIRED') {
           setState(() {
             _isOfflineLocked = true;
           });
@@ -136,7 +137,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       }
     });
     ConfigService().startBackgroundPolling();
-    LicenseService().startBackgroundPolling();
+    // LicenseService().startBackgroundPolling(); // Disabled in Iteration 2 - Replaced by targeted event-driven verification
     _loadSettings();
   }
 
@@ -249,6 +250,28 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       _maintenanceMessage = ConfigService().maintenanceMessage;
       _isLoading = false;
     });
+
+    if (!isLifecycleReload && _hasAcceptedTerms && _isLicensed && !_isExpired && !_isOfflineLocked && !_isBanned && !_isSuperseded && !_isDeactivated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkAndShowReminder();
+      });
+    }
+  }
+
+  Future<void> _checkAndShowReminder() async {
+    final shouldShow = await _licenseService.shouldShowExpiryReminder();
+    if (shouldShow && mounted) {
+      await _licenseService.markExpiryReminderShown();
+      showDialog(
+        context: context,
+        builder: (context) => SubscriptionReminderDialog(
+          daysRemaining: _licenseService.getDaysRemaining(),
+          onRenew: () {
+            // Placeholder: currently just closes the dialog. Will integrate with Razorpay later.
+          },
+        ),
+      );
+    }
   }
 
   ThemeMode _parseThemeMode(String mode) {
@@ -424,6 +447,15 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                 await _loadSettings();
               },
             )
+          : _isOfflineLocked
+              ? OfflineLockedScreen(
+                  isRetrying: _isLoading,
+                  onRetry: () async {
+                    setState(() { _isLoading = true; });
+                    await _licenseService.pollOnlineSubscriptionStatus(force: true);
+                    setState(() { _isLoading = false; });
+                  },
+                )
           : (!_isLicensed && !_isTrialActive)
               ? ActivationScreen(
                   licenseService: _licenseService,
@@ -437,15 +469,6 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                 )
               : (_isLicensed && _isExpired)
                       ? _buildLicenseExpiredScreen()
-                  : _isOfflineLocked
-                      ? OfflineLockedScreen(
-                          isRetrying: _isLoading,
-                          onRetry: () async {
-                            setState(() { _isLoading = true; });
-                            await _licenseService.pollOnlineSubscriptionStatus();
-                            setState(() { _isLoading = false; });
-                          },
-                        )
                   : _isLocked
                       ? PinLockScreen(
                           securityService: _securityService,

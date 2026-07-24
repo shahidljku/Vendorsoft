@@ -1,0 +1,7 @@
+# VendorPro Website
+# https://vendorpro-website.pages.dev
+
+User-agent: *
+Allow: /
+
+Sitemap: https://vendorpro-website.pages.dev/sitemap.xml

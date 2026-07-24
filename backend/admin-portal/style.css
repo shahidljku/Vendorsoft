@@ -581,3 +581,43 @@ input:checked + .slider:before {
   gap: 0.75rem;
   margin-top: 0.5rem;
 }
+
+/* Login Overlay */
+.login-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(11, 15, 25, 0.95);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+  visibility: hidden;
+  opacity: 0;
+  transition: all 0.3s ease;
+}
+
+.login-overlay.active {
+  visibility: visible;
+  opacity: 1;
+}
+
+.login-box {
+  padding: 3rem;
+  width: 400px;
+  max-width: 90%;
+  text-align: center;
+}
+
+.login-box h2 {
+  margin-bottom: 0.5rem;
+  font-family: var(--font-heading);
+}
+
+.login-box p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-bottom: 2rem;
+}

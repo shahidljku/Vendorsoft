@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact Us — VendorPro</title>
+  <meta name="description" content="Get in touch with the VendorPro team for support, feedback, or inquiries about our newspaper vendor billing software.">
+  <meta property="og:title" content="Contact Us — VendorPro">
+  <meta property="og:description" content="Contact VendorPro for support or inquiries.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="/images/app-icon.png">
+  <link rel="canonical" href="https://vendorpro-website.pages.dev/contact.html">
+  <link rel="icon" type="image/png" href="/images/app-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav" id="mainNav" role="navigation" aria-label="Main navigation">
+    <div class="container nav__inner">
+      <a href="/" class="nav__brand" aria-label="VendorPro Home">
+        <img src="/images/app-icon.png" alt="VendorPro Logo" class="nav__logo" width="40" height="40">
+        <span class="nav__wordmark">VendorPro</span>
+      </a>
+      <div class="nav__links" id="navLinks" role="menubar">
+        <a href="/#features" class="nav__link" role="menuitem">Features</a>
+        <a href="/#pricing" class="nav__link" role="menuitem">Pricing</a>
+        <a href="/#faq" class="nav__link" role="menuitem">FAQ</a>
+        <a href="/about.html" class="nav__link" role="menuitem">About</a>
+        <a href="/contact.html" class="nav__link" role="menuitem">Contact</a>
+        <div class="nav__cta">
+          <a href="/#pricing" class="btn btn--primary btn--sm">Download App</a>
+        </div>
+      </div>
+      <button class="nav__toggle" id="navToggle" aria-label="Toggle navigation menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <main>
+    <section class="legal">
+      <div class="container">
+        <span class="section__label">Contact</span>
+        <h1>Contact Us</h1>
+        <p style="font-size: var(--text-lg); margin-top: var(--space-4); margin-bottom: var(--space-10);">
+          Have a question, need support, or want to provide feedback? We're here to help.
+        </p>
+
+        <div class="contact__grid">
+          <!-- Contact Information -->
+          <div>
+            <h2 style="border-top: none; margin-top: 0; padding-top: 0; font-size: var(--text-2xl); margin-bottom: var(--space-8);">Get in Touch</h2>
+
+            <div class="contact-info__item">
+              <div class="contact-info__icon" aria-hidden="true">✉️</div>
+              <div>
+                <p class="contact-info__label">Email Support</p>
+                <p class="contact-info__value" style="color: var(--color-accent);">support@vendorpro.app</p>
+                <p style="font-size: var(--text-sm); color: var(--color-text-muted); margin-top: var(--space-1);">We typically respond within 24-48 hours during business days.</p>
+              </div>
+            </div>
+
+            <div class="contact-info__item">
+              <div class="contact-info__icon" aria-hidden="true">📱</div>
+              <div>
+                <p class="contact-info__label">In-App Support</p>
+                <p class="contact-info__value">Help &amp; FAQ Section</p>
+                <p style="font-size: var(--text-sm); color: var(--color-text-muted); margin-top: var(--space-1);">Access detailed guides and FAQs directly inside the VendorPro app under Settings → Help &amp; FAQ.</p>
+              </div>
+            </div>
+
+            <div class="contact-info__item">
+              <div class="contact-info__icon" aria-hidden="true">🕐</div>
+              <div>
+                <p class="contact-info__label">Support Availability</p>
+                <p class="contact-info__value">Monday - Friday, 9AM - 6PM</p>
+                <p style="font-size: var(--text-sm); color: var(--color-text-muted); margin-top: var(--space-1);">Support is offline on weekends and public holidays.</p>
+              </div>
+            </div>
+
+
+          </div>
+
+          <!-- Contact Form -->
+          <div>
+            <form class="contact-form" id="contactForm" novalidate>
+              <h3 style="margin-bottom: var(--space-6);">Send Us a Message</h3>
+
+              <div class="form-group">
+                <label for="contactName">Full Name <span style="color: var(--color-error);">*</span></label>
+                <input type="text" id="contactName" name="name" required autocomplete="name" placeholder="Your full name">
+                <p class="form-error" aria-live="polite">Please enter your name.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="contactEmail">Email Address <span style="color: var(--color-error);">*</span></label>
+                <input type="email" id="contactEmail" name="email" required autocomplete="email" placeholder="you@example.com">
+                <p class="form-error" aria-live="polite">Please enter a valid email address.</p>
+              </div>
+
+              <div class="form-group">
+                <label for="contactSubject">Subject</label>
+                <select id="contactSubject" name="subject">
+                  <option value="">Select a topic</option>
+                  <option value="support">Technical Support</option>
+                  <option value="billing">Billing &amp; Subscription</option>
+                  <option value="transfer">Device Transfer Help</option>
+                  <option value="feedback">Feedback</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="contactMessage">Message <span style="color: var(--color-error);">*</span></label>
+                <textarea id="contactMessage" name="message" required placeholder="Describe your question or issue..."></textarea>
+                <p class="form-error" aria-live="polite">Please enter a message (at least 10 characters).</p>
+              </div>
+
+              <button type="submit" class="btn btn--primary" style="width: 100%;">Send Message</button>
+
+              <p style="font-size: var(--text-xs); color: var(--color-text-muted); margin-top: var(--space-3); text-align: center;">
+                Your message will be recorded for support purposes. We do not share your contact information with third parties.
+              </p>
+            </form>
+
+            <!-- Success State -->
+            <div id="contactSuccess" style="display: none; text-align: center; padding: var(--space-12) var(--space-8); background: var(--color-surface); border-radius: var(--radius-lg);">
+              <div style="font-size: 48px; margin-bottom: var(--space-4);">✅</div>
+              <h3>Message Received</h3>
+              <p style="margin-top: var(--space-3);">Thank you for reaching out. We'll get back to you as soon as possible.</p>
+              <a href="/" class="btn btn--outline" style="margin-top: var(--space-6);">Back to Home</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer" role="contentinfo">
+    <div class="container">
+      <div class="footer__grid">
+        <div class="footer__brand">
+          <a href="/" class="nav__brand" aria-label="VendorPro Home">
+            <img src="/images/app-icon.png" alt="VendorPro" class="nav__logo" width="40" height="40" loading="lazy">
+            <span class="nav__wordmark" style="color: #fff;">VendorPro</span>
+          </a>
+          <p>Billing and route management software built for Indian newspaper vendors and distribution agencies.</p>
+        </div>
+        <div>
+          <h4 class="footer__heading">Product</h4>
+          <ul class="footer__links">
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#pricing">Pricing</a></li>
+            <li><a href="/#faq">FAQ</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="footer__heading">Company</h4>
+          <ul class="footer__links">
+            <li><a href="/about.html">About Us</a></li>
+            <li><a href="/contact.html">Contact</a></li>
+          </ul>
+        </div>
+        <div>
+          <h4 class="footer__heading">Legal</h4>
+          <ul class="footer__links">
+            <li><a href="/privacy.html">Privacy Policy</a></li>
+            <li><a href="/terms.html">Terms &amp; Conditions</a></li>
+            <li><a href="/refund.html">Refund Policy</a></li>
+            <li><a href="/shipping.html">Shipping Policy</a></li>
+            <li><a href="/disclaimer.html">Disclaimer</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer__bottom">
+        <p class="footer__copyright">&copy; 2026 VendorPro. All rights reserved.</p>
+        <div class="footer__legal-links">
+          <a href="/privacy.html">Privacy</a>
+          <a href="/terms.html">Terms</a>
+          <a href="/refund.html">Refunds</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/js/main.js"></script>
+  <script src="/js/contact-form.js"></script>
+</body>
+</html>

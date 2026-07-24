@@ -87,81 +87,117 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     style: TextStyle(color: Colors.grey, fontSize: 16),
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _history.length,
-                  itemBuilder: (context, index) {
-                    final item = _history[index];
-                    final issueDate = DateTime.tryParse(item['issueDate'] ?? '');
-                    
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    item['customerName'] ?? 'Unknown Customer',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).colorScheme.primaryContainer,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    item['customerType'] ?? 'Unknown',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 24),
-                            _buildInfoRow('License No', item['licenseNumber'] ?? 'Unknown'),
-                            const SizedBox(height: 8),
-                            _buildInfoRow('Device ID', item['deviceId'] ?? 'Unknown'),
-                            const SizedBox(height: 8),
-                            _buildInfoRow(
-                              'Issue Date', 
-                              issueDate != null ? dateFormatter.format(issueDate) : 'Unknown'
-                            ),
-                            if (item['customerType'] != 'Lifetime' && item['expiryDate'] != null && item['expiryDate'].toString().isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              _buildInfoRow(
-                                'Expiry Date',
-                                DateTime.tryParse(item['expiryDate']) != null 
-                                    ? dateFormatter.format(DateTime.parse(item['expiryDate'])) 
-                                    : 'Unknown',
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () => _copyLicense(item['fullLicense'] ?? ''),
-                                icon: const Icon(Icons.copy, size: 18),
-                                label: const Text('Copy License Key'),
-                              ),
-                            ),
-                          ],
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth > 1200) {
+                      return GridView.builder(
+                        padding: const EdgeInsets.all(24),
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          mainAxisExtent: 260, // approximate height needed for a card
                         ),
-                      ),
-                    );
+                        itemCount: _history.length,
+                        itemBuilder: (context, index) => _buildHistoryCard(context, _history[index], dateFormatter),
+                      );
+                    } else if (constraints.maxWidth > 768) {
+                      return GridView.builder(
+                        padding: const EdgeInsets.all(20),
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          mainAxisExtent: 260,
+                        ),
+                        itemCount: _history.length,
+                        itemBuilder: (context, index) => _buildHistoryCard(context, _history[index], dateFormatter),
+                      );
+                    } else {
+                      return ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _history.length,
+                        itemBuilder: (context, index) => Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: _buildHistoryCard(context, _history[index], dateFormatter),
+                        ),
+                      );
+                    }
                   },
                 ),
+    );
+  }
+
+  Widget _buildHistoryCard(BuildContext context, Map<String, dynamic> item, DateFormat dateFormatter) {
+    final issueDate = DateTime.tryParse(item['issueDate'] ?? '');
+    
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    item['customerName'] ?? 'Unknown Customer',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    item['customerType'] ?? 'Unknown',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 24),
+            _buildInfoRow('License No', item['licenseNumber'] ?? 'Unknown'),
+            const SizedBox(height: 8),
+            _buildInfoRow('Device ID', item['deviceId'] ?? 'Unknown'),
+            const SizedBox(height: 8),
+            _buildInfoRow(
+              'Issue Date', 
+              issueDate != null ? dateFormatter.format(issueDate) : 'Unknown'
+            ),
+            if (item['customerType'] != 'Lifetime' && item['expiryDate'] != null && item['expiryDate'].toString().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _buildInfoRow(
+                'Expiry Date',
+                DateTime.tryParse(item['expiryDate']) != null 
+                    ? dateFormatter.format(DateTime.parse(item['expiryDate'])) 
+                    : 'Unknown',
+              ),
+            ],
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _copyLicense(item['fullLicense'] ?? ''),
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy Key'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

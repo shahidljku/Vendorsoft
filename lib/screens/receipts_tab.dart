@@ -16,6 +16,7 @@ import '../services/license_service.dart';
 import '../services/log_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/print_service.dart';
+import '../widgets/cooldown_fab.dart';
 
 class ReceiptsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -54,9 +55,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   Completer<bool>? _whatsAppCompleter;
   StreamSubscription<bool>? _messageSentSubscription;
   bool _isAccessibilityEnabled = false;
-  Timer? _cooldownTimer;
-  bool _isCooldown = false;
-  Duration _remainingCooldown = Duration.zero;
+
 
   @override
   void initState() {
@@ -76,7 +75,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     );
     _checkAccessibility();
     _computeQueues();
-    _startCooldownTimer();
   }
 
   void _computeQueues() {
@@ -90,23 +88,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       return c.isPaid && (rst == 'sent' || rst == 'message sent');
     }).toList();
   }
-
-  void _startCooldownTimer() {
-    _checkCooldown();
-    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
-  }
-
-  Future<void> _checkCooldown() async {
-    bool active = await CooldownService().isCooldownActive();
-    Duration remaining = await CooldownService().getRemainingCooldown();
-    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
-      setState(() {
-        _isCooldown = active;
-        _remainingCooldown = remaining;
-      });
-    }
-  }
-
 
   void _checkAccessibility() async {
     bool enabled = await AccessibilityService.isEnabled();
@@ -127,7 +108,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
 
   @override
   void dispose() {
-    _cooldownTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _messageSentSubscription?.cancel();
     if (_isAccessibilityEnabled) {
@@ -136,7 +116,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     if (AccessibilityService.activeSendingMode == 'receipt') {
       AccessibilityService.activeSendingMode = 'none';
     }
-    _cooldownTimer?.cancel();
     _messageSentSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
@@ -1061,26 +1040,26 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         },
       ),
       floatingActionButton: _pendingReceipts.isNotEmpty && !_isSending
-          ? FloatingActionButton.extended(
-              onPressed: _isCooldown ? () {
-                _showCooldownDialog(context);
-              } : (_isAccessibilityEnabled ? () {
+          ? CooldownFab(
+              label: 'Send Receipts',
+              iconData: Icons.send,
+              baseColor: _isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey,
+              onCooldownAction: () => _showCooldownDialog(context),
+              onNormalAction: _isAccessibilityEnabled ? () {
                 _runPreflightChecks(context);
               } : () async {
                 await AccessibilityService.showGuidanceDialog(context);
                 bool check = await AccessibilityService.isEnabled();
                 if (mounted) setState(() { _isAccessibilityEnabled = check; });
-              }),
-              backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
-              foregroundColor: Colors.black,
-              icon: Icon(_isCooldown ? Icons.timer : Icons.send),
-              label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Receipts'),
+              },
             )
           : null,
     );
   }
 
-  void _showCooldownDialog(BuildContext context) {
+  Future<void> _showCooldownDialog(BuildContext context) async {
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (!context.mounted) return;
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
@@ -1093,7 +1072,9 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
           ],
         ),
         content: Text(
-          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.
+
+Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -1105,4 +1086,5 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       ),
     );
   }
+
 }

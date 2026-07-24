@@ -4,10 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VendSoft — Cloud Control & Admin Portal</title>
+  
+  <!-- Content Security Policy -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://vendsoft-api-worker.vendorproapk.workers.dev https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com; frame-src 'self' https://vendorpro-491c4.firebaseapp.com https://*.firebaseapp.com; img-src 'self' data: https://*;">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 </head>
 <body class="dark-theme">
   <!-- Top Glass Navigation Bar -->
@@ -20,22 +28,28 @@
       </div>
     </div>
     <div class="nav-controls">
-      <div class="env-selector">
-        <label for="apiBaseUrl">Target API Endpoint:</label>
-        <select id="apiBaseUrl">
-          <option value="https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1" selected>Production Cloudflare (VendSoft)</option>
-          <option value="http://127.0.0.1:8788/api/v1">Local Worker (Dev: 8788)</option>
-        </select>
-      </div>
-      <div class="auth-pill glass-pill">
+      <div class="auth-pill glass-pill" id="authPill" style="display: none;">
         <span class="pulse-dot"></span>
-        <span id="adminStatusText">Auth: Dev Mock (admin_secret_mock)</span>
+        <span id="adminStatusText">Loading Auth...</span>
+        <button id="btnLogout" class="btn secondary" style="margin-left: 10px; padding: 4px 8px; font-size: 0.8rem;">Logout</button>
       </div>
     </div>
   </header>
 
+  <!-- Login Overlay -->
+  <div id="loginScreen" class="login-overlay active">
+    <div class="login-box glass">
+      <h2>VendSoft Secure Access</h2>
+      <p>Authorized personnel only.</p>
+      <button id="btnGoogleSignIn" class="btn primary" style="width: 100%; margin-top: 20px;">
+        Sign in with Google
+      </button>
+      <p id="loginError" style="color: var(--danger); margin-top: 15px; text-align: center; display: none;"></p>
+    </div>
+  </div>
+
   <!-- Main Dashboard Grid -->
-  <main class="dashboard-grid">
+  <main id="mainDashboard" class="dashboard-grid" style="display: none;">
     <!-- Left Sidebar / Navigation Tabs -->
     <aside class="sidebar glass">
       <nav class="tab-nav">
@@ -395,6 +409,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

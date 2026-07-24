@@ -22,7 +22,12 @@ class _DailyCollection {
 class MonthlyCollectionReport {
   static String _standardizeDate(String dateStr) {
     if (dateStr.isEmpty) return 'Unknown Date';
-    String s = dateStr.split(' ')[0].replaceAll('-', '/');
+    
+    // Instead of chained .split().replaceAll(), we can optimize for speed
+    int spaceIndex = dateStr.indexOf(' ');
+    String s = spaceIndex != -1 ? dateStr.substring(0, spaceIndex) : dateStr;
+    s = s.replaceAll('-', '/');
+    
     List<String> parts = s.split('/');
     if (parts.length == 3) {
       if (parts[0].length == 4) {

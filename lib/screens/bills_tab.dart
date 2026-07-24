@@ -11,6 +11,7 @@ import '../services/whatsapp_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/print_service.dart';
+import '../widgets/cooldown_fab.dart';
 
 class BillsTab extends StatefulWidget {
   final SettingsService settingsService;
@@ -37,9 +38,17 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   bool _isSearching = false;
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isAccessibilityEnabled = false;
-  Timer? _cooldownTimer;
-  bool _isCooldown = false;
-  Duration _remainingCooldown = Duration.zero;
+
+  Timer? _debounce;
+  
+  // Caches
+  List<Customer> _cachedFilteredCustomers = [];
+  int _allCount = 0;
+  int _pendingBillsCount = 0;
+  int _failedBillsCount = 0;
+  int _sentBillsCount = 0;
+  List<String> _cmNames = ['All'];
+
 
   @override
   void initState() {
@@ -47,28 +56,14 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     _statusFilter = widget.initialFilter ?? 'All';
     WidgetsBinding.instance.addObserver(this);
     _checkAccessibility();
-    _startCooldownTimer();
-  }
-
-  void _startCooldownTimer() {
-    _checkCooldown();
-    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
-  }
-
-  Future<void> _checkCooldown() async {
-    bool active = await CooldownService().isCooldownActive();
-    Duration remaining = await CooldownService().getRemainingCooldown();
-    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
-      setState(() {
-        _isCooldown = active;
-        _remainingCooldown = remaining;
-      });
-    }
+    _calculateData();
+    widget.excelService.addListener(_calculateData);
   }
 
   @override
   void dispose() {
-    _cooldownTimer?.cancel();
+    widget.excelService.removeListener(_calculateData);
+    _debounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _searchCtrl.dispose();
     super.dispose();
@@ -95,15 +90,34 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     super.didUpdateWidget(oldWidget);
     if (widget.navKey != oldWidget.navKey) {
       if (widget.initialFilter != null) {
-        setState(() {
-          _statusFilter = widget.initialFilter!;
-        });
+        _statusFilter = widget.initialFilter!;
+        _calculateData();
       }
     }
   }
 
-  List<Customer> get filteredCustomers {
-    List<Customer> result = widget.excelService.allCustomers;
+  void _calculateData() {
+    List<Customer> allCustomers = widget.excelService.allCustomers;
+    
+    // Tab Counts
+    int pending = 0;
+    int failed = 0;
+    int sent = 0;
+    
+    Set<String> cmSet = {'All'};
+
+    for (var c in allCustomers) {
+      String st = c.status.trim().toLowerCase();
+      
+      if (st == 'pending' || st == 'waiting' || st == 'processing') pending++;
+      if (st == 'failed') failed++;
+      if (st == 'sent' || st == 'message sent') sent++;
+      
+      if (c.cmName.isNotEmpty) cmSet.add(c.cmName);
+    }
+    
+    // Now filter list
+    List<Customer> result = allCustomers;
     if (_statusFilter != 'All') {
       result = result.where((c) {
         String st = c.status.trim().toLowerCase();
@@ -124,7 +138,41 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
       String q = _searchQuery.toLowerCase().trim();
       result = result.where((c) => c.billNo.toLowerCase().contains(q)).toList();
     }
-    return result;
+    
+    if (mounted) {
+      setState(() {
+        _allCount = allCustomers.length;
+        _pendingBillsCount = pending;
+        _failedBillsCount = failed;
+        _sentBillsCount = sent;
+        _cmNames = cmSet.toList();
+        
+        if (!_cmNames.contains(_collectionManFilter)) {
+          _collectionManFilter = 'All';
+        }
+        
+        _cachedFilteredCustomers = result;
+      });
+    }
+  }
+
+  void _onSearchChanged(String val) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    if (val.isEmpty) {
+      _searchQuery = '';
+      _calculateData();
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      _searchQuery = val;
+      _calculateData();
+    });
+  }
+
+  void _onSearchSubmitted(String val) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _searchQuery = val;
+    _calculateData();
   }
 
   @override
@@ -147,7 +195,8 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   hintStyle: TextStyle(color: Colors.white54),
                   border: InputBorder.none,
                 ),
-                onChanged: (val) => setState(() => _searchQuery = val),
+                onChanged: _onSearchChanged,
+                onSubmitted: _onSearchSubmitted,
               )
             : const Text('Bills', style: TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: false,
@@ -155,11 +204,13 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
             onPressed: () {
+              if (_debounce?.isActive ?? false) _debounce!.cancel();
               setState(() {
                 _isSearching = !_isSearching;
                 if (!_isSearching) {
                   _searchCtrl.clear();
                   _searchQuery = '';
+                  _calculateData();
                 }
               });
             },
@@ -183,34 +234,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           ),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: widget.excelService,
-        builder: (context, _) {
-          List<Customer> customers = filteredCustomers;
-          int allCount = widget.excelService.allCustomers.length;
-          int pendingBillsCount = widget.excelService.allCustomers.where((c) {
-            String st = c.status.trim().toLowerCase();
-            return st == 'pending' || st == 'waiting' || st == 'processing';
-          }).length;
-          int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status.trim().toLowerCase() == 'failed').length;
-          int sentBillsCount = widget.excelService.allCustomers.where((c) {
-            String st = c.status.trim().toLowerCase();
-            return st == 'sent' || st == 'message sent';
-          }).length;
-
-          // Compute unique collection men
-          Set<String> cmNames = {'All'};
-          for (var c in widget.excelService.allCustomers) {
-            if (c.cmName.isNotEmpty) cmNames.add(c.cmName);
-          }
-          if (!cmNames.contains(_collectionManFilter)) {
-            // Delay resetting filter slightly to avoid build issues
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() => _collectionManFilter = 'All');
-            });
-          }
-
-          return Column(
+      body: Column(
             children: [
           // Filter Tabs
           SingleChildScrollView(
@@ -218,20 +242,20 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                _buildFilterTab('All', allCount, const Color(0xFF00E676)),
+                _buildFilterTab('All', _allCount, const Color(0xFF00E676)),
                 const SizedBox(width: 8),
-                _buildFilterTab('Pending Bills', pendingBillsCount, Colors.orangeAccent),
+                _buildFilterTab('Pending Bills', _pendingBillsCount, Colors.orangeAccent),
                 const SizedBox(width: 8),
-                _buildFilterTab('Failed Bills', failedBillsCount, Colors.redAccent),
+                _buildFilterTab('Failed Bills', _failedBillsCount, Colors.redAccent),
                 const SizedBox(width: 8),
-                _buildFilterTab('Sent Bills', sentBillsCount, Colors.blueAccent),
+                _buildFilterTab('Sent Bills', _sentBillsCount, Colors.blueAccent),
               ],
             ),
           ),
           const Divider(height: 1, color: Colors.white12),
 
           // Collection Man Dropdown
-          if (cmNames.length > 1)
+          if (_cmNames.length > 1)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
@@ -244,7 +268,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                       isExpanded: true,
                       dropdownColor: Theme.of(context).cardColor,
                       underline: Container(),
-                      items: cmNames.map((name) {
+                      items: _cmNames.map((name) {
                         return DropdownMenuItem<String>(
                           value: name,
                           child: Text(name, style: const TextStyle(color: Colors.white)),
@@ -291,7 +315,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           
           // Queue List
           Expanded(
-            child: customers.isEmpty
+            child: _cachedFilteredCustomers.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -304,36 +328,37 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: customers.length,
+                    itemCount: _cachedFilteredCustomers.length,
                     itemBuilder: (context, index) {
-                      Customer customer = customers[index];
+                      Customer customer = _cachedFilteredCustomers[index];
                       return _buildCustomerItem(context, customer, index + 1);
                     },
                   ),
           ),
         ],
-      );
-    }),
-    floatingActionButton: FloatingActionButton.extended(
-      heroTag: 'send_bills_btn',
-      onPressed: _isCooldown ? () {
-        _showCooldownDialog(context);
-      } : (_isAccessibilityEnabled ? () {
-        _runPreflightChecks(context);
-      } : () async {
-        await AccessibilityService.showGuidanceDialog(context);
-        bool check = await AccessibilityService.isEnabled();
-        if (mounted) setState(() { _isAccessibilityEnabled = check; });
-      }),
-      backgroundColor: _isCooldown ? Colors.orange : (_isAccessibilityEnabled ? const Color(0xFF00E676) : Colors.grey),
-      foregroundColor: Colors.black,
-      icon: Icon(_isCooldown ? Icons.timer : Icons.send),
-      label: Text(_isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills'),
+      ),
+    floatingActionButton: CooldownFab(
+      iconData: Icons.send,
+      label: 'Send Bills',
+      baseColor: const Color(0xFF00E676),
+      onCooldownAction: () => _showCooldownDialog(context),
+      onNormalAction: () {
+        if (_isAccessibilityEnabled) {
+          _runPreflightChecks(context);
+        } else {
+          AccessibilityService.showGuidanceDialog(context).then((_) async {
+            bool check = await AccessibilityService.isEnabled();
+            if (mounted) setState(() { _isAccessibilityEnabled = check; });
+          });
+        }
+      },
     ),
     );
   }
 
-  void _showCooldownDialog(BuildContext context) {
+  void _showCooldownDialog(BuildContext context) async {
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (!context.mounted) return;
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
@@ -346,7 +371,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           ],
         ),
         content: Text(
-          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(remaining)}',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -899,7 +924,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   }
 
   void _runPreflightChecks(BuildContext context) async {
-    List<Customer> pendingQueue = filteredCustomers
+    List<Customer> pendingQueue = _cachedFilteredCustomers
         .where((c) => c.status.toLowerCase() == 'pending' || c.status == 'waiting')
         .toList();
 
@@ -1116,7 +1141,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     if (!mounted) return;
 
     // Use customers that are pending AND match the current Collection Man filter
-    List<Customer> pendingQueue = filteredCustomers
+    List<Customer> pendingQueue = _cachedFilteredCustomers
         .where((c) => c.status.toLowerCase() == 'pending' || c.status == 'waiting')
         .toList();
 

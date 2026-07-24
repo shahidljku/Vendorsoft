@@ -7,6 +7,7 @@ import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/license_service.dart';
 import '../services/trial_service.dart';
+import '../widgets/cooldown_button.dart';
 import '../widgets/subscription_dialog.dart';
 import 'reminders_modal.dart';
 
@@ -35,9 +36,6 @@ class DashboardTab extends StatefulWidget {
 class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   String? excelFileName;
-  Timer? _cooldownTimer;
-  bool _isCooldown = false;
-  Duration _remainingCooldown = Duration.zero;
   bool _isDemoMode = true;
   bool _isTrialActive = false;
   int _trialDaysRemaining = 0;
@@ -46,40 +44,143 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
   String _lastBackupDateText = 'Checking...';
 
   final TextEditingController _cmSearchController = TextEditingController();
+
   String _cmTimeFilter = 'All Time';
+
+  // Cached Metrics
+  int _totalCustomers = 0;
+  int _sentCount = 0;
+  int _pendingCount = 0;
+  double _progress = 0.0;
+  int _progressPercent = 0;
+  double _pendingCollectionAmount = 0.0;
+  int _pendingReceiptsCount = 0;
+  int _sentReceiptsCount = 0;
+  Map<String, _CmStat> _cmStatsMap = {};
+  int _totalAssignedAll = 0;
+  double _totalCollectedAll = 0.0;
+  double _totalBillAll = 0.0;
+  double _totalPendingAll = 0.0;
+  double _overallRecovery = 0.0;
+
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _initPreloadedData();
-    _startCooldownTimer();
     _checkLastBackupDate();
+    
+    _calculateMetrics();
+    widget.excelService.addListener(_calculateMetrics);
   }
 
   @override
   void dispose() {
-    _cooldownTimer?.cancel();
+    widget.excelService.removeListener(_calculateMetrics);
     _cmSearchController.dispose();
     _tabController.dispose();
     super.dispose();
   }
 
-  void _startCooldownTimer() {
-    _checkCooldown();
-    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => _checkCooldown());
-  }
+  void _calculateMetrics() {
+    List<Customer> currentCustomers = widget.excelService.allCustomers;
+    
+    int total = currentCustomers.length;
+    int sent = 0;
+    int pending = 0;
+    double pendingCollectionAmount = 0.0;
+    int pendingReceiptsCount = 0;
+    int sentReceiptsCount = 0;
+    Map<String, _CmStat> statsMap = {};
 
-  Future<void> _checkCooldown() async {
-    bool active = await CooldownService().isCooldownActive();
-    Duration remaining = await CooldownService().getRemainingCooldown();
-    if (mounted && (_isCooldown != active || _remainingCooldown.inSeconds != remaining.inSeconds)) {
+    for (var c in currentCustomers) {
+      String st = c.status.trim().toLowerCase();
+      if (st == 'sent' || st == 'message sent') {
+        sent++;
+      } else if (st == 'pending' || st == 'processing' || st == 'waiting') {
+        pending++;
+      }
+
+      double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
+      double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
+      String rst = c.receiptStatus.trim().toLowerCase();
+      bool isPaid = c.isPaid;
+
+      if (paid < bill && !isPaid) {
+        pendingCollectionAmount += (bill - paid).clamp(0.0, double.infinity);
+      }
+      if (isPaid && (rst != 'sent' && rst != 'message sent')) {
+        pendingReceiptsCount++;
+      } else if (isPaid && (rst == 'sent' || rst == 'message sent')) {
+        sentReceiptsCount++;
+      }
+
+      // CM grouping
+      String name = c.cmName.trim();
+      String code = c.cmCode.trim();
+      if (name.isEmpty && code.isEmpty) {
+        name = 'Unassigned Route';
+      } else if (name.isEmpty) {
+        name = 'Route Code: $code';
+      }
+      String key = name.toLowerCase();
+
+      final stat = statsMap.putIfAbsent(key, () => _CmStat(cmCode: code, cmName: name));
+      stat.assignedCount++;
+
+      if (paid == 0.0 && isPaid && bill > 0.0) {
+        paid = bill;
+      }
+
+      bool includeInMoneyStats = true;
+      if (_cmTimeFilter == 'Pending Only' && (isPaid && paid >= bill)) {
+        includeInMoneyStats = false;
+      } else if (_cmTimeFilter == 'This Month') {
+        final now = DateTime.now();
+        String monthPrefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+        if (!c.paymentDate.contains(monthPrefix) && !c.vouchDate.contains(monthPrefix)) {
+          includeInMoneyStats = false;
+        }
+      }
+
+      if (includeInMoneyStats) {
+        stat.totalBill += bill;
+        stat.collected += paid;
+        stat.pending += (bill - paid).clamp(0.0, double.infinity);
+      }
+    }
+
+    double progress = total > 0 ? (sent / total) : 0.0;
+    
+    int tAssigned = statsMap.values.fold(0, (sum, item) => sum + item.assignedCount);
+    double tCollected = statsMap.values.fold(0.0, (sum, item) => sum + item.collected);
+    double tBill = statsMap.values.fold(0.0, (sum, item) => sum + item.totalBill);
+    double tPending = statsMap.values.fold(0.0, (sum, item) => sum + item.pending);
+    double overallRec = tBill > 0 ? ((tCollected / tBill) * 100).clamp(0.0, 100.0) : 0.0;
+
+    if (mounted) {
       setState(() {
-        _isCooldown = active;
-        _remainingCooldown = remaining;
+        _totalCustomers = total;
+        _sentCount = sent;
+        _pendingCount = pending;
+        _pendingCollectionAmount = pendingCollectionAmount;
+        _pendingReceiptsCount = pendingReceiptsCount;
+        _sentReceiptsCount = sentReceiptsCount;
+        _progress = progress;
+        _progressPercent = (progress * 100).toInt();
+        
+        _cmStatsMap = statsMap;
+        _totalAssignedAll = tAssigned;
+        _totalCollectedAll = tCollected;
+        _totalBillAll = tBill;
+        _totalPendingAll = tPending;
+        _overallRecovery = overallRec;
       });
     }
   }
+
+
 
   Future<void> _initPreloadedData() async {
     String? lastName = await widget.settingsService.getLastExcelFileName();
@@ -174,12 +275,8 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           ],
         ),
       ),
-      body: ListenableBuilder(
-        listenable: widget.excelService,
-        builder: (context, _) {
-          List<Customer> currentCustomers = widget.excelService.allCustomers;
-          if (currentCustomers.isEmpty) {
-            return Center(
+      body: widget.excelService.allCustomers.isEmpty
+          ? Center(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
                 child: Column(
@@ -206,56 +303,19 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                   ],
                 ),
               ),
-            );
-          }
-
-          int total = currentCustomers.length;
-          int sent = currentCustomers.where((c) {
-            String st = c.status.trim().toLowerCase();
-            return st == 'sent' || st == 'message sent';
-          }).length;
-          int pending = currentCustomers.where((c) {
-            String st = c.status.trim().toLowerCase();
-            return st == 'pending' || st == 'processing' || st == 'waiting';
-          }).length;
-
-          double progress = total > 0 ? (sent / total) : 0.0;
-          int progressPercent = (progress * 100).toInt();
-
-          return TabBarView(
-            controller: _tabController,
-            children: [
-              _buildMainDashboardTab(currentCustomers, total, sent, pending, progress, progressPercent),
-              _buildCollectionManDashboardTab(currentCustomers),
-            ],
-          );
-        },
-      ),
+            )
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildMainDashboardTab(),
+                _buildCollectionManDashboardTab(),
+              ],
+            ),
     );
   }
 
   // ── Tab 1: Main Overview Dashboard ──
-  Widget _buildMainDashboardTab(List<Customer> currentCustomers, int total, int sent, int pending, double progress, int progressPercent) {
-    double pendingCollectionAmount = 0.0;
-    int pendingReceiptsCount = 0;
-    int sentReceiptsCount = 0;
-
-    for (var c in currentCustomers) {
-      double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
-      double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
-      String rst = c.receiptStatus.trim().toLowerCase();
-      bool isPaid = c.isPaid;
-
-      if (paid < bill && !isPaid) {
-        pendingCollectionAmount += (bill - paid).clamp(0.0, double.infinity);
-      }
-      if (isPaid && (rst != 'sent' && rst != 'message sent')) {
-        pendingReceiptsCount++;
-      } else if (isPaid && (rst == 'sent' || rst == 'message sent')) {
-        sentReceiptsCount++;
-      }
-    }
-
+  Widget _buildMainDashboardTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -367,21 +427,21 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Overall Progress', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
-                      Text('$progressPercent%', style: const TextStyle(color: Color(0xFF00E676), fontSize: 16, fontWeight: FontWeight.bold)),
+                      Text('$_progressPercent%', style: const TextStyle(color: Color(0xFF00E676), fontSize: 16, fontWeight: FontWeight.bold)),
                     ],
                   ),
                   const SizedBox(height: 12),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
-                      value: progress,
+                      value: _progress,
                       minHeight: 8,
                       backgroundColor: Colors.grey.withValues(alpha: 0.2),
                       valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00E676)),
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Text('$sent of $total customers completed', style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  Text('$_sentCount of $_totalCustomers customers completed', style: const TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
             ),
@@ -391,17 +451,17 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           // Main Stats Grid
           Row(
             children: [
-              Expanded(child: _buildStatCard('Total Customers', total.toString(), Icons.people, Colors.blue, onTap: () => widget.onNavigateToCustomers('All'))),
+              Expanded(child: _buildStatCard('Total Customers', _totalCustomers.toString(), Icons.people, Colors.blue, onTap: () => widget.onNavigateToCustomers('All'))),
               const SizedBox(width: 10),
-              Expanded(child: _buildStatCard('Pending Bills', pending.toString(), Icons.access_time, Colors.orange, onTap: () => widget.onNavigateToQueue('Pending Bills'))),
+              Expanded(child: _buildStatCard('Pending Bills', _pendingCount.toString(), Icons.access_time, Colors.orange, onTap: () => widget.onNavigateToQueue('Pending Bills'))),
             ],
           ),
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _buildStatCard('Pending Receipts', pendingReceiptsCount.toString(), Icons.receipt, Colors.purple, onTap: () => widget.onNavigateToReceipts('Pending'))),
+              Expanded(child: _buildStatCard('Pending Receipts', _pendingReceiptsCount.toString(), Icons.receipt, Colors.purple, onTap: () => widget.onNavigateToReceipts('Pending'))),
               const SizedBox(width: 10),
-              Expanded(child: _buildStatCard('Sent Receipts', sentReceiptsCount.toString(), Icons.check_circle, const Color(0xFF00E676), onTap: () => widget.onNavigateToReceipts('Sent'))),
+              Expanded(child: _buildStatCard('Sent Receipts', _sentReceiptsCount.toString(), Icons.check_circle, const Color(0xFF00E676), onTap: () => widget.onNavigateToReceipts('Sent'))),
             ],
           ),
           const SizedBox(height: 18),
@@ -414,11 +474,11 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
               padding: const EdgeInsets.all(14),
               child: Column(
                 children: [
-                  _buildOperationalRow(Icons.account_balance_wallet_outlined, 'Pending Collection Amount', '₹${pendingCollectionAmount.toStringAsFixed(0)}', Colors.orangeAccent),
+                  _buildOperationalRow(Icons.account_balance_wallet_outlined, 'Pending Collection Amount', '₹${_pendingCollectionAmount.toStringAsFixed(0)}', Colors.orangeAccent),
                   const Divider(color: Colors.white12, height: 20),
-                  _buildOperationalRow(Icons.description_outlined, 'Bills Sent Today', '$sent bills dispatched', Colors.blueAccent),
+                  _buildOperationalRow(Icons.description_outlined, 'Bills Sent Today', '$_sentCount bills dispatched', Colors.blueAccent),
                   const Divider(color: Colors.white12, height: 20),
-                  _buildOperationalRow(Icons.receipt_long_outlined, 'Receipts Sent Today', '$sentReceiptsCount receipts delivered', const Color(0xFF00E676)),
+                  _buildOperationalRow(Icons.receipt_long_outlined, 'Receipts Sent Today', '$_sentReceiptsCount receipts delivered', const Color(0xFF00E676)),
                   const Divider(color: Colors.white12, height: 20),
                   _buildOperationalRow(Icons.backup_outlined, 'Last Backup Snapshot', _lastBackupDateText, Colors.purpleAccent),
                   if (_isTrialActive) ...[
@@ -437,20 +497,22 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           Row(
             children: [
               Expanded(
-                child: _buildQuickAction(
-                  _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Bills',
-                  _isCooldown ? Icons.timer : Icons.send_rounded,
-                  _isCooldown ? Colors.orange : const Color(0xFF00E676),
-                  _isCooldown ? () => _showCooldownDialog(context) : () => widget.onNavigateToQueue('Pending Bills'),
+                child: CooldownButton(
+                  label: 'Send Bills',
+                  iconData: Icons.send_rounded,
+                  baseColor: const Color(0xFF00E676),
+                  onCooldownAction: () => _showCooldownDialog(context),
+                  onNormalAction: () => widget.onNavigateToQueue('Pending Bills'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _buildQuickAction(
-                  _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Send Receipts',
-                  _isCooldown ? Icons.timer : Icons.receipt_long,
-                  _isCooldown ? Colors.orange : Colors.blue,
-                  _isCooldown ? () => _showCooldownDialog(context) : () => widget.onNavigateToReceipts('Pending'),
+                child: CooldownButton(
+                  label: 'Send Receipts',
+                  iconData: Icons.receipt_long,
+                  baseColor: Colors.blue,
+                  onCooldownAction: () => _showCooldownDialog(context),
+                  onNormalAction: () => widget.onNavigateToReceipts('Pending'),
                 ),
               ),
             ],
@@ -459,11 +521,12 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           Row(
             children: [
               Expanded(
-                child: _buildQuickAction(
-                  _isCooldown ? 'Cooldown (${CooldownService.formatDuration(_remainingCooldown)})' : 'Payment Reminders (યાદી)',
-                  _isCooldown ? Icons.timer : Icons.notifications_active,
-                  _isCooldown ? Colors.orange : const Color(0xFF00E676),
-                  _isCooldown ? () => _showCooldownDialog(context) : () => RemindersModal.show(context, widget.excelService, widget.settingsService),
+                child: CooldownButton(
+                  label: 'Payment Reminders (યાદી)',
+                  iconData: Icons.notifications_active,
+                  baseColor: const Color(0xFF00E676),
+                  onCooldownAction: () => _showCooldownDialog(context),
+                  onNormalAction: () => RemindersModal.show(context, widget.excelService, widget.settingsService),
                 ),
               ),
             ],
@@ -475,59 +538,14 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
   }
 
   // ── Tab 2: Dedicated Collection Man Dashboard (Item 3) ──
-  Widget _buildCollectionManDashboardTab(List<Customer> currentCustomers) {
-    final Map<String, _CmStat> statsMap = {};
-    for (var c in currentCustomers) {
-      String name = c.cmName.trim();
-      String code = c.cmCode.trim();
-      if (name.isEmpty && code.isEmpty) {
-        name = 'Unassigned Route';
-      } else if (name.isEmpty) {
-        name = 'Route Code: $code';
-      }
-      String key = name.toLowerCase();
-
-      final stat = statsMap.putIfAbsent(key, () => _CmStat(cmCode: code, cmName: name));
-      stat.assignedCount++;
-
-      double bill = double.tryParse(c.billAmount.replaceAll(',', '').trim()) ?? 0.0;
-      double paid = double.tryParse(c.amountPaid.replaceAll(',', '').trim()) ?? 0.0;
-      bool isPaid = c.isPaid;
-      if (paid == 0.0 && isPaid && bill > 0.0) {
-        paid = bill;
-      }
-
-      bool includeInMoneyStats = true;
-      if (_cmTimeFilter == 'Pending Only' && (isPaid && paid >= bill)) {
-        includeInMoneyStats = false;
-      } else if (_cmTimeFilter == 'This Month') {
-        final now = DateTime.now();
-        String monthPrefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
-        if (!c.paymentDate.contains(monthPrefix) && !c.vouchDate.contains(monthPrefix)) {
-          includeInMoneyStats = false;
-        }
-      }
-
-      if (includeInMoneyStats) {
-        stat.totalBill += bill;
-        stat.collected += paid;
-        stat.pending += (bill - paid).clamp(0.0, double.infinity);
-      }
-    }
-
+  Widget _buildCollectionManDashboardTab() {
     String query = _cmSearchController.text.trim().toLowerCase();
-    List<_CmStat> filteredStats = statsMap.values.where((s) {
+    List<_CmStat> filteredStats = _cmStatsMap.values.where((s) {
       if (query.isEmpty) return true;
       return s.cmName.toLowerCase().contains(query) || s.cmCode.toLowerCase().contains(query);
     }).toList();
 
     filteredStats.sort((a, b) => b.collected.compareTo(a.collected));
-
-    int totalAssignedAll = statsMap.values.fold(0, (sum, item) => sum + item.assignedCount);
-    double totalCollectedAll = statsMap.values.fold(0.0, (sum, item) => sum + item.collected);
-    double totalBillAll = statsMap.values.fold(0.0, (sum, item) => sum + item.totalBill);
-    double totalPendingAll = statsMap.values.fold(0.0, (sum, item) => sum + item.pending);
-    double overallRecovery = totalBillAll > 0 ? ((totalCollectedAll / totalBillAll) * 100).clamp(0.0, 100.0) : 0.0;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -537,22 +555,23 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           // Top Summary Cards specific to Collection Men
           Row(
             children: [
-              Expanded(child: _buildStatCard('Total Collection Men', statsMap.length.toString(), Icons.support_agent, const Color(0xFF00E676))),
+              Expanded(child: _buildStatCard('Total Collection Men', _cmStatsMap.length.toString(), Icons.support_agent, const Color(0xFF00E676))),
               const SizedBox(width: 10),
-              Expanded(child: _buildStatCard('Customers Assigned', totalAssignedAll.toString(), Icons.group_work, Colors.blue)),
+              Expanded(child: _buildStatCard('Customers Assigned', _totalAssignedAll.toString(), Icons.group_work, Colors.blue)),
             ],
           ),
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _buildStatCard('Pending Amount', '₹${totalPendingAll.toStringAsFixed(0)}', Icons.pending_actions, Colors.orange)),
+              Expanded(child: _buildStatCard('Pending Amount', '₹${_totalPendingAll.toStringAsFixed(0)}', Icons.pending_actions, Colors.orange)),
               const SizedBox(width: 10),
-              Expanded(child: _buildStatCard('Collected Amount', '₹${totalCollectedAll.toStringAsFixed(0)}', Icons.payments, Colors.purple)),
+              Expanded(child: _buildStatCard('Collected Amount', '₹${_totalCollectedAll.toStringAsFixed(0)}', Icons.payments, Colors.purple)),
             ],
           ),
           const SizedBox(height: 10),
-          _buildStatCard('Overall Recovery Progress', '${overallRecovery.toStringAsFixed(1)}%', Icons.trending_up, const Color(0xFF00E676)),
+          _buildStatCard('Overall Recovery Progress', '${_overallRecovery.toStringAsFixed(1)}%', Icons.trending_up, const Color(0xFF00E676)),
           const SizedBox(height: 18),
+
 
           // Search & Filter Bar
           Row(
@@ -598,7 +617,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                     }).toList(),
                     onChanged: (val) {
                       if (val != null && val != _cmTimeFilter) {
-                        setState(() => _cmTimeFilter = val);
+                        setState(() { _cmTimeFilter = val; _calculateMetrics(); });
                       }
                     },
                   ),
@@ -727,7 +746,10 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
     );
   }
 
-  void _showCooldownDialog(BuildContext context) {
+  Future<void> _showCooldownDialog(BuildContext context) async {
+    Duration remaining = await CooldownService().getRemainingCooldown();
+    if (!context.mounted) return;
+    
     showDialog(
       context: context,
       builder: (c) => AlertDialog(
@@ -740,7 +762,9 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           ],
         ),
         content: Text(
-          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(_remainingCooldown)}',
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.
+
+Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -753,34 +777,8 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
     );
   }
 
-  Widget _buildQuickAction(String title, IconData icon, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: color, size: 24),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
+  
   Widget _buildStatCard(String title, String value, IconData icon, Color iconColor, {VoidCallback? onTap}) {
     return GestureDetector(
       onTap: onTap,

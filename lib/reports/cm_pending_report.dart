@@ -13,12 +13,17 @@ class CmPendingReport {
     // 1. Filter Data
     // Current Month Only (implied by loaded Excel), cmName match, !isPaid, billAmount > 0
     List<Customer> pendingCustomers = [];
+    String targetCmName = cmName.trim().toUpperCase();
+    bool isAllCm = targetCmName.isEmpty;
+    
     for (var c in excelService.allCustomers) {
-      bool cmMatch = cmName.trim().isEmpty || c.cmName.trim().toUpperCase() == cmName.trim().toUpperCase();
-      if (cmMatch && !c.isPaid) {
-        double amt = double.tryParse(c.billAmount) ?? 0;
-        if (amt > 0) {
-          pendingCustomers.add(c);
+      if (!c.isPaid) {
+        bool cmMatch = isAllCm || c.cmName.trim().toUpperCase() == targetCmName;
+        if (cmMatch) {
+          double amt = double.tryParse(c.billAmount) ?? 0;
+          if (amt > 0) {
+            pendingCustomers.add(c);
+          }
         }
       }
     }

@@ -86,5 +86,12 @@ service cloud.firestore {
     match /idempotency_keys/{keyId} {
       allow read, write: if false; // Strictly Worker access only
     }
+    
+    // -------------------------------------------------------------------------
+    // 9. ADMIN_USERS: Complete Client Lockout (RBAC Allow-List)
+    // -------------------------------------------------------------------------
+    match /admin_users/{userId} {
+      allow read, write: if false; // Only Cloudflare Workers (Service Account) can read/write this
+    }
   }
 }

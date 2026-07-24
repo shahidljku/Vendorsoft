@@ -41,14 +41,47 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   Future<void> _finishOnboarding() async {
     final businessName = _businessNameCtrl.text.trim();
     final ownerName = _ownerNameCtrl.text.trim();
-    final mobileNumber = _mobileNumberCtrl.text.trim();
+    final rawMobile = _mobileNumberCtrl.text.trim();
+    final mobileNumber = rawMobile.replaceAll(RegExp(r'[^0-9]'), '');
 
-    if (businessName.isEmpty || ownerName.isEmpty || mobileNumber.isEmpty) {
+    if (businessName.isEmpty || ownerName.isEmpty || rawMobile.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill all registration fields'), backgroundColor: Colors.redAccent)
       );
       return;
     }
+
+    if (mobileNumber.length != 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid 10-digit mobile number'), backgroundColor: Colors.redAccent)
+      );
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Verify Mobile Number', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Please confirm your 10-digit mobile number is correct before registering:\n\n$mobileNumber',
+          style: const TextStyle(color: Colors.white70, fontSize: 16),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Edit', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm & Register'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
 
     setState(() => _isRegistering = true);
 
@@ -269,7 +302,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
-          _buildHighlightRow(Icons.offline_bolt_outlined, '100% Offline Capability', 'Your database lives on your device. No cloud logins or external internet required.'),
+          _buildHighlightRow(Icons.storage_outlined, 'Local Database Storage', 'Your database lives securely on your device. No cloud accounts are required to store your customer lists.'),
           _buildHighlightRow(Icons.chat_bubble_outline, 'Automated Bill Dispatch', 'Send monthly bills directly through WhatsApp or WhatsApp Business in safety batches.'),
           _buildHighlightRow(Icons.print_outlined, 'Instant Thermal Receipts', 'Print professional 58mm/80mm Bluetooth receipts along your morning routes.'),
         ],

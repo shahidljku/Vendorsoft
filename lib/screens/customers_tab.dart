@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/customer.dart';
 import '../models/payment_status_helper.dart';
 import '../services/excel_service.dart';
@@ -34,16 +36,32 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isAccessibilityEnabled = false;
 
+  Timer? _debounce;
+  
+  // Caches
+  List<Customer> _cachedFilteredCustomers = [];
+  int _allCount = 0;
+  int _pendingBillsCount = 0;
+  int _failedBillsCount = 0;
+  int _sentBillsCount = 0;
+  int _unpaidCount = 0;
+  int _receiptPendingCount = 0;
+  List<String> _cmNames = ['All'];
+
   @override
   void initState() {
     super.initState();
     _statusFilter = widget.initialFilter ?? 'All';
     WidgetsBinding.instance.addObserver(this);
     _checkAccessibility();
+    _calculateData();
+    widget.excelService.addListener(_calculateData);
   }
 
   @override
   void dispose() {
+    widget.excelService.removeListener(_calculateData);
+    _debounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _searchCtrl.dispose();
     super.dispose();
@@ -70,24 +88,50 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     super.didUpdateWidget(oldWidget);
     if (widget.navKey != oldWidget.navKey) {
       if (widget.initialFilter != null) {
-        setState(() {
-          _statusFilter = widget.initialFilter!;
-        });
+        _statusFilter = widget.initialFilter!;
+        _calculateData();
       }
     }
   }
 
-  List<Customer> get filteredCustomers {
-    List<Customer> result = widget.excelService.allCustomers;
+  void _calculateData() {
+    List<Customer> allCustomers = widget.excelService.allCustomers;
+    
+    // Tab Counts
+    int pending = 0;
+    int failed = 0;
+    int sent = 0;
+    int unpaid = 0;
+    int receiptPending = 0;
+    
+    Set<String> cmSet = {'All'};
+
+    for (var c in allCustomers) {
+      String st = c.status.trim().toLowerCase();
+      String pst = c.paymentStatus.trim().toLowerCase();
+      String rst = c.receiptStatus.trim().toLowerCase();
+      
+      if (st == 'pending' || st == 'waiting' || st == 'processing') pending++;
+      if (st == 'failed') failed++;
+      if (st == 'sent' || st == 'message sent') sent++;
+      if (pst != 'successful' && !pst.contains('success') && pst != 'paid') unpaid++;
+      if ((pst == 'successful' || pst.contains('success') || pst == 'paid') && rst != 'sent') receiptPending++;
+      
+      if (c.cmName.isNotEmpty) cmSet.add(c.cmName);
+    }
+    
+    // Now filter list
+    List<Customer> result = allCustomers;
     if (_statusFilter != 'All') {
       result = result.where((c) {
         String st = c.status.trim().toLowerCase();
+        String pst = c.paymentStatus.trim().toLowerCase();
         String rst = c.receiptStatus.trim().toLowerCase();
         if (_statusFilter == 'Pending Bills') return st == 'pending' || st == 'waiting' || st == 'processing';
         if (_statusFilter == 'Sent Bills') return st == 'sent' || st == 'message sent';
         if (_statusFilter == 'Failed Bills') return st == 'failed';
-        if (_statusFilter == 'Unpaid Bills') return !c.isPaid;
-        if (_statusFilter == 'Receipts Pending') return c.isPaid && rst != 'sent';
+        if (_statusFilter == 'Unpaid Bills') return pst != 'successful' && !pst.contains('success') && pst != 'paid';
+        if (_statusFilter == 'Receipts Pending') return (pst == 'successful' || pst.contains('success') || pst == 'paid') && rst != 'sent';
         return true;
       }).toList();
     }
@@ -96,26 +140,45 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
     }
     if (_searchQuery.isNotEmpty) {
       String q = _searchQuery.toLowerCase().trim();
-      if (q == 'unpaid') {
-        result = result.where((c) => !c.isPaid).toList();
-      } else if (q == 'failed') {
-        result = result.where((c) => c.status.trim().toLowerCase() == 'failed').toList();
-      } else if (q == 'pending') {
-        result = result.where((c) {
-          String st = c.status.trim().toLowerCase();
-          return st == 'pending' || st == 'waiting' || st == 'processing';
-        }).toList();
-      } else if (q == 'sent') {
-        result = result.where((c) {
-          String st = c.status.trim().toLowerCase();
-          String rst = c.receiptStatus.trim().toLowerCase();
-          return st == 'sent' || st == 'message sent' || rst == 'sent';
-        }).toList();
-      } else {
-        result = result.where((c) => c.custName.toLowerCase().contains(q) || c.mobile.contains(q) || c.billNo.toLowerCase().contains(q)).toList();
-      }
+      result = result.where((c) => c.billNo.toLowerCase().contains(q) || c.custName.toLowerCase().contains(q) || c.mobile.contains(q)).toList();
     }
-    return result;
+    
+    if (mounted) {
+      setState(() {
+        _allCount = allCustomers.length;
+        _pendingBillsCount = pending;
+        _failedBillsCount = failed;
+        _sentBillsCount = sent;
+        _unpaidCount = unpaid;
+        _receiptPendingCount = receiptPending;
+        _cmNames = cmSet.toList();
+        
+        if (!_cmNames.contains(_collectionManFilter)) {
+          _collectionManFilter = 'All';
+        }
+        
+        _cachedFilteredCustomers = result;
+      });
+    }
+  }
+
+  void _onSearchChanged(String val) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    if (val.isEmpty) {
+      _searchQuery = '';
+      _calculateData();
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      _searchQuery = val;
+      _calculateData();
+    });
+  }
+
+  void _onSearchSubmitted(String val) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _searchQuery = val;
+    _calculateData();
   }
 
   @override
@@ -141,11 +204,12 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                 autofocus: true,
                 style: const TextStyle(color: Colors.white),
                 decoration: const InputDecoration(
-                  hintText: 'Search Name/Mobile/Bill No...',
+                  hintText: 'Search Name, Bill No, Mobile...',
                   hintStyle: TextStyle(color: Colors.white54),
                   border: InputBorder.none,
                 ),
-                onChanged: (val) => setState(() => _searchQuery = val),
+                onChanged: _onSearchChanged,
+                onSubmitted: _onSearchSubmitted,
               )
             : const Text('Customers', style: TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: false,
@@ -153,11 +217,13 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           IconButton(
             icon: Icon(_isSearching ? Icons.close : Icons.search),
             onPressed: () {
+              if (_debounce?.isActive ?? false) _debounce!.cancel();
               setState(() {
                 _isSearching = !_isSearching;
                 if (!_isSearching) {
                   _searchCtrl.clear();
                   _searchQuery = '';
+                  _calculateData();
                 }
               });
             },
@@ -181,33 +247,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           ),
         ],
       ),
-      body: ListenableBuilder(
-        listenable: widget.excelService,
-        builder: (context, _) {
-          List<Customer> customers = filteredCustomers;
-          int allCount = widget.excelService.allCustomers.length;
-          int pendingBillsCount = widget.excelService.allCustomers.where((c) => c.status.toLowerCase() == 'pending' || c.status == 'Waiting').length;
-          int failedBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Failed').length;
-          int sentBillsCount = widget.excelService.allCustomers.where((c) => c.status == 'Sent' || c.status == 'Message Sent').length;
-          int unpaidCount = widget.excelService.allCustomers.where((c) => !c.isPaid).length;
-          int receiptPendingCount = widget.excelService.allCustomers.where((c) {
-            String rst = c.receiptStatus.trim().toLowerCase();
-            return c.isPaid && (rst != 'sent' && rst != 'message sent');
-          }).length;
-
-          // Compute unique collection men
-          Set<String> cmNames = {'All'};
-          for (var c in widget.excelService.allCustomers) {
-            if (c.cmName.isNotEmpty) cmNames.add(c.cmName);
-          }
-          if (!cmNames.contains(_collectionManFilter)) {
-            // Delay resetting filter slightly to avoid build issues
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) setState(() => _collectionManFilter = 'All');
-            });
-          }
-
-          return Column(
+      body: Column(
             children: [
           // Filter Tabs
           SingleChildScrollView(
@@ -215,24 +255,24 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                _buildFilterTab('All', allCount, const Color(0xFF00E676)),
+                _buildFilterTab('All', _allCount, const Color(0xFF00E676)),
                 const SizedBox(width: 8),
-                _buildFilterTab('Unpaid Bills', unpaidCount, Colors.orange),
+                _buildFilterTab('Unpaid Bills', _unpaidCount, Colors.orange),
                 const SizedBox(width: 8),
-                _buildFilterTab('Receipts Pending', receiptPendingCount, Colors.blue),
+                _buildFilterTab('Receipts Pending', _receiptPendingCount, Colors.blue),
                 const SizedBox(width: 8),
-                _buildFilterTab('Pending Bills', pendingBillsCount, Colors.orangeAccent),
+                _buildFilterTab('Pending Bills', _pendingBillsCount, Colors.orangeAccent),
                 const SizedBox(width: 8),
-                _buildFilterTab('Sent Bills', sentBillsCount, Colors.green),
+                _buildFilterTab('Sent Bills', _sentBillsCount, Colors.green),
                 const SizedBox(width: 8),
-                _buildFilterTab('Failed Bills', failedBillsCount, Colors.red),
+                _buildFilterTab('Failed Bills', _failedBillsCount, Colors.red),
               ],
             ),
           ),
           const Divider(height: 1, color: Colors.white12),
 
           // Collection Man Dropdown
-          if (cmNames.length > 1)
+          if (_cmNames.length > 1)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(
@@ -245,7 +285,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                       isExpanded: true,
                       dropdownColor: Theme.of(context).cardColor,
                       underline: Container(),
-                      items: cmNames.map((name) {
+                      items: _cmNames.map((name) {
                         return DropdownMenuItem<String>(
                           value: name,
                           child: Text(name, style: const TextStyle(color: Colors.white)),
@@ -292,7 +332,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
           
           // Queue List
           Expanded(
-            child: customers.isEmpty
+            child: _cachedFilteredCustomers.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -305,16 +345,15 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: customers.length,
+                    itemCount: _cachedFilteredCustomers.length,
                     itemBuilder: (context, index) {
-                      Customer customer = customers[index];
+                      Customer customer = _cachedFilteredCustomers[index];
                       return _buildCustomerItem(context, customer, index + 1);
                     },
                   ),
           ),
         ],
-      );
-    }),
+      ),
     );
   }
 
@@ -324,6 +363,7 @@ class _CustomersTabState extends State<CustomersTab> with WidgetsBindingObserver
       onTap: () {
         setState(() {
           _statusFilter = label;
+          _calculateData();
         });
       },
       child: Column(

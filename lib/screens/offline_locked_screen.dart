@@ -38,23 +38,13 @@ class OfflineLockedScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               const Text(
-                'For security and billing purposes, this app must connect to the internet periodically to verify your subscription.',
+                '• Your subscription is still recognised.\n• Verification is temporarily required.\n• No customer data has been lost.\n• Reconnect to the internet and tap Retry.\n• Access will automatically resume after successful verification.',
                 style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 16,
-                  height: 1.5,
+                  color: Colors.white,
+                  fontSize: 15,
+                  height: 1.6,
                 ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              const Text(
-                'Please connect your device to the internet and retry.',
-                style: TextStyle(
-                  color: Colors.orangeAccent,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
+                textAlign: TextAlign.left,
               ),
               const SizedBox(height: 48),
               SizedBox(

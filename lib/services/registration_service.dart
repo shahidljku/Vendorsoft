@@ -5,7 +5,7 @@ import 'license_service.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'push_notification_service.dart';
-import 'package:device_info_plus/device_info_plus.dart';
+import 'dart:math';
 
 class TransferRequiredException implements Exception {
   final String message;
@@ -35,6 +35,9 @@ class RegistrationService {
     final token = user != null ? await user.getIdToken() : '';
     final hardwareId = await LicenseService().getDeviceId();
 
+    final nonce = List.generate(16, (_) => Random().nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+
     return {
       'Authorization': 'Bearer $token',
       'Content-Type': 'application/json',
@@ -42,6 +45,9 @@ class RegistrationService {
       'x-installation-uuid': hardwareId, // Fallback to hardwareId for simplicity
       'x-app-version': '1.0.0',
       'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
+      'x-registration-nonce': nonce,
+      'x-timestamp': timestamp,
+      'x-play-integrity-token': '', // Placeholder for future Google Play Integrity attestation
     };
   }
 
@@ -57,26 +63,12 @@ class RegistrationService {
       final url = Uri.parse('$baseUrl/customers/register');
       
       final fcmToken = PushNotificationService().fcmToken;
-      
-      String deviceModelName = kIsWeb ? 'web' : Platform.operatingSystem;
-      try {
-        if (!kIsWeb && Platform.isAndroid) {
-          final androidInfo = await DeviceInfoPlugin().androidInfo;
-          deviceModelName = '${androidInfo.manufacturer} ${androidInfo.model}'.trim();
-        } else if (!kIsWeb && Platform.isIOS) {
-          final iosInfo = await DeviceInfoPlugin().iosInfo;
-          deviceModelName = iosInfo.name;
-        }
-      } catch (e) {
-        print('Error getting device info: $e');
-      }
 
       final body = jsonEncode({
         'businessName': businessName ?? 'Unknown',
         'ownerName': ownerName ?? 'Unknown',
         'mobileNumber': mobileNumber,
         'city': city ?? 'Unknown',
-        'deviceModel': deviceModelName,
         'recoverOnly': recoverOnly,
         if (fcmToken != null) 'fcmToken': fcmToken,
       });
@@ -98,6 +90,8 @@ class RegistrationService {
           }
         }
         throw Exception('Invalid response format from server.');
+      } else if (response.statusCode == 409) {
+        throw TransferRequiredException('This device has already consumed its lifetime trial.');
       } else {
         try {
           final resJson = jsonDecode(response.body);

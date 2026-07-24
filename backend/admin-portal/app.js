@@ -1,56 +1,108 @@
 /**
- * VendSoft Control Plane — Admin Portal Client Logic (`app.js`)
- * Communicates with Cloudflare Workers `/api/v1/admin/*` endpoints.
+ * VendSoft Control Plane — Admin Portal Client Logic (app.js)
+ * Secured with Firebase Authentication.
  */
 
-let apiBaseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1';
-let adminSecret = ''; // Will be populated by prompt for production
-const authHeaders = {
-  'x-admin-secret': 'admin_secret_mock', // Default for local dev
-  'Content-Type': 'application/json'
+const apiBaseUrl = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1';
+
+const firebaseConfig = {
+  apiKey: 'AIzaSyBIdrUq8UoLidU4xBSLxaj_rN24lqTtKxg',
+  authDomain: 'vendorpro-491c4.firebaseapp.com',
+  projectId: 'vendorpro-491c4',
+  appId: '1:690486665138:web:0ccae1e54fedb8bac48eab'
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+
+async function getAuthHeaders() {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
+  const token = await user.getIdToken();
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  };
+}
+
+// Global fetch interceptor to enforce Zero Trust mid-session revocation
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  const response = await originalFetch(...args);
+  if (response.status === 401 || response.status === 403) {
+    const url = args[0] ? args[0].toString() : '';
+    if (url.includes(apiBaseUrl)) {
+      console.warn('Zero Trust Enforcement: Unauthorized API request detected. Revoking session.');
+      await auth.signOut();
+    }
+  }
+  return response;
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Prompt for production password on load
-  const requirePassword = () => {
-    if (apiBaseUrl.includes('vendsoft-api-worker.vendorproapk.workers.dev')) {
-      adminSecret = sessionStorage.getItem('vendsoft_admin_secret') || prompt('Enter Admin Password for Production:');
-      if (adminSecret) {
-        sessionStorage.setItem('vendsoft_admin_secret', adminSecret);
-        authHeaders['x-admin-secret'] = adminSecret;
-      }
-    } else {
-      authHeaders['x-admin-secret'] = 'admin_secret_mock';
-    }
-  };
-
-  // Sync API URL from dropdown
-  const urlSelect = document.getElementById('apiBaseUrl');
-  if (urlSelect) {
-    apiBaseUrl = urlSelect.value;
-    requirePassword();
-    
-    urlSelect.addEventListener('change', (e) => {
-      apiBaseUrl = e.target.value;
-      requirePassword();
-      document.getElementById('adminStatusText').textContent = apiBaseUrl.includes('127.0.0.1') ? 'Auth: Dev Mock (admin_secret_mock)' : 'Auth: Production Secret';
-      // Reload all data for the new target
-      loadCustomers();
-      loadPendingTransfers();
-      loadSystemConfigs();
-      loadAuditLogs();
-      loadPlans();
-    });
-  } else {
-    requirePassword();
-  }
   setupNavigation();
   setupEventListeners();
-  loadCustomers();
-  loadPendingTransfers();
-  loadSystemConfigs();
-  loadAuditLogs();
-  loadPlans();
+  
+  // Login / Auth Flow
+  const btnGoogleSignIn = document.getElementById('btnGoogleSignIn');
+  const btnLogout = document.getElementById('btnLogout');
+  const loginScreen = document.getElementById('loginScreen');
+  const mainDashboard = document.getElementById('mainDashboard');
+  const authPill = document.getElementById('authPill');
+  const adminStatusText = document.getElementById('adminStatusText');
+  const loginError = document.getElementById('loginError');
+
+  btnGoogleSignIn.addEventListener('click', async () => {
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await auth.signInWithPopup(provider);
+    } catch (err) {
+      loginError.textContent = err.message;
+      loginError.style.display = 'block';
+    }
+  });
+
+  btnLogout.addEventListener('click', async () => {
+    await auth.signOut();
+  });
+
+  auth.onAuthStateChanged(async (user) => {
+    if (user) {
+      // Zero Trust: Do NOT render UI yet. Verify with backend first.
+      adminStatusText.textContent = 'Verifying security clearance...';
+      try {
+        const verifyResp = await fetch(`${apiBaseUrl}/admin/auth/verify`, {
+          method: 'GET',
+          headers: await getAuthHeaders()
+        });
+        
+        if (!verifyResp.ok) {
+          throw new Error('Unauthorized by edge backend.');
+        }
+
+        loginScreen.classList.remove('active');
+        mainDashboard.style.display = 'flex';
+        authPill.style.display = 'flex';
+        adminStatusText.textContent = user.email;
+        
+        // Load initial data only after confirmation
+        loadCustomers();
+        loadPendingTransfers();
+        loadSystemConfigs();
+        loadAuditLogs();
+        loadPlans();
+      } catch (err) {
+        console.error('Zero Trust Verification Failed:', err);
+        await auth.signOut();
+        loginError.textContent = "Access denied. This Google account is not authorized.";
+        loginError.style.display = 'block';
+      }
+    } else {
+      loginScreen.classList.add('active');
+      mainDashboard.style.display = 'none';
+      authPill.style.display = 'none';
+    }
+  });
 });
 
 function setupNavigation() {
@@ -74,11 +126,7 @@ function setupNavigation() {
     });
   });
 
-  const apiSelect = document.getElementById('apiBaseUrl');
-  apiSelect.addEventListener('change', (e) => {
-    apiBaseUrl = e.target.value;
-    loadCustomers();
-  });
+  
 }
 
 function setupEventListeners() {
@@ -109,7 +157,7 @@ function setupEventListeners() {
     try {
       const resp = await fetch(`${apiBaseUrl}/admin/customers/${customerId}`, {
         method: 'PUT',
-        headers: authHeaders,
+        headers: await getAuthHeaders(),
         body: JSON.stringify(body)
       });
       const resJson = await resp.json();
@@ -206,11 +254,12 @@ function setupEventListeners() {
           formData.append('totalChunks', totalChunks.toString());
           formData.append('totalSize', file.size.toString());
 
+          const headers = await getAuthHeaders();
+          delete headers['Content-Type'];
+
           const response = await fetch(`${apiBaseUrl}/admin/upload-apk-chunk`, {
             method: 'POST',
-            headers: {
-              'x-admin-secret': authHeaders['x-admin-secret']
-            },
+            headers: headers,
             body: formData
           });
 
@@ -274,7 +323,7 @@ async function loadCustomers() {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/customers?query=${encodeURIComponent(query)}`, {
       method: 'GET',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -382,7 +431,7 @@ async function toggleCustomerStatus(customerId, newStatus) {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/customers/${customerId}`, {
       method: 'PUT',
-      headers: authHeaders,
+      headers: await getAuthHeaders(),
       body: JSON.stringify({ status: newStatus })
     });
     const resJson = await resp.json();
@@ -408,7 +457,7 @@ async function toggleDeviceBan(hardwareId, newStatus) {
     const endpoint = newStatus === 'BANNED' ? 'ban' : 'unban';
     const resp = await fetch(`${apiBaseUrl}/admin/devices/${hardwareId}/${endpoint}`, {
       method: 'PUT',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -434,7 +483,7 @@ async function loadPendingTransfers() {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/transfers/pending`, {
       method: 'GET',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -483,7 +532,7 @@ async function approveLostPhoneTransfer(transferId) {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/transfers/${transferId}/approve`, {
       method: 'POST',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -511,7 +560,7 @@ async function rejectLostPhoneTransfer(transferId) {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/transfers/${transferId}/reject`, {
       method: 'POST',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -572,7 +621,7 @@ async function saveSystemConfigs() {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/config/system`, {
       method: 'PUT',
-      headers: authHeaders,
+      headers: await getAuthHeaders(),
       body: JSON.stringify(body)
     });
     const resJson = await resp.json();
@@ -597,7 +646,7 @@ async function loadAuditLogs() {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/audit-logs`, {
       method: 'GET',
-      headers: authHeaders
+      headers: await getAuthHeaders()
     });
     const resJson = await resp.json();
 
@@ -690,7 +739,7 @@ async function savePlans(e) {
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/plans`, {
       method: 'POST',
-      headers: authHeaders,
+      headers: await getAuthHeaders(),
       body: JSON.stringify(payload)
     });
     const resJson = await resp.json();
@@ -767,7 +816,7 @@ document.getElementById('manageSubForm')?.addEventListener('submit', async (e) =
   try {
     const resp = await fetch(`${apiBaseUrl}/admin/customers/${customerId}/subscription`, {
       method: 'PUT',
-      headers: authHeaders,
+      headers: await getAuthHeaders(),
       body: JSON.stringify(payload)
     });
     const resJson = await resp.json();
