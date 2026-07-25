@@ -1,12 +1,7 @@
 import { Env, ApiResponse } from '../types';
 import { authenticateRequest, createErrorResponse } from '../authGuard';
-import { getDocument, setDocument, commitAtomicWrites, queryCollection, deleteDocument } from '../services/firestore';
-import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
-import { executeRefundSaga } from '../webhooks';
-import { LockService } from '../services/lock';
-import { findSubscription, DiscoveryStrategy } from '../services/discovery';
-import { PaymentFSM } from '../services/fsm/paymentFSM';
-import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
+import { getDocument } from '../services/firestore';
+import { PaymentService } from '../services/paymentService';
 
 /**
  * Handles POST /api/v1/orders/create
@@ -37,44 +32,7 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
     return createErrorResponse(400, 'MISSING_CUSTOMER_ID', 'Unable to determine customer ID. Please register first.');
   }
 
-  // 2. Check global system configurations (`system_configs/global`)
-  const sysConfig = await getDocument(env, 'system_configs', 'global');
-  if (sysConfig) {
-    if (sysConfig.maintenanceMode === true) {
-      return createErrorResponse(503, 'MAINTENANCE_MODE', sysConfig.maintenanceMessage || 'System maintenance in progress.');
-    }
-    if (sysConfig.allowPayments === false) {
-      return createErrorResponse(403, 'PAYMENTS_DISABLED', 'Online payments are currently disabled by system administrators.');
-    }
-  }
-
-  // 3. Verify installation is not banned or revoked
-  const instDoc = await getDocument(env, 'installations', installationId);
-  if (instDoc) {
-    if (instDoc.isBanned === true) {
-      return createErrorResponse(403, 'INSTALLATION_BANNED', 'This hardware installation has been banned.');
-    }
-    if (instDoc.status === 'REVOKED') {
-      return createErrorResponse(403, 'INSTALLATION_REVOKED', 'This installation has been revoked. Please request a device transfer.');
-    }
-  }
-
-  // Pillar 6: Payment Gateway Transfer Bypass Patch (Pay-to-Steal Exploit)
-  // We strictly block payment attempts from unauthorized devices if the subscription is currently ACTIVE.
-  // If the subscription is EXPIRED, we allow payment to support Pillar 1 (Expired Account Mobility).
-  const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-  const activeSub = subs.find((s: any) => s.status === 'ACTIVE' && s.expiresAtEpochMs > Date.now());
-  if (activeSub && activeSub.activeInstallationId && activeSub.activeInstallationId !== installationId) {
-    return createErrorResponse(403, 'TRANSFER_REQUIRED', 'You must transfer the active account to this device before you can purchase a subscription.');
-  }
-
-  const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-  const activeTrial = trials.find((t: any) => t.status !== 'CANCELLED' && t.expiresAtEpochMs > Date.now());
-  if (activeTrial && activeTrial.hardwareId !== installationId && activeTrial.hardwareId !== identity.hardwareId) {
-    return createErrorResponse(403, 'TRANSFER_REQUIRED', 'You must transfer your active trial to this device before you can purchase a subscription.');
-  }
-
-  // 4. Parse payload
+  // 2. Parse payload
   let body: { planId?: string };
   try {
     body = await request.json();
@@ -121,77 +79,41 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
   const amountInr = priceInr;
   const amountPaise = priceInr * 100;
   const now = Date.now();
-  let razorpayOrderId = `order_${generateShortId()}`;
-
-  // 6. Call Razorpay API (`POST https://api.razorpay.com/v1/orders`) if live credentials are configured
-  if (env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
-    try {
-      const authHeader = 'Basic ' + btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`);
-      const rzpResp = await fetch('https://api.razorpay.com/v1/orders', {
-        method: 'POST',
-        headers: {
-          'Authorization': authHeader,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          amount: amountPaise,
-          currency: 'INR',
-          receipt: `rcpt_${generateShortId()}`,
-          notes: {
-            customerId,
-            installationId,
-            planId
-          }
-        })
-      });
-
-      if (!rzpResp.ok) {
-        const errText = await rzpResp.text();
-        console.error('Razorpay order creation failed:', errText);
-        return createErrorResponse(502, 'RAZORPAY_GATEWAY_ERROR', `Payment gateway error (${rzpResp.status})`);
-      }
-
-      const rzpData: any = await rzpResp.json();
-      if (rzpData.id) {
-        razorpayOrderId = rzpData.id;
-      }
-    } catch (err) {
-      console.error('Razorpay API call exception:', err);
-      return createErrorResponse(502, 'RAZORPAY_CONNECTION_ERROR', 'Failed to connect to Razorpay payment gateway.');
-    }
-  }
-
-  // 7. Write order tracking record to `payments` collection
-  const paymentRecord = {
-    paymentId: razorpayOrderId,
-    razorpayOrderId,
-    installationId,
-    customerId,
-    planId,
-    planName,
-    durationDays,
-    amountInr,
-    status: PaymentFSM.transition({}, 'INITIATE'),
-    createdAtEpochMs: now
-  };
-
-  await setDocument(env, 'payments', razorpayOrderId, paymentRecord);
-
-  const responseBody: ApiResponse = {
-    success: true,
-    data: {
-      razorpayOrderId,
-      amountPaise,
-      keyId: env.RAZORPAY_KEY_ID || '',
+  // 4. Delegate to PaymentService to perform validations and order creation
+  try {
+    const { razorpayOrderId } = await PaymentService.initiateOrder(
+      env,
+      { ...identity, customerId, installationUuid: installationId } as any,
       planId,
-      amountInr
-    }
-  };
+      planName,
+      durationDays,
+      amountInr,
+      amountPaise,
+      now
+    );
 
-  return new Response(JSON.stringify(responseBody), {
-    status: 201,
-    headers: { 'Content-Type': 'application/json' }
-  });
+    const responseBody: ApiResponse = {
+      success: true,
+      data: {
+        razorpayOrderId,
+        amountPaise,
+        keyId: env.RAZORPAY_KEY_ID || '',
+        planId,
+        amountInr
+      }
+    };
+
+    return new Response(JSON.stringify(responseBody), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err: any) {
+    // Map domain errors to HTTP responses
+    const status = err.code === 'MAINTENANCE_MODE' ? 503 :
+                   (err.code === 'PAYMENTS_DISABLED' || err.code === 'INSTALLATION_BANNED' || err.code === 'INSTALLATION_REVOKED' || err.code === 'TRANSFER_REQUIRED') ? 403 :
+                   err.code === 'RAZORPAY_GATEWAY_ERROR' ? 502 : 400;
+    return createErrorResponse(status, err.code || 'UNKNOWN_ERROR', err.message);
+  }
 }
 
 /**
@@ -231,11 +153,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
 
   // 1. Handle explicit payment cancellation / error dismissal by user
   if (body.errorCode && body.errorCode === 'PAYMENT_CANCELLED') {
-    if (paymentDoc.status === 'INITIATED') {
-      paymentDoc.status = PaymentFSM.transition(paymentDoc, 'FAIL');
-      paymentDoc.updatedAtEpochMs = Date.now();
-      await setDocument(env, 'payments', orderId, paymentDoc);
-    }
+    await PaymentService.cancelOrder(env, paymentDoc);
     const resp: ApiResponse = { success: true, data: { status: 'FAILED', message: 'Payment marked as failed/cancelled.' } };
     return new Response(JSON.stringify(resp), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
@@ -246,207 +164,31 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
     return new Response(JSON.stringify(resp), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
-  // 3. Verify payment signature or check Razorpay directly if captured
-  const now = Date.now();
-  let isVerifiedSuccess = false;
-
-  if (typeof body.razorpayPaymentId === 'string' && typeof body.razorpaySignature === 'string' && env.RAZORPAY_WEBHOOK_SECRET) {
-    if (body.razorpayPaymentId.length > 100 || body.razorpaySignature.length > 256) {
-      return createErrorResponse(400, 'INVALID_PAYMENT_PAYLOAD', 'Payment ID or signature exceeds maximum allowed length.');
-    }
-    // Verify HMAC SHA-256 (`order_id + '|' + payment_id`)
-    const cryptoSecret = env.RAZORPAY_WEBHOOK_SECRET || 'vendsoft_authoritative_worker_secret_v1';
-    const msg = `${orderId}|${body.razorpayPaymentId}`;
-    const enc = new TextEncoder();
-    const key = await crypto.subtle.importKey('raw', enc.encode(cryptoSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const signatureBytes = await crypto.subtle.sign('HMAC', key, enc.encode(msg));
-    const hexSignature = Array.from(new Uint8Array(signatureBytes)).map((b) => b.toString(16).padStart(2, '0')).join('');
-    if (hexSignature === body.razorpaySignature) {
-      isVerifiedSuccess = true;
-    }
-  } else if (!env.FIRESTORE_SA_KEY && body.razorpayPaymentId) {
-    // Local dev simulation (`wrangler dev`) when Service Account is not injected
-    isVerifiedSuccess = true;
-  }
-
-  if (!isVerifiedSuccess && env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET) {
-    // Check Razorpay REST API directly
-    try {
-      const authHeader = 'Basic ' + btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`);
-      const rzpResp = await fetch(`https://api.razorpay.com/v1/orders/${orderId}/payments`, {
-        method: 'GET',
-        headers: { 'Authorization': authHeader }
-      });
-      if (rzpResp.ok) {
-        const rzpData: any = await rzpResp.json();
-        const items = rzpData.items || [];
-        for (const item of items) {
-          if (item.status === 'captured') {
-            isVerifiedSuccess = true;
-            body.razorpayPaymentId = item.id;
-            break;
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Razorpay fallback verification check error:', err);
-    }
-  }
-
-  if (!isVerifiedSuccess) {
-    return createErrorResponse(400, 'PAYMENT_NOT_CAPTURED', 'Payment verification failed or payment not captured yet.');
-  }
-
-  // 4. Deterministic Subscription Discovery
-  const customerId = paymentDoc.customerId;
-  const installationId = paymentDoc.installationId;
-  const durationDays = typeof paymentDoc.durationDays === 'number' ? paymentDoc.durationDays : 365;
-  const planId = paymentDoc.planId || 'PRO_YEARLY';
-  const planName = paymentDoc.planName || 'Pro Annual License';
-
-  const { subscriptionId: foundId } = await findSubscription(env, customerId, DiscoveryStrategy.PAYMENT);
-  let subscriptionId = foundId;
-
-  if (!subscriptionId) {
-    subscriptionId = `sub_${generateShortId()}`;
-  }
-
-  let finalSubscriptionId = subscriptionId;
-  let requireRefund = false;
-  let successResp: ApiResponse | null = null;
-
+  // 3. Delegate to PaymentService to Verify
   try {
-    await LockService.withLock(
-      env,
-      'sub_lock',
-      subscriptionId,
-      30000,
-      { customerId, subscriptionId },
-      async () => {
-        // 6. Authoritative Read
-        let subDoc = null;
-        if (subscriptionId.startsWith('TRIAL_')) {
-          const hardwareId = subscriptionId.replace('TRIAL_', '');
-          const trial = await getDocument(env, 'hardware_trials', hardwareId);
-          if (trial) {
-            subDoc = {
-              subscriptionId,
-              customerId: trial.customerId,
-              activeInstallationId: trial.hardwareId,
-              planId: 'FREE_TRIAL_30',
-              status: trial.expiresAtEpochMs > now ? 'ACTIVE' : 'EXPIRED',
-              expiresAtEpochMs: trial.expiresAtEpochMs,
-              startsAtEpochMs: trial.startsAtEpochMs
-            };
-          }
-        } else {
-          subDoc = await getDocument(env, 'subscriptions', subscriptionId);
-        }
+    const verifiedPayment = await PaymentService.verifyOrder(env, orderId, body.razorpayPaymentId, body.razorpaySignature);
 
-        // 7. Validate (Order Lifecycle Saga)
-        if (subDoc && subDoc.status === 'ACTIVE' && subDoc.expiresAtEpochMs > now) {
-          if (subDoc.activeInstallationId && subDoc.activeInstallationId !== installationId) {
-            // Ownership conflict!
-            requireRefund = true;
-          }
-        }
+    // 4. Delegate to PaymentService to Settle
+    const settlementResult = await PaymentService.settleOrder(env, verifiedPayment, paymentDoc);
 
-        if (requireRefund) {
-          // FSM: CREATED -> REFUND_PENDING
-          await setDocument(env, 'payments', orderId, {
-            ...paymentDoc,
-            status: PaymentFSM.transition(paymentDoc, 'REQUEST_REFUND'),
-            updatedAtEpochMs: Date.now()
-          });
-        } else {
-          // Normal Settlement (FSM: CREATED -> SUCCESS)
-          let currentExpiresAt = subDoc && typeof subDoc.expiresAtEpochMs === 'number' ? subDoc.expiresAtEpochMs : now;
-          const baseTime = currentExpiresAt > now ? currentExpiresAt : now;
-          const newExpiresAt = baseTime + (durationDays * 86400000);
+    const successResp: ApiResponse = {
+      success: true,
+      data: settlementResult
+    };
 
-          const leasePayload = {
-            subscriptionId,
-            customerId,
-            activeInstallationId: installationId,
-            planId,
-            planName,
-            startsAtEpochMs: subDoc && subDoc.startsAtEpochMs ? subDoc.startsAtEpochMs : now,
-            expiresAtEpochMs: newExpiresAt,
-            maxCustomers: planId === 'PRO_YEARLY' ? 10000 : 1000,
-            allowWhatsAppAutoSend: true,
-            allowThermalPrinting: true,
-            issuedAt: now
-          };
-
-          const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
-          const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
-
-          const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [
-            {
-              collectionPath: 'payments',
-              documentId: orderId,
-              data: {
-                ...paymentDoc,
-                status: PaymentFSM.transition(paymentDoc, 'SETTLE'),
-                razorpayPaymentId: body.razorpayPaymentId || null,
-                razorpaySignature: body.razorpaySignature || null,
-                updatedAtEpochMs: now
-              }
-            },
-            {
-              collectionPath: 'subscriptions',
-              documentId: subscriptionId,
-              data: {
-                subscriptionId,
-                customerId,
-                activeInstallationId: installationId,
-                planId,
-                planName,
-                status: SubscriptionFSM.transition({}, 'ACTIVATE'),
-                startsAtEpochMs: leasePayload.startsAtEpochMs,
-                expiresAtEpochMs: newExpiresAt,
-                signedLeaseToken,
-                updatedAtEpochMs: now
-              }
-            }
-          ];
-
-          await commitAtomicWrites(env, batchWrites);
-
-          successResp = {
-            success: true,
-            data: {
-              status: 'SUCCESS',
-              subscriptionId,
-              activeInstallationId: installationId,
-              expiresAtEpochMs: newExpiresAt,
-              signedLeaseToken
-            }
-          };
-        }
-      }
-    );
+    return new Response(JSON.stringify(successResp), { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (err: any) {
-    if (err.code === 'ALREADY_EXISTS') {
-      return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process. Please try again.');
+    if (err.code === 'ORDER_INVALIDATED') {
+      return createErrorResponse(400, 'ORDER_INVALIDATED', err.message);
     }
-    throw err;
-  }
-
-  if (requireRefund) {
-    // 9. Execute External Saga (Outside Mutex)
-    const currentPaymentDoc = await getDocument(env, 'payments', orderId);
-    if (currentPaymentDoc) {
-      const refundResp = await executeRefundSaga(env, currentPaymentDoc, body.razorpayPaymentId || '');
-      // We wrap the internal webhook response in our standard ApiResponse format
-      const refundData = await refundResp.json() as any;
-      if (refundData.success) {
-        return createErrorResponse(400, 'ORDER_INVALIDATED', 'Subscription ownership changed. Your payment has been automatically refunded.');
-      } else {
-        return createErrorResponse(500, 'REFUND_ERROR', 'Order invalidated but automated refund failed. Please contact support.');
-      }
+    if (err.code === 'PAYMENT_NOT_CAPTURED') {
+      return createErrorResponse(400, 'PAYMENT_NOT_CAPTURED', err.message);
     }
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED') {
+      return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', err.message);
+    }
+    
+    console.error('Verify order error:', err);
+    return createErrorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred verifying the order.');
   }
-
-  return new Response(JSON.stringify(successResp), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

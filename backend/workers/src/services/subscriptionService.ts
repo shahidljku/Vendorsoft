@@ -338,4 +338,89 @@ export class SubscriptionService {
 
     return { writes, result: { signedLeaseToken } };
   }
+
+  /**
+   * Builds the atomic mutations required to provision or renew a subscription.
+   * Returns a DomainMutation containing the writes, the newly generated signedLeaseToken, and the new expiry.
+   */
+  static async buildProvisioning(
+    env: Env,
+    subscriptionId: string,
+    customerId: string,
+    installationId: string,
+    planId: string,
+    planName: string,
+    durationDays: number,
+    now: number
+  ): Promise<DomainMutation<{ signedLeaseToken: string, newExpiresAt: number }>> {
+    let subDoc: any = null;
+    let isTrial = false;
+
+    if (subscriptionId.startsWith('TRIAL_')) {
+      isTrial = true;
+      const hardwareId = subscriptionId.replace('TRIAL_', '');
+      const trial = await getDocument(env, 'hardware_trials', hardwareId);
+      if (trial) {
+        subDoc = {
+          subscriptionId,
+          customerId: trial.customerId,
+          activeInstallationId: trial.hardwareId,
+          planId: 'FREE_TRIAL_30',
+          status: trial.expiresAtEpochMs > now ? 'ACTIVE' : 'EXPIRED',
+          expiresAtEpochMs: trial.expiresAtEpochMs,
+          startsAtEpochMs: trial.startsAtEpochMs
+        };
+      }
+    } else {
+      subDoc = await getDocument(env, 'subscriptions', subscriptionId);
+    }
+
+    if (subDoc && subDoc.status === 'ACTIVE' && subDoc.expiresAtEpochMs > now) {
+      if (subDoc.activeInstallationId && subDoc.activeInstallationId !== installationId) {
+        const err: any = new Error('Ownership conflict: Subscription belongs to another installation.');
+        err.code = 'OWNERSHIP_CONFLICT';
+        throw err;
+      }
+    }
+
+    let currentExpiresAt = subDoc && typeof subDoc.expiresAtEpochMs === 'number' ? subDoc.expiresAtEpochMs : now;
+    const baseTime = currentExpiresAt > now ? currentExpiresAt : now;
+    const newExpiresAt = baseTime + (durationDays * 86400000);
+
+    const leasePayload = {
+      subscriptionId,
+      customerId,
+      activeInstallationId: installationId,
+      planId,
+      planName,
+      startsAtEpochMs: subDoc && subDoc.startsAtEpochMs ? subDoc.startsAtEpochMs : now,
+      expiresAtEpochMs: newExpiresAt,
+      maxCustomers: planId === 'PRO_YEARLY' ? 10000 : 1000,
+      allowWhatsAppAutoSend: true,
+      allowThermalPrinting: true,
+      issuedAt: now
+    };
+
+    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+    const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
+
+    const writes = [{
+      collectionPath: 'subscriptions',
+      documentId: subscriptionId,
+      data: {
+        subscriptionId,
+        customerId,
+        activeInstallationId: installationId,
+        planId,
+        planName,
+        status: SubscriptionFSM.transition({}, 'ACTIVATE'),
+        startsAtEpochMs: leasePayload.startsAtEpochMs,
+        expiresAtEpochMs: newExpiresAt,
+        signedLeaseToken,
+        updatedAtEpochMs: now
+      }
+    }];
+
+    return { writes, result: { signedLeaseToken, newExpiresAt } };
+  }
 }
