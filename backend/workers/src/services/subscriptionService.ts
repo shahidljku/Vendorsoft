@@ -3,15 +3,16 @@ import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAudit
 import { findSubscription, DiscoveryStrategy } from './discovery';
 import { LockService } from './lock';
 import { SubscriptionFSM } from './fsm/subscriptionFSM';
-import { createErrorResponse } from '../authGuard';
 
 export class SubscriptionService {
   /**
    * Extends the expiration date of the current active subscription or trial.
    */
-  static async extendSubscription(env: Env, customerId: string, daysToAdd: number): Promise<Response> {
+  static async extendSubscription(env: Env, customerId: string, daysToAdd: number): Promise<{ success: boolean; message: string }> {
     if (typeof daysToAdd !== 'number') {
-      return createErrorResponse(400, 'MISSING_DAYS', 'daysToAdd must be a number.');
+      const err: any = new Error('daysToAdd must be a number.');
+      err.code = 'MISSING_DAYS';
+      throw err;
     }
 
     let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
@@ -63,16 +64,18 @@ export class SubscriptionService {
         }
       }
 
-      return new Response(JSON.stringify({ success: true, message: 'Subscription extended successfully' }), {
-        status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      return { success: true, message: 'Subscription extended successfully' };
     };
 
     if (subscriptionId) {
       try {
         return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
       } catch (err: any) {
-        if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
+        if (err.code === 'ALREADY_EXISTS') {
+          const newErr: any = new Error('Subscription is currently locked by another process.');
+          newErr.code = 'CONCURRENT_MUTATION_LOCKED';
+          throw newErr;
+        }
         throw err;
       }
     } else {
@@ -83,8 +86,12 @@ export class SubscriptionService {
   /**
    * Changes the plan of the current subscription, generating a new subscription record if needed.
    */
-  static async changePlan(env: Env, customerId: string, newPlanId: string): Promise<Response> {
-    if (!newPlanId) return createErrorResponse(400, 'MISSING_PLAN_ID', 'newPlanId is required.');
+  static async changePlan(env: Env, customerId: string, newPlanId: string): Promise<{ success: boolean; message: string }> {
+    if (!newPlanId) {
+      const err: any = new Error('newPlanId is required.');
+      err.code = 'MISSING_PLAN_ID';
+      throw err;
+    }
 
     let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
     const now = Date.now();
@@ -144,16 +151,18 @@ export class SubscriptionService {
       }
       
       await commitAtomicWrites(env, batchWrites);
-      return new Response(JSON.stringify({ success: true, message: 'Subscription plan changed successfully' }), {
-        status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
+      return { success: true, message: 'Subscription plan changed successfully' };
     };
 
     if (subscriptionId) {
       try {
         return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
       } catch (err: any) {
-        if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
+        if (err.code === 'ALREADY_EXISTS') {
+          const newErr: any = new Error('Subscription is currently locked by another process.');
+          newErr.code = 'CONCURRENT_MUTATION_LOCKED';
+          throw newErr;
+        }
         throw err;
       }
     } else {
@@ -165,12 +174,16 @@ export class SubscriptionService {
    * Cancels the active subscription or trial. Note that revocation of devices is 
    * an InstallationService responsibility and is left to be orchestrated inline by the route for now.
    */
-  static async cancelSubscription(env: Env, customerId: string): Promise<{ success: boolean; hardwareIdToRevoke: string | null; response?: Response }> {
+  static async cancelSubscription(env: Env, customerId: string): Promise<{ success: boolean; hardwareIdToRevoke: string | null }> {
     let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
     const now = Date.now();
 
     const doWork = async () => {
-      if (!activeSub) return { success: false, hardwareIdToRevoke: null, response: createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', 'No active subscription found.') };
+      if (!activeSub) {
+        const err: any = new Error('No active subscription found.');
+        err.code = 'SUBSCRIPTION_NOT_FOUND';
+        throw err;
+      }
 
       if (subscriptionId) {
         if (isTrial && trialId) {
@@ -200,7 +213,11 @@ export class SubscriptionService {
       try {
         return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
       } catch (err: any) {
-        if (err.code === 'ALREADY_EXISTS') return { success: false, hardwareIdToRevoke: null, response: createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.') };
+        if (err.code === 'ALREADY_EXISTS') {
+          const newErr: any = new Error('Subscription is currently locked by another process.');
+          newErr.code = 'CONCURRENT_MUTATION_LOCKED';
+          throw newErr;
+        }
         throw err;
       }
     } else {

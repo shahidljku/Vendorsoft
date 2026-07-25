@@ -4,6 +4,7 @@ import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 import { InstallationFSM } from '../services/fsm/installationFSM';
+import { InstallationService } from '../services/installationService';
 
 /**
  * Handles POST /api/v1/customers/register
@@ -247,29 +248,13 @@ export async function handleCustomerRegistration(
   let isHardwareTrialExpired = false;
 
   try {
-    const hardwareTrialDoc = await getDocument(env, 'hardware_trials', reqHardwareId);
-    
-    if (hardwareTrialDoc) {
-      // MANDATORY SECURITY: IMMUTABLE TRIAL ENFORCEMENT
-      // If a trial document exists for this physical hardware, NEVER issue a new one.
-      await logAuditEvent(env, 'REGISTRATION_REJECTED', {
-          actorType: 'USER',
-          actorId: identity.customerId || 'unknown',
-          targetType: 'hardware_trials',
-          targetId: reqHardwareId,
-          details: 'Device has already consumed its lifetime trial.',
-          timestampMs: now,
-          mobileNumber: inputMobileNumber,
-          businessName: businessName,
-          reason: 'TRIAL_ALREADY_USED',
-          ipAddress,
-          appVersion: request.headers.get('x-app-version') || 'unknown'
-      });
-      return createErrorResponse(409, 'TRIAL_ALREADY_USED', 'This device has already consumed its lifetime trial.');
+    await InstallationService.checkHardwareTrialEligibility(env, reqHardwareId, identity, inputMobileNumber, businessName, ipAddress, request.headers.get('x-app-version') || 'unknown');
+  } catch(err: any) {
+    if (err.code === 'TRIAL_ALREADY_USED') {
+      return createErrorResponse(409, 'TRIAL_ALREADY_USED', err.message);
     }
-  } catch(err) {
-     console.error('Hardware Trial check error:', err);
-     return createErrorResponse(500, 'DB_ERROR', 'Failed to verify hardware trial status.');
+    console.error('Hardware Trial check error:', err);
+    return createErrorResponse(500, 'DB_ERROR', 'Failed to verify hardware trial status.');
   }
 
   if (recoverOnly) {
@@ -327,21 +312,15 @@ export async function handleCustomerRegistration(
     {
       collectionPath: 'installations',
       documentId: installationId,
-      data: {
+      data: InstallationService.createInstallationRecord(
         installationId,
         customerId,
-        hardwareId: reqHardwareId,
-        installationUuid: identity.installationUuid,
-        firebaseUid: identity.uid,
-        platform: identity.platform,
-        appVersion: identity.appVersion,
-        deviceModel: body.deviceModel ? body.deviceModel.trim() : null,
-        fcmToken: body.fcmToken || null,
-        status: InstallationFSM.transition({}, 'ACTIVATE'),
-        isBanned: false,
-        createdAtEpochMs: now,
-        lastSeenAtEpochMs: now
-      }
+        reqHardwareId,
+        identity,
+        body.deviceModel ? body.deviceModel.trim() : null,
+        body.fcmToken || null,
+        now
+      )
     },
     {
       collectionPath: 'hardware_trials',

@@ -8,6 +8,7 @@ import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
 import { TransferFSM } from '../services/fsm/transferFSM';
 import { InstallationFSM } from '../services/fsm/installationFSM';
 import { SubscriptionService } from '../services/subscriptionService';
+import { InstallationService } from '../services/installationService';
 
 /**
  * Handles GET /api/v1/admin/customers
@@ -370,24 +371,16 @@ export async function handleAdminRejectTransfer(request: Request, env: Env, admi
  */
 export async function handleAdminBanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
   try {
-    const instDoc = await getDocument(env, 'installations', hardwareId) || {};
-    
-    const updatedInst = {
-      ...instDoc,
-      status: InstallationFSM.transition(instDoc, 'BAN'),
-      bannedAtEpochMs: Date.now(),
-      bannedBy: adminUid
-    };
-    
-    await setDocument(env, 'installations', hardwareId, updatedInst);
-    
+    await InstallationService.banDevice(env, hardwareId, adminUid);
     await logAuditEvent(env, 'ADMIN_BANNED_DEVICE', { adminUid, hardwareId });
-
+    
     return new Response(JSON.stringify({ success: true, message: 'Device banned successfully' }), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
     console.error('Error in handleAdminBanDevice:', err);
+    if (err.code === 'NOT_FOUND') return createErrorResponse(404, 'NOT_FOUND', err.message);
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
     return createErrorResponse(500, 'ADMIN_BAN_FAILED', `Failed to ban device: ${err.message || err}`);
   }
 }
@@ -398,24 +391,16 @@ export async function handleAdminBanDevice(request: Request, env: Env, adminUid:
  */
 export async function handleAdminUnbanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
   try {
-    const instDoc = await getDocument(env, 'installations', hardwareId) || {};
-    
-    const updatedInst = {
-      ...instDoc,
-      status: InstallationFSM.transition(instDoc, 'ACTIVATE'),
-      unbannedAtEpochMs: Date.now(),
-      unbannedBy: adminUid
-    };
-    
-    await setDocument(env, 'installations', hardwareId, updatedInst);
-    
+    await InstallationService.unbanDevice(env, hardwareId, adminUid);
     await logAuditEvent(env, 'ADMIN_UNBANNED_DEVICE', { adminUid, hardwareId });
-
+    
     return new Response(JSON.stringify({ success: true, message: 'Device unbanned successfully' }), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
     console.error('Error in handleAdminUnbanDevice:', err);
+    if (err.code === 'NOT_FOUND') return createErrorResponse(404, 'NOT_FOUND', err.message);
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
     return createErrorResponse(500, 'ADMIN_UNBAN_FAILED', `Failed to unban device: ${err.message || err}`);
   }
 }
@@ -568,36 +553,48 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
     const action = typeof body.action === 'string' ? body.action.substring(0, 20).toUpperCase() : '';
     
     if (action === 'EXTEND') {
-      const response = await SubscriptionService.extendSubscription(env, customerId, body.daysToAdd as number);
-      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
-      return response;
+      try {
+        const result = await SubscriptionService.extendSubscription(env, customerId, body.daysToAdd as number);
+        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      } catch (err: any) {
+        if (err.code === 'MISSING_DAYS') return createErrorResponse(400, 'MISSING_DAYS', err.message);
+        if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
+        throw err;
+      }
     } 
     else if (action === 'CHANGE_PLAN') {
-      const response = await SubscriptionService.changePlan(env, customerId, body.newPlanId as string);
-      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
-      return response;
+      try {
+        const result = await SubscriptionService.changePlan(env, customerId, body.newPlanId as string);
+        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      } catch (err: any) {
+        if (err.code === 'MISSING_PLAN_ID') return createErrorResponse(400, 'MISSING_PLAN_ID', err.message);
+        if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
+        throw err;
+      }
     }
     else if (action === 'REMOVE') {
-      const { success, hardwareIdToRevoke, response } = await SubscriptionService.cancelSubscription(env, customerId);
-      if (!success) return response as Response;
-      
-      // Inline revocation logic until Phase 4B extracts this into InstallationService
-      if (hardwareIdToRevoke) {
-        const sourceInst = await getDocument(env, 'installations', hardwareIdToRevoke);
-        if (sourceInst) {
-          await setDocument(env, 'installations', hardwareIdToRevoke, {
-            ...sourceInst,
-            status: InstallationFSM.transition(sourceInst, 'REVOKE'),
-            revokedAtEpochMs: Date.now(),
-            revokedReason: 'Subscription removed by Admin'
-          });
+      try {
+        const { success, hardwareIdToRevoke } = await SubscriptionService.cancelSubscription(env, customerId);
+        
+        if (hardwareIdToRevoke) {
+          try {
+            await InstallationService.revokeInstallation(env, hardwareIdToRevoke, 'Subscription removed by Admin');
+          } catch (revokeErr) {
+            console.warn('Failed to revoke installation during subscription removal:', revokeErr);
+          }
         }
+        
+        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        return new Response(JSON.stringify({ success: true, message: 'Subscription removed successfully' }), {
+          status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      } catch (err: any) {
+        if (err.code === 'SUBSCRIPTION_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
+        if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
+        throw err;
       }
-      
-      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
-      return new Response(JSON.stringify({ success: true, message: 'Subscription removed successfully' }), {
-        status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
     }
     else if (action === 'TRANSFER') {
       // NOTE: Left inline for Phase 4A. Will migrate in Phase 4C to TransferService.
