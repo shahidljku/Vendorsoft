@@ -1,4 +1,4 @@
-import { Env, CompositeIdentity } from '../types';
+import { Env, CompositeIdentity, DomainMutation } from '../types';
 import { getDocument, setDocument, commitAtomicWrites, logAuditEvent } from './firestore';
 import { InstallationFSM } from './fsm/installationFSM';
 import { LockService } from './lock';
@@ -139,10 +139,9 @@ export class InstallationService {
   }
 
   /**
-   * Generates an installation record for a new device activation.
-   * Returns the data object to be included in an atomic batch write.
+   * Builds the atomic mutation required to activate a new installation.
    */
-  static createInstallationRecord(
+  static buildActivation(
     installationId: string, 
     customerId: string, 
     hardwareId: string, 
@@ -150,21 +149,57 @@ export class InstallationService {
     deviceModel: string | null, 
     fcmToken: string | null, 
     now: number
-  ): Record<string, any> {
-    return {
-      installationId,
-      customerId,
-      hardwareId,
-      installationUuid: identity.installationUuid,
-      firebaseUid: identity.uid,
-      platform: identity.platform,
-      appVersion: identity.appVersion,
-      deviceModel,
-      fcmToken,
-      status: InstallationFSM.transition({}, 'ACTIVATE'),
-      isBanned: false,
-      createdAtEpochMs: now,
-      lastSeenAtEpochMs: now
-    };
+  ): DomainMutation {
+    const writes = [{
+      collectionPath: 'installations',
+      documentId: installationId,
+      data: {
+        installationId,
+        customerId,
+        hardwareId,
+        installationUuid: identity.installationUuid,
+        firebaseUid: identity.uid,
+        platform: identity.platform,
+        appVersion: identity.appVersion,
+        deviceModel,
+        fcmToken,
+        status: InstallationFSM.transition({}, 'ACTIVATE'),
+        isBanned: false,
+        createdAtEpochMs: now,
+        lastSeenAtEpochMs: now
+      }
+    }];
+    return { writes, result: undefined };
+  }
+
+  /**
+   * Builds the atomic mutation required to revoke an installation.
+   */
+  static async buildRevocation(
+    env: Env,
+    hardwareId: string,
+    reason: string,
+    now: number
+  ): Promise<DomainMutation> {
+    const instDoc = await getDocument(env, 'installations', hardwareId);
+    if (!instDoc) {
+      const err: any = new Error('Installation not found');
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
+    
+    const writes = [{
+      collectionPath: 'installations',
+      documentId: hardwareId,
+      data: {
+        ...instDoc,
+        status: InstallationFSM.transition(instDoc, 'REVOKE'),
+        revokedAtEpochMs: now,
+        revokedReason: reason,
+        updatedAtEpochMs: now
+      }
+    }];
+    
+    return { writes, result: undefined };
   }
 }

@@ -3,6 +3,8 @@ import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAudit
 import { findSubscription, DiscoveryStrategy } from './discovery';
 import { LockService } from './lock';
 import { SubscriptionFSM } from './fsm/subscriptionFSM';
+import { generateSignedLeaseToken } from '../cryptoEngine';
+import { DomainMutation } from '../types';
 
 export class SubscriptionService {
   /**
@@ -223,5 +225,117 @@ export class SubscriptionService {
     } else {
       return await doWork();
     }
+  }
+
+  /**
+   * Builds the atomic mutations required to transfer ownership of a subscription.
+   * Returns a DomainMutation containing the writes and the newly generated signedLeaseToken.
+   */
+  static async buildTransferOwnership(
+    env: Env, 
+    subscriptionId: string, 
+    customerId: string, 
+    oldInstallationId: string, 
+    newInstallationId: string, 
+    newHardwareId: string,
+    now: number
+  ): Promise<DomainMutation<{ signedLeaseToken: string }>> {
+    let sub: any = null;
+    let isTrial = false;
+    
+    if (subscriptionId.startsWith('TRIAL_')) {
+      isTrial = true;
+      const hardwareId = subscriptionId.replace('TRIAL_', '');
+      const trial = await getDocument(env, 'hardware_trials', hardwareId);
+      if (trial) {
+        sub = {
+          subscriptionId,
+          customerId: trial.customerId,
+          activeInstallationId: trial.hardwareId,
+          planId: 'FREE_TRIAL_30',
+          startsAtEpochMs: trial.startedAtEpochMs,
+          expiresAtEpochMs: trial.expiresAtEpochMs
+        };
+      }
+    } else {
+      sub = await getDocument(env, 'subscriptions', subscriptionId);
+    }
+
+    if (!sub) {
+      const err: any = new Error('The subscription or trial associated with this transfer no longer exists.');
+      err.code = 'SUBSCRIPTION_NOT_FOUND';
+      throw err;
+    }
+
+    if (sub.activeInstallationId !== oldInstallationId) {
+      const err: any = new Error('This subscription has already been transferred to a different device.');
+      err.code = 'TRANSFER_ALREADY_PROCESSED';
+      throw err;
+    }
+
+    if (isTrial) {
+      const trialHistory = await getDocument(env, 'hardware_trials', newHardwareId);
+      if (trialHistory) {
+        const err: any = new Error('The receiving device has already used a Free Trial. Transfer aborted.');
+        err.code = 'TRIAL_ALREADY_USED';
+        throw err;
+      }
+    }
+
+    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+    const leasePayload = {
+      subscriptionId: sub.subscriptionId,
+      customerId: sub.customerId,
+      activeInstallationId: newInstallationId,
+      hasActiveSubscription: true,
+      planId: sub.planId || 'FREE_TRIAL_30',
+      planName: sub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : sub.planId === 'FREE_TRIAL_30' ? '30-Day Pro Trial' : 'Pro Monthly License',
+      startsAtEpochMs: sub.startsAtEpochMs || now,
+      expiresAtEpochMs: sub.expiresAtEpochMs,
+      maxCustomers: sub.planId === 'PRO_YEARLY' || sub.planId === 'FREE_TRIAL_30' ? 10000 : 50,
+      allowWhatsAppAutoSend: true,
+      allowThermalPrinting: true,
+      issuedAt: now
+    };
+    const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
+
+    const writes: any[] = [];
+    if (isTrial) {
+      writes.push({
+        collectionPath: 'hardware_trials',
+        documentId: newHardwareId,
+        data: {
+          hardwareId: newHardwareId,
+          startedAtEpochMs: sub.startsAtEpochMs,
+          expiresAtEpochMs: sub.expiresAtEpochMs,
+          customerId: sub.customerId,
+          trialUsed: true
+        }
+      });
+      writes.push({
+        collectionPath: 'hardware_trials',
+        documentId: sub.activeInstallationId,
+        data: {
+          hardwareId: sub.activeInstallationId,
+          startedAtEpochMs: sub.startsAtEpochMs,
+          expiresAtEpochMs: 0,
+          customerId: sub.customerId,
+          trialUsed: true
+        }
+      });
+    } else {
+      writes.push({
+        collectionPath: 'subscriptions',
+        documentId: sub.subscriptionId,
+        data: {
+          ...sub,
+          activeInstallationId: newInstallationId,
+          signedLeaseToken,
+          updatedAtEpochMs: now
+        }
+      });
+    }
+
+    return { writes, result: { signedLeaseToken } };
   }
 }

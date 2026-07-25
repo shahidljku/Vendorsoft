@@ -310,19 +310,6 @@ export async function handleCustomerRegistration(
       }
     },
     {
-      collectionPath: 'installations',
-      documentId: installationId,
-      data: InstallationService.createInstallationRecord(
-        installationId,
-        customerId,
-        reqHardwareId,
-        identity,
-        body.deviceModel ? body.deviceModel.trim() : null,
-        body.fcmToken || null,
-        now
-      )
-    },
-    {
       collectionPath: 'hardware_trials',
       documentId: reqHardwareId,
       data: {
@@ -339,6 +326,17 @@ export async function handleCustomerRegistration(
       requireDoesNotExist: true // Guarantees atomic one-time trial creation
     }
   ];
+
+  const activationOp = InstallationService.buildActivation(
+    installationId,
+    customerId,
+    reqHardwareId,
+    identity,
+    body.deviceModel ? body.deviceModel.trim() : null,
+    body.fcmToken || null,
+    now
+  );
+  batchWrites.push(...activationOp.writes);
 
   if (idempotencyKey) {
     batchWrites.push({

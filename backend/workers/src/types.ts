@@ -62,3 +62,21 @@ export interface SystemConfigDocument {
   apkDownloadUrl?: string;
   updatedAtEpochMs: number;
 }
+
+/**
+ * Represents a single atomic Firestore write operation.
+ */
+export interface BatchOperation {
+  collectionPath: string;
+  documentId: string;
+  data: Record<string, any>;
+  requireDoesNotExist?: boolean;
+}
+
+/**
+ * Standardizes the output of builder methods that prepare data for atomic commits.
+ */
+export interface DomainMutation<T = void> {
+  writes: BatchOperation[];
+  result: T;
+}
