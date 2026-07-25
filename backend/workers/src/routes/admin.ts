@@ -1,9 +1,12 @@
 import { Env, ApiResponse } from '../types';
 import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryCollection, logAuditEvent, getFirestoreAccessToken } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
-import { generateSignedLeaseToken } from '../cryptoEngine';
+import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { LockService } from '../services/lock';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
+import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
+import { TransferFSM } from '../services/fsm/transferFSM';
+import { InstallationFSM } from '../services/fsm/installationFSM';
 
 /**
  * Handles GET /api/v1/admin/customers
@@ -163,7 +166,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
           // Mark transfer as APPROVED by admin
           const updatedTransfer = {
             ...transferDoc,
-            status: 'APPROVED',
+            status: TransferFSM.transition(transferDoc, 'APPROVE'),
             approvedBy: `ADMIN_${adminUid}`,
             updatedAtEpochMs: now
           };
@@ -178,7 +181,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
                 documentId: sourceInstallationId,
                 data: {
                   ...sourceInst,
-                  status: 'REVOKED',
+                  status: InstallationFSM.transition(sourceInst, 'REVOKE'),
                   revokedAtEpochMs: now,
                   revokedReason: `Admin approved transfer ${transferId} (Lost/Broken Phone override)`
                 }
@@ -194,7 +197,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
               documentId: targetInstallationId,
               data: {
                 ...targetInst,
-                status: 'ACTIVE',
+                status: InstallationFSM.transition(targetInst, 'ACTIVATE'),
                 updatedAtEpochMs: now
               }
             });
@@ -210,7 +213,7 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
                 platform: 'android',
                 deviceModel: transferDoc.deviceModel || 'Unknown Device',
                 appVersion: '1.0.0',
-                status: 'ACTIVE',
+                status: InstallationFSM.transition({}, 'ACTIVATE'),
                 createdAtEpochMs: now,
                 lastSeenAtEpochMs: now
               }
@@ -331,7 +334,7 @@ export async function handleAdminRejectTransfer(request: Request, env: Env, admi
     const now = Date.now();
     const updatedTransfer = {
       ...transferDoc,
-      status: 'REJECTED',
+      status: TransferFSM.transition(transferDoc, 'REJECT'),
       rejectedBy: `ADMIN_${adminUid}`,
       updatedAtEpochMs: now
     };
@@ -370,7 +373,7 @@ export async function handleAdminBanDevice(request: Request, env: Env, adminUid:
     
     const updatedInst = {
       ...instDoc,
-      status: 'BANNED',
+      status: InstallationFSM.transition(instDoc, 'BAN'),
       bannedAtEpochMs: Date.now(),
       bannedBy: adminUid
     };
@@ -398,7 +401,7 @@ export async function handleAdminUnbanDevice(request: Request, env: Env, adminUi
     
     const updatedInst = {
       ...instDoc,
-      status: 'ACTIVE',
+      status: InstallationFSM.transition(instDoc, 'ACTIVATE'),
       unbannedAtEpochMs: Date.now(),
       unbannedBy: adminUid
     };
@@ -602,7 +605,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
              customerId,
              activeInstallationId: hwId,
              planId: 'FREE_TRIAL_30',
-             status: 'ACTIVE',
+             status: SubscriptionFSM.transition({}, 'ACTIVATE'),
              startsAtEpochMs: now,
              expiresAtEpochMs: newExpiresAt,
              createdAtEpochMs: now,
@@ -611,7 +614,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
            await setDocument(env, 'subscriptions', newSubId, activeSub);
         } else {
           activeSub.expiresAtEpochMs = newExpiresAt;
-          activeSub.status = 'ACTIVE';
+          activeSub.status = SubscriptionFSM.transition(activeSub, 'ACTIVATE');
           activeSub.updatedAtEpochMs = now;
           
           if (isTrial) {
@@ -650,7 +653,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
             customerId,
             activeInstallationId: hwId,
             planId: body.newPlanId,
-            status: 'ACTIVE',
+            status: SubscriptionFSM.transition({}, 'ACTIVATE'),
             startsAtEpochMs: now,
             expiresAtEpochMs: baseDate.getTime(),
             createdAtEpochMs: now,
@@ -716,7 +719,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
               documentId: hardwareId,
               data: {
                 ...sourceInst,
-                status: 'REVOKED',
+                status: InstallationFSM.transition(sourceInst, 'REVOKE'),
                 revokedAtEpochMs: now,
                 revokedReason: `Admin transfer override to ${body.newHardwareId}`
               }
@@ -729,10 +732,10 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
       } else if (action === 'REMOVE') {
         const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
         if (isTrial) {
-          activeSub.status = 'CANCELLED';
+          activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
           await setDocument(env, 'hardware_trials', trialId as string, activeSub);
         } else {
-          activeSub.status = 'CANCELLED';
+          activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
           activeSub.updatedAtEpochMs = now;
           await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
         }
@@ -742,7 +745,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
           if (sourceInst) {
             await setDocument(env, 'installations', hardwareId, {
               ...sourceInst,
-              status: 'REVOKED',
+              status: InstallationFSM.transition(sourceInst, 'REVOKE'),
               revokedAtEpochMs: now,
               revokedReason: 'Subscription removed by Admin'
             });

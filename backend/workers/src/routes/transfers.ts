@@ -4,6 +4,8 @@ import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { LockService } from '../services/lock';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
+import { TransferFSM } from '../services/fsm/transferFSM';
+import { InstallationFSM } from '../services/fsm/installationFSM';
 
 /**
  * Handles POST /api/v1/transfers/request
@@ -143,7 +145,7 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
             newInstallationId: identity.installationId,
             newHardwareId: identity.hardwareId, // Pillar 8: API Spoofing Patch
             deviceModel: deviceModel,
-            status: 'PENDING',
+            status: TransferFSM.transition({}, 'REQUEST'),
             requestedAtEpochMs: now,
             expiresAtEpochMs
           };
@@ -355,7 +357,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
           if (isTrial) {
             const trialHistory = await getDocument(env, 'hardware_trials', newHardwareId);
             if (trialHistory) {
-               transferDoc.status = 'REJECTED';
+               transferDoc.status = TransferFSM.transition(transferDoc, 'REJECT');
                await setDocument(env, 'device_transfers', transferId, transferDoc);
                return createErrorResponse(403, 'TRIAL_ALREADY_USED', 'The receiving device has already used a Free Trial. Transfer aborted.');
             }
@@ -369,7 +371,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
               data: {
                 installationId: transferDoc.oldInstallationId,
                 customerId: sub.customerId,
-                status: 'REVOKED',
+                status: InstallationFSM.transition({}, 'REVOKE'),
                 updatedAtEpochMs: now
               }
             },
@@ -379,7 +381,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
               data: {
                 installationId: transferDoc.newInstallationId,
                 customerId: sub.customerId,
-                status: 'ACTIVE',
+                status: InstallationFSM.transition({}, 'ACTIVATE'),
                 updatedAtEpochMs: now
               }
             },
@@ -388,7 +390,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
               documentId: transferId,
               data: {
                 ...transferDoc,
-                status: 'APPROVED',
+                status: TransferFSM.transition(transferDoc, 'APPROVE'),
                 approvedBy: 'PEER_OLD_DEVICE',
                 completedAtEpochMs: now
               }
@@ -524,7 +526,7 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
         documentId: transferId,
         data: {
           ...transferDoc,
-          status: 'REJECTED',
+          status: TransferFSM.transition(transferDoc, 'REJECT'),
           rejectedBy: 'PEER_OLD_DEVICE',
           completedAtEpochMs: now
         }
@@ -660,7 +662,7 @@ export async function handleCancelTransfer(request: Request, env: Env, identity:
         documentId: transferId,
         data: {
           ...transferDoc,
-          status: 'CANCELLED',
+          status: TransferFSM.transition(transferDoc, 'CANCEL'),
           resolvedAtEpochMs: now,
           updatedAtEpochMs: now
         }

@@ -3,6 +3,7 @@ import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAudit
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
+import { InstallationFSM } from '../services/fsm/installationFSM';
 
 /**
  * Handles POST /api/v1/customers/register
@@ -336,7 +337,7 @@ export async function handleCustomerRegistration(
         appVersion: identity.appVersion,
         deviceModel: body.deviceModel ? body.deviceModel.trim() : null,
         fcmToken: body.fcmToken || null,
-        status: 'ACTIVE',
+        status: InstallationFSM.transition({}, 'ACTIVATE'),
         isBanned: false,
         createdAtEpochMs: now,
         lastSeenAtEpochMs: now

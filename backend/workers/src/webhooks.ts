@@ -3,6 +3,8 @@ import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryColl
 import { generateShortId, generateSignedLeaseToken } from './cryptoEngine';
 import { LockService } from './services/lock';
 import { findSubscription, DiscoveryStrategy } from './services/discovery';
+import { PaymentFSM } from './services/fsm/paymentFSM';
+import { SubscriptionFSM } from './services/fsm/subscriptionFSM';
 
 /**
  * Handles POST /api/v1/webhooks/razorpay
@@ -167,7 +169,7 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
           // FSM: CREATED -> REFUND_PENDING
           await setDocument(env, 'payments', razorpayOrderId, {
             ...paymentDoc,
-            status: 'REFUND_PENDING',
+            status: PaymentFSM.transition(paymentDoc, 'REQUEST_REFUND'),
             updatedAtEpochMs: Date.now()
           });
         } else {
@@ -199,7 +201,7 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
               documentId: razorpayOrderId,
               data: {
                 ...paymentDoc,
-                status: 'SUCCESS',
+                status: PaymentFSM.transition(paymentDoc, 'SETTLE'),
                 razorpayPaymentId,
                 razorpaySignature: signatureHeader,
                 updatedAtEpochMs: now
@@ -214,7 +216,7 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
                 activeInstallationId: installationId,
                 planId,
                 planName,
-                status: 'ACTIVE',
+                status: SubscriptionFSM.transition({}, 'ACTIVATE'),
                 startsAtEpochMs: leasePayload.startsAtEpochMs,
                 expiresAtEpochMs: newExpiresAt,
                 signedLeaseToken,
@@ -258,7 +260,7 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
 export async function executeRefundSaga(env: Env, paymentDoc: any, razorpayPaymentId: string): Promise<Response> {
   if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
     // Simulated refund for dev environment
-    await setDocument(env, 'payments', paymentDoc.orderId, { ...paymentDoc, status: 'REFUNDED', refundedAtEpochMs: Date.now() });
+    await setDocument(env, 'payments', paymentDoc.orderId, { ...paymentDoc, status: PaymentFSM.transition(paymentDoc, 'COMPLETE_REFUND'), refundedAtEpochMs: Date.now() });
     return new Response(JSON.stringify({ success: true, processed: true, note: 'ORDER_INVALIDATED_REFUNDED_SIMULATED' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -276,7 +278,7 @@ export async function executeRefundSaga(env: Env, paymentDoc: any, razorpayPayme
     if (refundResp.ok || refundResp.status === 400) {
       // HTTP 400 effectively means "already fully refunded", perfectly safe to terminate saga.
       // FSM: REFUND_PENDING -> REFUNDED
-      await setDocument(env, 'payments', paymentDoc.orderId, { ...paymentDoc, status: 'REFUNDED', refundedAtEpochMs: Date.now() });
+      await setDocument(env, 'payments', paymentDoc.orderId, { ...paymentDoc, status: PaymentFSM.transition(paymentDoc, 'COMPLETE_REFUND'), refundedAtEpochMs: Date.now() });
       return new Response(JSON.stringify({ success: true, processed: true, note: 'ORDER_INVALIDATED_REFUNDED' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }

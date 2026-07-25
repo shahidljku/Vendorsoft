@@ -5,6 +5,8 @@ import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { executeRefundSaga } from '../webhooks';
 import { LockService } from '../services/lock';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
+import { PaymentFSM } from '../services/fsm/paymentFSM';
+import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
 
 /**
  * Handles POST /api/v1/orders/create
@@ -169,7 +171,7 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
     planName,
     durationDays,
     amountInr,
-    status: 'INITIATED',
+    status: PaymentFSM.transition({}, 'INITIATE'),
     createdAtEpochMs: now
   };
 
@@ -230,7 +232,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
   // 1. Handle explicit payment cancellation / error dismissal by user
   if (body.errorCode && body.errorCode === 'PAYMENT_CANCELLED') {
     if (paymentDoc.status === 'INITIATED') {
-      paymentDoc.status = 'FAILED';
+      paymentDoc.status = PaymentFSM.transition(paymentDoc, 'FAIL');
       paymentDoc.updatedAtEpochMs = Date.now();
       await setDocument(env, 'payments', orderId, paymentDoc);
     }
@@ -353,7 +355,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
           // FSM: CREATED -> REFUND_PENDING
           await setDocument(env, 'payments', orderId, {
             ...paymentDoc,
-            status: 'REFUND_PENDING',
+            status: PaymentFSM.transition(paymentDoc, 'REQUEST_REFUND'),
             updatedAtEpochMs: Date.now()
           });
         } else {
@@ -385,7 +387,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
               documentId: orderId,
               data: {
                 ...paymentDoc,
-                status: 'SUCCESS',
+                status: PaymentFSM.transition(paymentDoc, 'SETTLE'),
                 razorpayPaymentId: body.razorpayPaymentId || null,
                 razorpaySignature: body.razorpaySignature || null,
                 updatedAtEpochMs: now
@@ -400,7 +402,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
                 activeInstallationId: installationId,
                 planId,
                 planName,
-                status: 'ACTIVE',
+                status: SubscriptionFSM.transition({}, 'ACTIVATE'),
                 startsAtEpochMs: leasePayload.startsAtEpochMs,
                 expiresAtEpochMs: newExpiresAt,
                 signedLeaseToken,

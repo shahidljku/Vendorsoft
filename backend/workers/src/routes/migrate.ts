@@ -1,5 +1,7 @@
 import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { queryCollection, commitAtomicWrites, logAuditEvent } from '../services/firestore';
+import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
+import { InstallationFSM } from '../services/fsm/installationFSM';
 import { generateSignedLeaseToken, computeSha256Hash, verifyRsaSha256Signature } from '../cryptoEngine';
 import { createErrorResponse } from '../authGuard';
 
@@ -134,7 +136,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       platform: identity.platform || 'android',
       appVersion: identity.appVersion || '1.0.0',
       deviceModel: payload.customerType || 'Legacy RSA Device',
-      status: 'ACTIVE',
+      status: InstallationFSM.transition({}, 'ACTIVATE'),
       isBanned: false,
       createdAtEpochMs: now,
       lastSeenAtEpochMs: now
@@ -163,7 +165,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       activeInstallationId: targetInstallationId,
       planId: 'LEGACY_MIGRATED',
       planName: leasePayload.planName,
-      status: 'ACTIVE',
+      status: SubscriptionFSM.transition({}, 'ACTIVATE'),
       startsAtEpochMs: now,
       expiresAtEpochMs,
       signedLeaseToken,
