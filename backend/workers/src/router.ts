@@ -246,12 +246,12 @@ export async function routeRequest(request: Request, env: Env, execCtx?: Executi
   }
 
   // Phase 3: Razorpay Payment Checkout & Verification
-  if (path.startsWith('/v1/orders/create') && request.method === 'POST') {
+  if (normalizedPath.startsWith('/v1/orders/create') && request.method === 'POST') {
     const rlAllowed = await checkRateLimit(env, RateLimitPolicies.ORDER_CREATION, `order:${identity.customerId || identity.hardwareId}`);
     if (!rlAllowed) return createErrorResponse(429, 'TOO_MANY_REQUESTS', 'Order creation rate limit exceeded.');
     return handleCreateOrder(ctx, request, env);
   }
-  if (path.startsWith('/v1/orders/verify') && request.method === 'POST') {
+  if (normalizedPath.startsWith('/v1/orders/verify') && request.method === 'POST') {
     return handleVerifyOrder(ctx, request, env);
   }
 

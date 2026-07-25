@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'license_service.dart';
 import 'dart:io';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'push_notification_service.dart';
 import 'dart:math';
@@ -79,6 +80,14 @@ class RegistrationService {
         final resJson = jsonDecode(response.body);
         if (resJson['success'] == true) {
           final data = resJson['data'];
+          // Cache the user's mobile number locally for Razorpay prefill
+          try {
+            const storage = FlutterSecureStorage();
+            await storage.write(key: 'user_mobile_number', value: mobileNumber);
+          } catch (e) {
+            print('Failed to save mobile number to secure storage: $e');
+          }
+
           if (data != null && data is Map && data['signedLeaseToken'] != null) {
             await LicenseService().verifySignedLeaseToken(data['signedLeaseToken'], saveToStorage: true);
             return true;

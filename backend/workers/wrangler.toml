@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [env.staging]
 name = "vendsoft-api-worker-staging"
-route = { pattern = "staging-api.vendsoft.com/*", custom_domain = true }
+workers_dev = true
 
 [env.staging.vars]
 GCP_PROJECT_ID = "vendorpro-staging-1b2c3"
@@ -33,7 +33,7 @@ dead_letter_queue = "vendsoft-webhooks-dlq-staging"
 
 [env.production]
 name = "vendsoft-api-worker"
-route = { pattern = "api.vendsoft.com/*", custom_domain = true }
+workers_dev = true
 
 [env.production.vars]
 GCP_PROJECT_ID = "vendorpro-491c4"

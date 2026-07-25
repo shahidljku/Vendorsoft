@@ -19,12 +19,12 @@ export const ResiliencePolicies: Record<string, ResiliencePolicy> = {
   },
   firestoreIdempotentWrite: {
     retry: { maxRetries: 2, baseDelayMs: 100, maxDelayMs: 1500 },
-    timeoutMs: 2000,
+    timeoutMs: 8000,
     circuitBreaker: { failureThreshold: 3, resetTimeoutMs: 15000 }
   },
   firestoreNonIdempotentWrite: {
     retry: { maxRetries: 0, baseDelayMs: 0, maxDelayMs: 0 },
-    timeoutMs: 2000,
+    timeoutMs: 8000,
     circuitBreaker: { failureThreshold: 3, resetTimeoutMs: 15000 }
   },
   razorpayRead: {

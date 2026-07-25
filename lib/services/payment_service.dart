@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -167,6 +168,14 @@ class PaymentService {
       init();
     }
 
+    String cachedMobile = '';
+    try {
+      const storage = FlutterSecureStorage();
+      cachedMobile = await storage.read(key: 'user_mobile_number') ?? '';
+    } catch (e) {
+      print('Failed to read mobile number: $e');
+    }
+
     var options = {
       'key': keyId,
       'amount': amountPaise,
@@ -174,7 +183,7 @@ class PaymentService {
       'description': orderData['planId'] == 'PRO_YEARLY' ? 'Pro Annual License' : 'Pro Monthly License',
       'order_id': razorpayOrderId,
       'prefill': {
-        'contact': '',
+        'contact': cachedMobile,
         'email': ''
       },
       'theme': {
