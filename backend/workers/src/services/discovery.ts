@@ -1,5 +1,7 @@
 import { queryCollection, getDocument, setDocument } from './firestore';
 import { Env } from '../types';
+import { RequestContext } from './logger';
+import { LockService } from './lock';
 
 export enum DiscoveryStrategy {
     PAYMENT = 'PAYMENT',
@@ -27,8 +29,7 @@ export class DiscoveryError extends Error {
     }
 }
 
-export async function findSubscription(
-    env: Env,
+export async function findSubscription(ctx: RequestContext, env: Env,
     customerId: string,
     strategy: DiscoveryStrategy,
     identity?: any // Optional context for SUBSCRIPTION_STATUS trial creation
@@ -38,7 +39,7 @@ export async function findSubscription(
     // Intentionally queries all, checks find(ACTIVE), then sorts by expiresAtEpochMs.
     // Do not modify during Phase 2.
     if (strategy === DiscoveryStrategy.PAYMENT) {
-        const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const subs = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         let subscriptionId: string | null = null;
         let sub = null;
         let isTrial = false;
@@ -52,7 +53,7 @@ export async function findSubscription(
             subscriptionId = subs[0].subscriptionId;
             sub = subs[0];
         } else {
-            const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+            const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
             if (trials.length > 0) {
                 trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
                 subscriptionId = `TRIAL_${trials[0].hardwareId}`;
@@ -68,7 +69,7 @@ export async function findSubscription(
     // Intentionally filters ACTIVE first and sorts BOTH active and all subs.
     // Do not modify during Phase 2.
     if (strategy === DiscoveryStrategy.ADMIN_MANAGE) {
-        const subscriptions = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const subscriptions = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         let activeSub: any = null;
         const activeSubs = subscriptions.filter((s: any) => s.status === 'ACTIVE');
         
@@ -84,7 +85,7 @@ export async function findSubscription(
         let trialId = '';
         
         if (!activeSub) {
-            const existingTrials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+            const existingTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
             if (existingTrials.length > 0) {
                 existingTrials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
                 activeSub = existingTrials[0];
@@ -101,12 +102,12 @@ export async function findSubscription(
     // Intentionally preserves lack of sorting on subscriptions[0].
     // Do not modify during Phase 2.
     if (strategy === DiscoveryStrategy.ADMIN_SEARCH) {
-        const subscriptions = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const subscriptions = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         let activeSub = subscriptions.find((s: any) => s.status === 'ACTIVE') || subscriptions[0] || null;
         let isTrial = false;
         
         if (!activeSub) {
-            const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+            const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
             if (trials.length > 0) {
                 trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
                 const trial = trials[0];
@@ -129,14 +130,14 @@ export async function findSubscription(
         let sub = null;
         let isTrial = false;
         
-        const subs = await queryCollection(env, 'subscriptions', [
+        const subs = await queryCollection(ctx, env, 'subscriptions', [
             { field: 'customerId', op: 'EQUAL', value: customerId },
             { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
         ]);
         if (subs && subs.length > 0) {
             sub = subs[0];
         } else {
-            const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+            const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
             if (trials && trials.length > 0) {
                 trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
                 const trial = trials[0];
@@ -158,7 +159,7 @@ export async function findSubscription(
     // Intentionally ignores status and sorts by createdAtEpochMs.
     // Do not modify during Phase 2.
     if (strategy === DiscoveryStrategy.CUSTOMER_UPDATE) {
-        const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const subs = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         let latestSub: any = null;
         let isTrial = false;
         
@@ -166,7 +167,7 @@ export async function findSubscription(
             subs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
             latestSub = subs[0];
         } else {
-            const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+            const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
             if (trials && trials.length > 0) {
                 trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
                 const trial = trials[0];
@@ -189,10 +190,10 @@ export async function findSubscription(
     if (strategy === DiscoveryStrategy.SUBSCRIPTION_STATUS) {
         if (!identity) throw new DiscoveryError('MISSING_IDENTITY', "SUBSCRIPTION_STATUS requires identity object");
         
-        const allSubs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const allSubs = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         const cancelledSubs = allSubs.filter((s: any) => s.status === 'CANCELLED');
         
-        const allTrials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         const cancelledTrials = allTrials.filter((t: any) => t.status === 'CANCELLED');
 
         if (cancelledSubs.length > 0 || cancelledTrials.length > 0) {
@@ -209,43 +210,101 @@ export async function findSubscription(
                 throw new DiscoveryError('NO_ACTIVE_SUBSCRIPTION');
             }
 
-            const hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.installationId);
+            const hardwareTrialDoc = await getDocument(ctx, env, 'hardware_trials', identity.installationId);
             const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
             
             let trialStartsAt = now;
             let trialExpiresAt = now + THIRTY_DAYS_MS;
 
             if (!hardwareTrialDoc) {
-                if (allTrials.length > 0) {
-                    const existingTrial = allTrials.find((t: any) => t.status !== 'CANCELLED');
-                    if (existingTrial) {
-                        if (now > existingTrial.expiresAtEpochMs) {
-                            throw new DiscoveryError('TRIAL_EXPIRED');
+                const doProvision = async () => {
+                    return await LockService.withLock(ctx, env, 'inst_lock', identity.installationId, 10000, { customerId }, async () => {
+                        const latestTrialDoc = await getDocument(ctx, env, 'hardware_trials', identity.installationId);
+                        if (latestTrialDoc) {
+                            if (latestTrialDoc.customerId !== customerId) {
+                                throw new DiscoveryError('TRIAL_OWNERSHIP_MISMATCH');
+                            }
+                            if (now > latestTrialDoc.expiresAtEpochMs) {
+                                throw new DiscoveryError('TRIAL_EXPIRED');
+                            }
+                            return {
+                                subscriptionId: `TRIAL_${latestTrialDoc.hardwareId}`,
+                                customerId: latestTrialDoc.customerId,
+                                activeInstallationId: latestTrialDoc.hardwareId,
+                                planId: 'FREE_TRIAL_30',
+                                status: 'ACTIVE',
+                                expiresAtEpochMs: latestTrialDoc.expiresAtEpochMs,
+                                startsAtEpochMs: latestTrialDoc.startsAtEpochMs
+                            };
                         }
-                        throw new DiscoveryError('INSTALLATION_SUPERSEDED', undefined, { activeInstallationId: existingTrial.hardwareId });
+
+                        const latestTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+                        if (latestTrials.length > 0) {
+                            const existingTrial = latestTrials.find((t: any) => t.status !== 'CANCELLED');
+                            if (existingTrial) {
+                                if (now > existingTrial.expiresAtEpochMs) {
+                                    throw new DiscoveryError('TRIAL_EXPIRED');
+                                }
+                                throw new DiscoveryError('INSTALLATION_SUPERSEDED', undefined, { activeInstallationId: existingTrial.hardwareId });
+                            }
+                        }
+
+                        const newTrialId = identity.installationId;
+                        const newTrial = {
+                            hardwareId: newTrialId,
+                            customerId,
+                            status: 'ACTIVE',
+                            startsAtEpochMs: trialStartsAt,
+                            expiresAtEpochMs: trialExpiresAt,
+                            createdAtEpochMs: now
+                        };
+                        await setDocument(ctx, env, 'hardware_trials', newTrialId, newTrial);
+
+                        return {
+                            subscriptionId: `TRIAL_${newTrialId}`,
+                            customerId,
+                            activeInstallationId: newTrialId,
+                            planId: 'FREE_TRIAL_30',
+                            status: 'ACTIVE',
+                            expiresAtEpochMs: trialExpiresAt,
+                            startsAtEpochMs: trialStartsAt
+                        };
+                    });
+                };
+
+                try {
+                    sub = await doProvision();
+                } catch (err: any) {
+                    if (err.code === 'ALREADY_EXISTS') {
+                        await new Promise(r => setTimeout(r, 500));
+                        try {
+                            const retryTrialDoc = await getDocument(ctx, env, 'hardware_trials', identity.installationId);
+                            if (retryTrialDoc) {
+                                if (retryTrialDoc.customerId !== customerId) {
+                                    throw new DiscoveryError('TRIAL_OWNERSHIP_MISMATCH');
+                                }
+                                if (now > retryTrialDoc.expiresAtEpochMs) {
+                                    throw new DiscoveryError('TRIAL_EXPIRED');
+                                }
+                                sub = {
+                                    subscriptionId: `TRIAL_${retryTrialDoc.hardwareId}`,
+                                    customerId: retryTrialDoc.customerId,
+                                    activeInstallationId: retryTrialDoc.hardwareId,
+                                    planId: 'FREE_TRIAL_30',
+                                    status: 'ACTIVE',
+                                    expiresAtEpochMs: retryTrialDoc.expiresAtEpochMs,
+                                    startsAtEpochMs: retryTrialDoc.startsAtEpochMs
+                                };
+                            } else {
+                                sub = await doProvision();
+                            }
+                        } catch (retryErr: any) {
+                            throw new DiscoveryError('TRIAL_PROVISION_LOCKED', 'Trial provisioning is currently locked by another process.');
+                        }
+                    } else {
+                        throw err;
                     }
                 }
-
-                const newTrialId = identity.installationId;
-                const newTrial = {
-                    hardwareId: newTrialId,
-                    customerId,
-                    status: 'ACTIVE',
-                    startsAtEpochMs: trialStartsAt,
-                    expiresAtEpochMs: trialExpiresAt,
-                    createdAtEpochMs: now
-                };
-                await setDocument(env, 'hardware_trials', newTrialId, newTrial);
-
-                sub = {
-                    subscriptionId: `TRIAL_${newTrialId}`,
-                    customerId,
-                    activeInstallationId: newTrialId,
-                    planId: 'FREE_TRIAL_30',
-                    status: 'ACTIVE',
-                    expiresAtEpochMs: trialExpiresAt,
-                    startsAtEpochMs: trialStartsAt
-                };
                 isTrial = true;
             } else {
                 if (hardwareTrialDoc.customerId !== customerId) {

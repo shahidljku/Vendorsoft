@@ -1,10 +1,11 @@
+import { RequestContext } from '../services/logger';
 import { Env } from '../types';
 
 /**
  * Handles GET /v1/public/apks/:version.apk
  * Streams a chunked APK file out of Cloudflare KV back to the client.
  */
-export async function handlePublicDownloadApk(request: Request, env: Env): Promise<Response> {
+export async function handlePublicDownloadApk(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const pathParts = url.pathname.split('/');
   const filename = pathParts[pathParts.length - 1]; // e.g., "1.0.0+1.apk"
@@ -35,7 +36,7 @@ export async function handlePublicDownloadApk(request: Request, env: Env): Promi
     const chunkArrayBuffer = await env.APK_STORE.get(chunkKey, 'arrayBuffer');
     
     if (!chunkArrayBuffer) {
-      console.error(`Missing chunk ${i} for APK version ${version}`);
+      ctx.logger.error(`Missing chunk ${i} for APK version ${version}`);
       return new Response('APK file is corrupted or missing chunks', { status: 500 });
     }
 

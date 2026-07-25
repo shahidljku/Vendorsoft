@@ -1,5 +1,7 @@
-﻿import { Env, CompositeIdentity, ApiResponse } from './types';
+import { Env, CompositeIdentity, ApiResponse } from './types';
 import { getDocument, logAuditEvent } from './services/firestore';
+import { decodeBase64Url } from './cryptoEngine';
+import { RequestContext } from './services/logger';
 
 // In-memory cache for Google's public JWKS to avoid fetching on every request
 let jwksCache: any = null;
@@ -11,6 +13,7 @@ const JWKS_CACHE_TTL = 3600 * 1000; // 1 hour
  * Enforces the Zero-Trust Client Threat Model specified in SECURITY_RULES.md & API_SPECIFICATION.md Section 1.1.
  */
 export async function authenticateRequest(
+  ctx: RequestContext,
   request: Request,
   env: Env
 ): Promise<{ identity?: CompositeIdentity; errorResponse?: Response }> {
@@ -53,7 +56,7 @@ export async function authenticateRequest(
   // 1.5. Hardware Ban Check (Firestore)
   if (hardwareId) {
     try {
-      const instDoc = await getDocument(env, 'installations', hardwareId);
+      const instDoc = await getDocument(ctx, env, 'installations', hardwareId);
       if (instDoc && instDoc.status === 'BANNED') {
         return {
           errorResponse: createErrorResponse(
@@ -93,13 +96,21 @@ export async function authenticateRequest(
 }
 
 export type Role = 'ADMIN' | 'SUPERVISOR' | 'SUPPORT' | 'READ_ONLY';
-export type Permission = 'FULL_ACCESS' | 'VIEW_LOGS' | 'EDIT_CUSTOMERS';
+export type Permission = 
+  | 'FULL_ACCESS' 
+  | 'CUSTOMERS_READ' 
+  | 'CUSTOMERS_EDIT'
+  | 'DEVICES_BAN'
+  | 'TRANSFERS_APPROVE'
+  | 'AUDIT_VIEW'
+  | 'PLANS_EDIT'
+  | 'SYSTEM_CONFIG_EDIT';
 
 const ROLE_PERMISSIONS: Record<string, Permission[]> = {
-  'ADMIN': ['FULL_ACCESS', 'VIEW_LOGS', 'EDIT_CUSTOMERS'],
-  'SUPERVISOR': ['VIEW_LOGS', 'EDIT_CUSTOMERS'],
-  'SUPPORT': ['VIEW_LOGS'],
-  'READ_ONLY': ['VIEW_LOGS']
+  'ADMIN': ['FULL_ACCESS'],
+  'SUPERVISOR': ['CUSTOMERS_READ', 'CUSTOMERS_EDIT', 'AUDIT_VIEW', 'TRANSFERS_APPROVE'],
+  'SUPPORT': ['CUSTOMERS_READ', 'AUDIT_VIEW'],
+  'READ_ONLY': ['CUSTOMERS_READ']
 };
 
 export function hasPermission(role: string, permission: Permission): boolean {
@@ -112,9 +123,11 @@ export function hasPermission(role: string, permission: Permission): boolean {
  * AND enforcing Role-Based Access Control (RBAC) via the `admin_users` Firestore collection.
  */
 export async function authenticateAdminRequest(
+  ctx: RequestContext,
   request: Request,
   env: Env,
-  requiredPermission: Permission = 'FULL_ACCESS'
+  requiredPermission: Permission
+
 ): Promise<{ adminUid?: string; role?: string; errorResponse?: Response }> {
   const authHeader = request.headers.get('Authorization');
 
@@ -139,11 +152,11 @@ export async function authenticateAdminRequest(
   // Enforce Authorization (RBAC) via Firestore
   try {
     console.log(`[AUTH] Querying Firestore path: admin_users/${uid}`);
-    const adminDoc = await getDocument(env, 'admin_users', uid);
+    const adminDoc = await getDocument(ctx, env, 'admin_users', uid);
     
     if (!adminDoc) {
       console.log(`[AUTH] 403 Forbidden: Document does not exist for UID: ${uid}`);
-      await logAuditEvent(env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, reason: 'NO_DOCUMENT' });
+      await logAuditEvent(ctx, env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, reason: 'NO_DOCUMENT' });
       return {
         errorResponse: createErrorResponse(403, 'ADMIN_FORBIDDEN', 'Your account is not authorized to access the admin portal.')
       };
@@ -151,7 +164,7 @@ export async function authenticateAdminRequest(
 
     if (!adminDoc.role) {
       console.log(`[AUTH] 403 Forbidden: Document exists but has no role field for UID: ${uid}`);
-      await logAuditEvent(env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, reason: 'NO_ROLE_FIELD' });
+      await logAuditEvent(ctx, env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, reason: 'NO_ROLE_FIELD' });
       return {
         errorResponse: createErrorResponse(403, 'ADMIN_FORBIDDEN', 'Your account is not authorized to access the admin portal.')
       };
@@ -159,9 +172,9 @@ export async function authenticateAdminRequest(
 
     console.log(`[AUTH] Role found in Firestore: '${adminDoc.role}'`);
 
-    if (!hasPermission(adminDoc.role, requiredPermission)) {
+    if (!hasPermission(adminDoc.role as any, requiredPermission as any)) {
       console.log(`[AUTH] 403 Forbidden: Role '${adminDoc.role}' lacks permission '${requiredPermission}'.`);
-      await logAuditEvent(env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, attemptedRole: adminDoc.role, requiredPermission, reason: 'INSUFFICIENT_ROLE' });
+      await logAuditEvent(ctx, env, 'UNAUTHORIZED_ADMIN_ACCESS_ATTEMPT', { uid, attemptedRole: adminDoc.role, requiredPermission, reason: 'INSUFFICIENT_ROLE' });
       return {
         errorResponse: createErrorResponse(403, 'ADMIN_FORBIDDEN', `Role '${adminDoc.role}' is not authorized for this operation. Requires permission: '${requiredPermission}'.`)
       };
@@ -251,20 +264,6 @@ async function verifyFirebaseTokenCryptographically(idToken: string, expectedPro
   }
 }
 
-/**
- * Helper to decode base64url encoded JWT payload safely.
- */
-function decodeBase64Url(base64url: string): string | null {
-  try {
-    let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4 !== 0) {
-      base64 += '=';
-    }
-    return atob(base64);
-  } catch (err) {
-    return null;
-  }
-}
 
 /**
  * Generates a standardized JSON error response.

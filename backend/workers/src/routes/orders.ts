@@ -1,15 +1,17 @@
+import { RequestContext } from '../services/logger';
 import { Env, ApiResponse } from '../types';
 import { authenticateRequest, createErrorResponse } from '../authGuard';
 import { getDocument } from '../services/firestore';
 import { PaymentService } from '../services/paymentService';
+import { IdempotencyService } from '../services/idempotencyService';
 
 /**
  * Handles POST /api/v1/orders/create
  * Initiates a new Razorpay payment order for subscription upgrade/renewal.
  */
-export async function handleCreateOrder(request: Request, env: Env): Promise<Response> {
+export async function handleCreateOrder(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   // 1. Authenticate request and verify zero-trust identity headers
-  const authResult = await authenticateRequest(request, env);
+  const authResult = await authenticateRequest(ctx, request, env);
   if (authResult.errorResponse) return authResult.errorResponse;
   const identity = authResult.identity!;
 
@@ -20,9 +22,10 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
     return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing installation UUID.');
   }
 
+  let instDoc: any = null;
   // Look up customerId from installation if not passed in header
   if (!customerId) {
-    const instDoc = await getDocument(env, 'installations', installationId);
+    instDoc = await getDocument(ctx, env, 'installations', installationId);
     if (instDoc && instDoc.customerId) {
       customerId = instDoc.customerId;
     }
@@ -54,7 +57,7 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
   let durationDays = 365;
   let planName = 'Pro Annual License';
 
-  const planDoc = await getDocument(env, 'plans', planId);
+  const planDoc = await getDocument(ctx, env, 'plans', planId);
   if (planDoc) {
     if (planDoc.isActive === false) {
       return createErrorResponse(400, 'PLAN_INACTIVE', `Plan '${planId}' is no longer available for purchase.`);
@@ -79,28 +82,37 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
   const amountInr = priceInr;
   const amountPaise = priceInr * 100;
   const now = Date.now();
-  // 4. Delegate to PaymentService to perform validations and order creation
+  // 4. Delegate to PaymentService to perform validations and order creation via Idempotency Saga
   try {
-    const { razorpayOrderId } = await PaymentService.initiateOrder(
+    const resultData = await IdempotencyService.executeOrderSaga(
+      ctx,
       env,
-      { ...identity, customerId, installationUuid: installationId } as any,
-      planId,
-      planName,
-      durationDays,
-      amountInr,
-      amountPaise,
-      now
+      identity.idempotencyKey,
+      now,
+      async () => {
+        const { razorpayOrderId } = await PaymentService.initiateOrder(ctx, env,
+          { ...identity, customerId, installationUuid: installationId } as any,
+          planId,
+          planName,
+          durationDays,
+          amountInr,
+          amountPaise,
+          now,
+          instDoc
+        );
+        return {
+          razorpayOrderId,
+          amountPaise,
+          keyId: env.RAZORPAY_KEY_ID || '',
+          planId,
+          amountInr
+        };
+      }
     );
 
     const responseBody: ApiResponse = {
       success: true,
-      data: {
-        razorpayOrderId,
-        amountPaise,
-        keyId: env.RAZORPAY_KEY_ID || '',
-        planId,
-        amountInr
-      }
+      data: resultData
     };
 
     return new Response(JSON.stringify(responseBody), {
@@ -109,6 +121,12 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
     });
   } catch (err: any) {
     // Map domain errors to HTTP responses
+    if (err.code === 'ORDER_IN_PROGRESS') {
+      return createErrorResponse(409, 'ORDER_IN_PROGRESS', err.message);
+    }
+    if (err.code === 'LEASE_SUPERSEDED') {
+      return createErrorResponse(409, 'LEASE_SUPERSEDED', err.message);
+    }
     const status = err.code === 'MAINTENANCE_MODE' ? 503 :
                    (err.code === 'PAYMENTS_DISABLED' || err.code === 'INSTALLATION_BANNED' || err.code === 'INSTALLATION_REVOKED' || err.code === 'TRANSFER_REQUIRED') ? 403 :
                    err.code === 'RAZORPAY_GATEWAY_ERROR' ? 502 : 400;
@@ -120,8 +138,8 @@ export async function handleCreateOrder(request: Request, env: Env): Promise<Res
  * Handles POST /api/v1/orders/verify
  * Client fallback verification when Razorpay webhook delivery is delayed or when checkout modal closes.
  */
-export async function handleVerifyOrder(request: Request, env: Env): Promise<Response> {
-  const authResult = await authenticateRequest(request, env);
+export async function handleVerifyOrder(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
+  const authResult = await authenticateRequest(ctx, request, env);
   if (authResult.errorResponse) return authResult.errorResponse;
   const identity = authResult.identity!;
 
@@ -146,14 +164,14 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
     return createErrorResponse(400, 'MISSING_ORDER_ID', 'razorpayOrderId is required.');
   }
 
-  const paymentDoc = await getDocument(env, 'payments', orderId);
+  const paymentDoc = await getDocument(ctx, env, 'payments', orderId);
   if (!paymentDoc) {
     return createErrorResponse(404, 'ORDER_NOT_FOUND', `Order '${orderId}' was not found.`);
   }
 
   // 1. Handle explicit payment cancellation / error dismissal by user
   if (body.errorCode && body.errorCode === 'PAYMENT_CANCELLED') {
-    await PaymentService.cancelOrder(env, paymentDoc);
+    await PaymentService.cancelOrder(ctx, env, paymentDoc);
     const resp: ApiResponse = { success: true, data: { status: 'FAILED', message: 'Payment marked as failed/cancelled.' } };
     return new Response(JSON.stringify(resp), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
@@ -166,10 +184,10 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
 
   // 3. Delegate to PaymentService to Verify
   try {
-    const verifiedPayment = await PaymentService.verifyOrder(env, orderId, body.razorpayPaymentId, body.razorpaySignature);
+    const verifiedPayment = await PaymentService.verifyOrder(ctx, env, orderId, body.razorpayPaymentId, body.razorpaySignature);
 
     // 4. Delegate to PaymentService to Settle
-    const settlementResult = await PaymentService.settleOrder(env, verifiedPayment, paymentDoc);
+    const settlementResult = await PaymentService.settleOrder(ctx, env, verifiedPayment, paymentDoc);
 
     const successResp: ApiResponse = {
       success: true,
@@ -188,7 +206,7 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
       return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', err.message);
     }
     
-    console.error('Verify order error:', err);
+    ctx.logger.error('Verify order error:', err);
     return createErrorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred verifying the order.');
   }
 }

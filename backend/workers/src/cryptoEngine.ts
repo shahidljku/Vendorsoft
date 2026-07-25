@@ -4,6 +4,28 @@
  */
 
 /**
+ * Safely decodes a Base64URL string (re-pads with '=' to multiple of 4).
+ */
+export function decodeBase64Url(base64url: string): string | null {
+  try {
+    let base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4 !== 0) {
+      base64 += '=';
+    }
+    return atob(base64);
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Encodes a string into Base64URL format (stripping trailing '=').
+ */
+export function encodeBase64Url(str: string): string {
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
  * Generates a deterministic 10-character alphanumeric ID (`89A2B3C4D5`).
  */
 export function generateShortId(): string {
@@ -24,7 +46,7 @@ export function generateShortId(): string {
  */
 export async function generateSignedLeaseToken(payload: Record<string, any>, privateKeyPem: string): Promise<string> {
   const jsonStr = JSON.stringify(payload);
-  const base64Payload = btoa(jsonStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const base64Payload = encodeBase64Url(jsonStr);
   
   const encoder = new TextEncoder();
   const dataBuffer = encoder.encode(base64Payload);
@@ -56,7 +78,7 @@ export async function generateSignedLeaseToken(payload: Record<string, any>, pri
     for (let i = 0; i < signatureBytes.byteLength; i++) {
       signatureBinary += String.fromCharCode(signatureBytes[i]);
     }
-    const base64Signature = btoa(signatureBinary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const base64Signature = encodeBase64Url(signatureBinary);
     return `${base64Payload}.${base64Signature}`;
   } catch (err) {
     console.error('Failed to sign lease token with RSA Key. Ensure RSA_PRIVATE_KEY is a valid PKCS#8 PEM string.', err);

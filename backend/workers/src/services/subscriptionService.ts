@@ -1,5 +1,6 @@
+import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent, AtomicWriteOp } from './firestore';
+import { RequestContext } from './logger';
 import { Env } from '../types';
-import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent } from './firestore';
 import { findSubscription, DiscoveryStrategy } from './discovery';
 import { LockService } from './lock';
 import { SubscriptionFSM } from './fsm/subscriptionFSM';
@@ -10,23 +11,23 @@ export class SubscriptionService {
   /**
    * Extends the expiration date of the current active subscription or trial.
    */
-  static async extendSubscription(env: Env, customerId: string, daysToAdd: number): Promise<{ success: boolean; message: string }> {
+  static async extendSubscription(ctx: RequestContext, env: Env, customerId: string, daysToAdd: number, auditOp?: AtomicWriteOp): Promise<{ success: boolean; message: string }> {
     if (typeof daysToAdd !== 'number') {
       const err: any = new Error('daysToAdd must be a number.');
       err.code = 'MISSING_DAYS';
       throw err;
     }
 
-    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
+    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
     const now = Date.now();
 
     const doWork = async () => {
       if (subscriptionId) {
         if (isTrial && trialId) {
-          const trial = await getDocument(env, 'hardware_trials', trialId);
+          const trial = await getDocument(ctx, env, 'hardware_trials', trialId);
           if (trial) activeSub = trial;
         } else {
-          const sub = await getDocument(env, 'subscriptions', subscriptionId);
+          const sub = await getDocument(ctx, env, 'subscriptions', subscriptionId);
           if (sub) activeSub = sub;
         }
       }
@@ -35,7 +36,7 @@ export class SubscriptionService {
 
       if (!activeSub) {
         let hwId = null;
-        const installs = await queryCollection(env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const installs = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
         if (installs.length > 0) {
           installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
           hwId = installs[0].hardwareId || installs[0].installationId;
@@ -53,17 +54,24 @@ export class SubscriptionService {
           createdAtEpochMs: now,
           updatedAtEpochMs: now
         };
-        await setDocument(env, 'subscriptions', newSubId, activeSub);
+        const writes: AtomicWriteOp[] = [
+          { collectionPath: 'subscriptions', documentId: newSubId, data: activeSub }
+        ];
+        if (auditOp) writes.push(auditOp);
+        await commitAtomicWrites(ctx, env, writes);
       } else {
         activeSub.expiresAtEpochMs = newExpiresAt;
         activeSub.status = SubscriptionFSM.transition(activeSub, 'ACTIVATE');
         activeSub.updatedAtEpochMs = now;
         
+        const writes: AtomicWriteOp[] = [];
         if (isTrial && trialId) {
-          await setDocument(env, 'hardware_trials', trialId, activeSub);
+          writes.push({ collectionPath: 'hardware_trials', documentId: trialId, data: activeSub });
         } else {
-          await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
+          writes.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
         }
+        if (auditOp) writes.push(auditOp);
+        await commitAtomicWrites(ctx, env, writes);
       }
 
       return { success: true, message: 'Subscription extended successfully' };
@@ -71,7 +79,7 @@ export class SubscriptionService {
 
     if (subscriptionId) {
       try {
-        return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
+        return await LockService.withLock(ctx, env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
       } catch (err: any) {
         if (err.code === 'ALREADY_EXISTS') {
           const newErr: any = new Error('Subscription is currently locked by another process.');
@@ -88,33 +96,33 @@ export class SubscriptionService {
   /**
    * Changes the plan of the current subscription, generating a new subscription record if needed.
    */
-  static async changePlan(env: Env, customerId: string, newPlanId: string): Promise<{ success: boolean; message: string }> {
+  static async changePlan(ctx: RequestContext, env: Env, customerId: string, newPlanId: string, auditOp?: AtomicWriteOp): Promise<{ success: boolean; message: string }> {
     if (!newPlanId) {
       const err: any = new Error('newPlanId is required.');
       err.code = 'MISSING_PLAN_ID';
       throw err;
     }
 
-    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
+    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
     const now = Date.now();
 
     const doWork = async () => {
       if (subscriptionId) {
         if (isTrial && trialId) {
-          const trial = await getDocument(env, 'hardware_trials', trialId);
+          const trial = await getDocument(ctx, env, 'hardware_trials', trialId);
           if (trial) activeSub = trial;
         } else {
-          const sub = await getDocument(env, 'subscriptions', subscriptionId);
+          const sub = await getDocument(ctx, env, 'subscriptions', subscriptionId);
           if (sub) activeSub = sub;
         }
       }
 
-      const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [];
+      const batchWrites: Array<AtomicWriteOp> = [];
       
       if (isTrial || !activeSub) {
         let hwId = activeSub?.hardwareId || activeSub?.activeInstallationId;
         if (!hwId) {
-          const installs = await queryCollection(env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+          const installs = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
           if (installs.length > 0) {
             installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
             hwId = installs[0].hardwareId || installs[0].installationId;
@@ -141,7 +149,7 @@ export class SubscriptionService {
         batchWrites.push({ collectionPath: 'subscriptions', documentId: newSubId, data: newSub });
         
         if (isTrial && trialId) {
-          const oldTrial = await getDocument(env, 'hardware_trials', trialId);
+          const oldTrial = await getDocument(ctx, env, 'hardware_trials', trialId);
           if (oldTrial) {
             batchWrites.push({ collectionPath: 'hardware_trials', documentId: trialId, data: { ...oldTrial, expiresAtEpochMs: 0 } });
           }
@@ -152,13 +160,14 @@ export class SubscriptionService {
         batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
       }
       
-      await commitAtomicWrites(env, batchWrites);
+      if (auditOp) batchWrites.push(auditOp);
+      await commitAtomicWrites(ctx, env, batchWrites);
       return { success: true, message: 'Subscription plan changed successfully' };
     };
 
     if (subscriptionId) {
       try {
-        return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
+        return await LockService.withLock(ctx, env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
       } catch (err: any) {
         if (err.code === 'ALREADY_EXISTS') {
           const newErr: any = new Error('Subscription is currently locked by another process.');
@@ -173,58 +182,34 @@ export class SubscriptionService {
   }
 
   /**
-   * Cancels the active subscription or trial. Note that revocation of devices is 
-   * an InstallationService responsibility and is left to be orchestrated inline by the route for now.
+   * Builds the atomic mutations required to cancel an active subscription or trial.
+   * Returns a DomainMutation containing the writes.
    */
-  static async cancelSubscription(env: Env, customerId: string): Promise<{ success: boolean; hardwareIdToRevoke: string | null }> {
-    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
-    const now = Date.now();
+  static buildCancellation(
+    activeSub: any,
+    isTrial: boolean,
+    trialId: string | null,
+    now: number
+  ): DomainMutation<{ hardwareIdToRevoke: string | null }> {
+    const hardwareIdToRevoke = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
+    const writes: AtomicWriteOp[] = [];
 
-    const doWork = async () => {
-      if (!activeSub) {
-        const err: any = new Error('No active subscription found.');
-        err.code = 'SUBSCRIPTION_NOT_FOUND';
-        throw err;
-      }
-
-      if (subscriptionId) {
-        if (isTrial && trialId) {
-          const trial = await getDocument(env, 'hardware_trials', trialId);
-          if (trial) activeSub = trial;
-        } else {
-          const sub = await getDocument(env, 'subscriptions', subscriptionId);
-          if (sub) activeSub = sub;
-        }
-      }
-
-      const hardwareIdToRevoke = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
-      
-      if (isTrial && trialId) {
-        activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
-        await setDocument(env, 'hardware_trials', trialId, activeSub);
-      } else if (activeSub.subscriptionId) {
-        activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
-        activeSub.updatedAtEpochMs = now;
-        await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
-      }
-
-      return { success: true, hardwareIdToRevoke };
+    const updatedSub = {
+      ...activeSub,
+      status: SubscriptionFSM.transition(activeSub, 'CANCEL'),
+      updatedAtEpochMs: now
     };
 
-    if (subscriptionId) {
-      try {
-        return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
-      } catch (err: any) {
-        if (err.code === 'ALREADY_EXISTS') {
-          const newErr: any = new Error('Subscription is currently locked by another process.');
-          newErr.code = 'CONCURRENT_MUTATION_LOCKED';
-          throw newErr;
-        }
-        throw err;
-      }
-    } else {
-      return await doWork();
+    if (isTrial && trialId) {
+      writes.push({ collectionPath: 'hardware_trials', documentId: trialId, data: updatedSub });
+    } else if (activeSub.subscriptionId) {
+      writes.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: updatedSub });
     }
+
+    return {
+      writes,
+      result: { hardwareIdToRevoke }
+    };
   }
 
   /**
@@ -232,7 +217,10 @@ export class SubscriptionService {
    * Returns a DomainMutation containing the writes and the newly generated signedLeaseToken.
    */
   static async buildTransferOwnership(
-    env: Env, 
+    subDoc: any | null,
+    isTrial: boolean,
+    targetHardwareTrial: any | null,
+    secretKey: string,
     subscriptionId: string, 
     customerId: string, 
     oldInstallationId: string, 
@@ -240,26 +228,7 @@ export class SubscriptionService {
     newHardwareId: string,
     now: number
   ): Promise<DomainMutation<{ signedLeaseToken: string }>> {
-    let sub: any = null;
-    let isTrial = false;
-    
-    if (subscriptionId.startsWith('TRIAL_')) {
-      isTrial = true;
-      const hardwareId = subscriptionId.replace('TRIAL_', '');
-      const trial = await getDocument(env, 'hardware_trials', hardwareId);
-      if (trial) {
-        sub = {
-          subscriptionId,
-          customerId: trial.customerId,
-          activeInstallationId: trial.hardwareId,
-          planId: 'FREE_TRIAL_30',
-          startsAtEpochMs: trial.startedAtEpochMs,
-          expiresAtEpochMs: trial.expiresAtEpochMs
-        };
-      }
-    } else {
-      sub = await getDocument(env, 'subscriptions', subscriptionId);
-    }
+    let sub = subDoc;
 
     if (!sub) {
       const err: any = new Error('The subscription or trial associated with this transfer no longer exists.');
@@ -274,15 +243,14 @@ export class SubscriptionService {
     }
 
     if (isTrial) {
-      const trialHistory = await getDocument(env, 'hardware_trials', newHardwareId);
-      if (trialHistory) {
+      if (targetHardwareTrial) {
         const err: any = new Error('The receiving device has already used a Free Trial. Transfer aborted.');
         err.code = 'TRIAL_ALREADY_USED';
         throw err;
       }
     }
 
-    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+
     const leasePayload = {
       subscriptionId: sub.subscriptionId,
       customerId: sub.customerId,
@@ -309,7 +277,12 @@ export class SubscriptionService {
           startedAtEpochMs: sub.startsAtEpochMs,
           expiresAtEpochMs: sub.expiresAtEpochMs,
           customerId: sub.customerId,
-          trialUsed: true
+          trialUsed: true,
+          signedLeaseToken,
+          leaseIssuedAtEpochMs: now,
+          lastLeasePlanId: sub.planId || 'FREE_TRIAL_30',
+          lastLeaseDeviceId: newHardwareId,
+          updatedAtEpochMs: now
         }
       });
       writes.push({
@@ -331,6 +304,9 @@ export class SubscriptionService {
           ...sub,
           activeInstallationId: newInstallationId,
           signedLeaseToken,
+          leaseIssuedAtEpochMs: now,
+          lastLeasePlanId: sub.planId,
+          lastLeaseDeviceId: newInstallationId,
           updatedAtEpochMs: now
         }
       });
@@ -344,7 +320,8 @@ export class SubscriptionService {
    * Returns a DomainMutation containing the writes, the newly generated signedLeaseToken, and the new expiry.
    */
   static async buildProvisioning(
-    env: Env,
+    subDoc: any | null,
+    secretKey: string,
     subscriptionId: string,
     customerId: string,
     installationId: string,
@@ -353,27 +330,6 @@ export class SubscriptionService {
     durationDays: number,
     now: number
   ): Promise<DomainMutation<{ signedLeaseToken: string, newExpiresAt: number }>> {
-    let subDoc: any = null;
-    let isTrial = false;
-
-    if (subscriptionId.startsWith('TRIAL_')) {
-      isTrial = true;
-      const hardwareId = subscriptionId.replace('TRIAL_', '');
-      const trial = await getDocument(env, 'hardware_trials', hardwareId);
-      if (trial) {
-        subDoc = {
-          subscriptionId,
-          customerId: trial.customerId,
-          activeInstallationId: trial.hardwareId,
-          planId: 'FREE_TRIAL_30',
-          status: trial.expiresAtEpochMs > now ? 'ACTIVE' : 'EXPIRED',
-          expiresAtEpochMs: trial.expiresAtEpochMs,
-          startsAtEpochMs: trial.startsAtEpochMs
-        };
-      }
-    } else {
-      subDoc = await getDocument(env, 'subscriptions', subscriptionId);
-    }
 
     if (subDoc && subDoc.status === 'ACTIVE' && subDoc.expiresAtEpochMs > now) {
       if (subDoc.activeInstallationId && subDoc.activeInstallationId !== installationId) {
@@ -401,7 +357,6 @@ export class SubscriptionService {
       issuedAt: now
     };
 
-    const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
     const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
 
     const writes = [{
@@ -417,6 +372,9 @@ export class SubscriptionService {
         startsAtEpochMs: leasePayload.startsAtEpochMs,
         expiresAtEpochMs: newExpiresAt,
         signedLeaseToken,
+        leaseIssuedAtEpochMs: now,
+        lastLeasePlanId: planId,
+        lastLeaseDeviceId: installationId,
         updatedAtEpochMs: now
       }
     }];

@@ -2,6 +2,22 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { resetTestEnv, getMockEnv, mockFirestore, TestClock } from '../setup';
 import { handleRazorpayWebhook } from '../../src/webhooks';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Refund Saga Integration', () => {
   let env: any;
 
@@ -52,7 +68,7 @@ describe('Refund Saga Integration', () => {
       body: JSON.stringify(webhookPayload)
     });
 
-    const response = await handleRazorpayWebhook(request, env);
+    const response = await handleRazorpayWebhook(mockCtx, request, env);
     expect(response.status).toBe(200); // We return 200 to acknowledge webhook handling
 
     // 4. Verify Outcomes

@@ -1,6 +1,23 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { resetTestEnv, getMockEnv, mockFirestore, TestClock } from '../setup';
+import { resetTestEnv, getMockEnv, mockFirestore, mockLockService, TestClock } from '../setup';
 import { TransferService } from '../../src/services/transferService';
+import { handleAdminManageSubscription } from '../../src/routes/admin';
+
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
 
 describe('Transfer Integration & Outcomes', () => {
   let env: any;
@@ -42,7 +59,7 @@ describe('Transfer Integration & Outcomes', () => {
 
     // 2. Execute Transfer Workflow
     const identity = { hardwareId: 'hw_1', uid: 'uid_1', installationId: oldInstId, platform: 'android', appVersion: '1.0' } as any;
-    const { data: result } = await TransferService.approveTransfer(env, transferId, identity);
+    const { data: result } = await TransferService.approveTransfer(mockCtx, env, transferId, identity);
 
     // 3. Verify Outcomes
     expect(result.status).toBe('APPROVED');
@@ -62,5 +79,42 @@ describe('Transfer Integration & Outcomes', () => {
 
     // D) Commit was atomic
     expect(mockFirestore.commitAtomicWrites).toHaveBeenCalled();
+  });
+
+  it('AUD-008: Standalone Trial Transfer Locking - enforces transfer_lock on admin trial transfer and prevents concurrent transfer collision', async () => {
+    // 1. Setup initial state with only a standalone hardware trial (no subscription doc)
+    const customerId = 'cust_trial_only';
+    const oldInstId = 'hw_old_trial';
+    const newInstId = 'hw_new_trial';
+    
+    mockFirestore._db.set(`installations/${oldInstId}`, { installationId: oldInstId, hardwareId: oldInstId, customerId, status: 'ACTIVE' });
+    mockFirestore._db.set(`hardware_trials/${oldInstId}`, {
+      hardwareId: oldInstId,
+      customerId,
+      status: 'ACTIVE',
+      expiresAtEpochMs: TestClock.now() + 86400000
+    });
+
+    // 2. Simulate LockService ALREADY_EXISTS when transfer_lock is requested on TRIAL_hw_old_trial
+    mockLockService.withLock.mockImplementationOnce(async (mockCtx: any, env: any, lockType: string, resourceId: string, timeoutMs: number, metadata: any, doWork: any) => {
+      expect(lockType).toBe('transfer_lock');
+      expect(resourceId).toBe(`TRIAL_${oldInstId}`);
+      const err: any = new Error('Lock collision');
+      err.code = 'ALREADY_EXISTS';
+      throw err;
+    });
+
+    const req = new Request(`https://api.vendsoft.com/v1/admin/customers/${customerId}/manage-subscription`, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'TRANSFER', newHardwareId: newInstId })
+    });
+
+    // 3. Execute admin transfer on standalone trial under lock contention
+    const res = await handleAdminManageSubscription(mockCtx, req, env, 'admin_uid', customerId);
+    
+    // 4. Verify 409 CONCURRENT_MUTATION_LOCKED is returned instead of uncoordinated write
+    expect(res.status).toBe(409);
+    const body = await res.json() as any;
+    expect(body.error.code).toBe('CONCURRENT_MUTATION_LOCKED');
   });
 });

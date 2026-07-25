@@ -2,6 +2,22 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { resetTestEnv, getMockEnv, mockFirestore, TestClock } from '../setup';
 import { handleRazorpayWebhook } from '../../src/webhooks';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Recovery & Retry Testing', () => {
   let env: any;
 
@@ -35,7 +51,7 @@ describe('Recovery & Retry Testing', () => {
       body: JSON.stringify(webhookPayload)
     });
 
-    const response = await handleRazorpayWebhook(request, env);
+    const response = await handleRazorpayWebhook(mockCtx, request, env);
     expect(response.status).toBe(200);
 
     // 3. Verify Outcome

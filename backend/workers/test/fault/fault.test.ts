@@ -3,6 +3,22 @@ import { resetTestEnv, getMockEnv, mockFirestore, TestClock } from '../setup';
 import { PaymentService } from '../../src/services/paymentService';
 import { handleRazorpayWebhook } from '../../src/webhooks';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Fault Injection & Partial Writes', () => {
   let env: any;
 
@@ -43,8 +59,8 @@ describe('Fault Injection & Partial Writes', () => {
       body: JSON.stringify(webhookPayload)
     });
 
-    const response = await handleRazorpayWebhook(request, env);
-    expect(response.status).toBe(500); // Because it's an unexpected error, webhook retries
+    const response = await handleRazorpayWebhook(mockCtx, request, env);
+    expect(response.status).toBe(200); // Webhook always enqueues and returns 200. Queue handles retries.
 
     // 4. Verify OUTCOMES (No Partial Writes)
     // A) Payment should STILL be INITIATED, not SUCCESS

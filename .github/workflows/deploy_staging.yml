@@ -1,0 +1,67 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  WORKER_VERSION: ${{ github.sha }}
+  GIT_COMMIT: ${{ github.sha }}
+  BUILD_TIMESTAMP: ${{ github.event.repository.updated_at }}
+
+jobs:
+  # 1. Reuse the Quality Gate
+  quality-gate:
+    uses: ./.github/workflows/quality_gate.yml
+
+  # 2. Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/workers
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/workers/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Deploy to Cloudflare (Staging)
+        run: npx wrangler deploy --env staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  # 3. Post-Deployment Verification
+  post-deploy-verification:
+    name: Post-Deployment Verification
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Health Endpoint
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging-api.vendsoft.com/v1/health)
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Health check failed with status $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Verify Admin Diagnostics
+        run: |
+          # Requires staging Admin JWT secret configured in GitHub
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.STAGING_ADMIN_JWT }}" https://staging-api.vendsoft.com/v1/admin/diagnostics)
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Diagnostics check failed with status $HTTP_STATUS"
+            exit 1
+          fi

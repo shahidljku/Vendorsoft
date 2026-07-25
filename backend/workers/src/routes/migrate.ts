@@ -1,3 +1,4 @@
+import { RequestContext } from '../services/logger';
 import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { queryCollection, commitAtomicWrites, logAuditEvent } from '../services/firestore';
 import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
@@ -21,7 +22,7 @@ MQIDAQAB
  * Phase 5: Automatically migrates historical offline RSA license keys into modern Cloudflare Worker
  * composite device leases without double-charging or downtime.
  */
-export async function handleMigrateLegacyKey(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleMigrateLegacyKey(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     const body: any = await request.json();
     let { legacyLicenseKey } = body;
@@ -73,7 +74,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
     const legacyKeyHash = await computeSha256Hash(legacyLicenseKey);
 
     // Check if already migrated
-    const existingSubs = await queryCollection(env, 'subscriptions', [
+    const existingSubs = await queryCollection(ctx, env, 'subscriptions', [
       { field: 'legacyKeyHash', op: 'EQUAL', value: legacyKeyHash }
     ]);
 
@@ -169,6 +170,9 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       startsAtEpochMs: now,
       expiresAtEpochMs,
       signedLeaseToken,
+      leaseIssuedAtEpochMs: now,
+      lastLeasePlanId: 'LEGACY_MIGRATED',
+      lastLeaseDeviceId: targetInstallationId,
       legacyKeyHash,
       createdAtEpochMs: now,
       updatedAtEpochMs: now
@@ -180,8 +184,8 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       { collectionPath: 'subscriptions', documentId: subscriptionId, data: subscriptionRecord }
     ];
 
-    await commitAtomicWrites(env, batchWrites);
-    await logAuditEvent(env, 'MIGRATED_LEGACY_RSA_LICENSE', {
+    await commitAtomicWrites(ctx, env, batchWrites);
+    await logAuditEvent(ctx, env, 'MIGRATED_LEGACY_RSA_LICENSE', {
       customerId,
       installationId: targetInstallationId,
       subscriptionId,
@@ -209,7 +213,7 @@ export async function handleMigrateLegacyKey(request: Request, env: Env, identit
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleMigrateLegacyKey:', err);
+    ctx.logger.error('Error in handleMigrateLegacyKey:', err);
     return createErrorResponse(500, 'MIGRATION_FAILED', `Server error during legacy key migration: ${err.message || err}`);
   }
 }

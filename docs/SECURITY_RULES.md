@@ -14,6 +14,18 @@ VendSoft operates on Android devices controlled by end users under a **Zero-Trus
 | **Transfer Spam & Zombie Locks** | Malicious actors flood `/transfers/request` to lock up a legitimate vendor's active subscription with pending transfer collisions. | **Transfer Safety Enforcement**: Cloudflare Workers enforce that **only ONE pending transfer is allowed per subscription** at a time. If a pending transfer is unclaimed, it expires precisely after **24 hours (`serverTimestamp() + 24 hours`)**, unlocking the request queue. | **HIGH** |
 | **Replay & Duplicate Webhook Flooding** | Network retries or attacker replay loops send identical `order.paid` webhooks to double-extend annual subscriptions. | **HMAC Signatures & Transaction Idempotency**: Workers compute HMAC SHA-256 signatures against `x-razorpay-signature` and verify `created_at` age (`<10m`). Inside `runTransaction`, if `payments[orderId].status == "SUCCESS"`, the transaction aborts write operations cleanly without double-granting. | **HIGH** |
 | **Client Spoofing of Global Configuration** | Attackers attempt to write to `/system_configs/global` to turn off `maintenanceMode` or bypass minimum version checks. | **Impenetrable Read-Only Rules**: `system_configs` has `allow write: if false;` across all client SDK access. Only Cloudflare Workers via Service Accounts can alter global switches. | **CRITICAL** |
+### 1.2 Phase 8 Extended Threat Model
+
+| Domain | Threat / Attack Vector | Architectural Countermeasure | Severity |
+| :--- | :--- | :--- | :--- |
+| **Authentication** | JWT Forgery & Algorithm Downgrade | Strict `RSASSA-PKCS1-v1_5` enforcement using Google's JWKS. Hardcoded algorithm prevents `alg: none` bypasses. | **CRITICAL** |
+| **Authentication** | Expired / Revoked Tokens | `authGuard` verifies `exp` against `Date.now()`. Token TTL is strictly enforced. | **HIGH** |
+| **Authorization** | Horizontal & Vertical Privilege Escalation | Explicit Role-Based Access Control (RBAC) enforced dynamically per-route. Default-deny policy (`FULL_ACCESS` fallback) blocks unintended execution. | **CRITICAL** |
+| **API Abuse** | Brute Force & Transfer Spam | Centralized sliding-window rate limiting via Cloudflare KV (`RateLimitPolicies`). Throttles anomalous spikes per Identity Key. | **HIGH** |
+| **API Abuse** | Payment / Webhook Replay | Transaction idempotency keys (`x-idempotency-key`) and Razorpay HMAC signature validation blocks double-settlement. | **HIGH** |
+| **Infrastructure** | Secret & Credential Leakage | Centralized `LoggerService` scrubs PI and secrets. Error payloads are statically mapped (no raw stack traces). | **CRITICAL** |
+| **Availability** | Request Floods & Expensive Queries | KV Rate Limiters act as an application-layer WAF. Firestore query structures (`mask`) minimize payload bloat. | **MEDIUM** |
+| **Supply Chain** | Dependency Compromise | Zero-trust deployment pipeline. Production dependencies are pinned. HTTP Security headers (CSP, HSTS) block client-side injection. | **HIGH** |
 
 
 ---

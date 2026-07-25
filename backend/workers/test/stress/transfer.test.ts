@@ -2,6 +2,22 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { resetTestEnv, getMockEnv, mockFirestore, mockLockService, TestClock } from '../setup';
 import { TransferService } from '../../src/services/transferService';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Transfer Contention & Concurrency', () => {
   let env: any;
 
@@ -30,7 +46,7 @@ describe('Transfer Contention & Concurrency', () => {
     let isLocked = false;
     const lockWaiters: (() => void)[] = [];
     
-    mockLockService.withLock.mockImplementation(async (env, lockType, resourceId, timeoutMs, metadata, doWork) => {
+    mockLockService.withLock.mockImplementation(async (mockCtx, env, lockType, resourceId, timeoutMs, metadata, doWork) => {
       if (isLocked) {
         await new Promise<void>(resolve => {
           lockWaiters.push(resolve);
@@ -50,7 +66,7 @@ describe('Transfer Contention & Concurrency', () => {
     const requests = Array.from({ length: 10 }).map(() => {
       const identity = { hardwareId: newHardwareId, uid: 'uid_1', platform: 'android', appVersion: '1.0', installationUuid: 'inst_new' } as any;
       // Wrap in a promise that catches errors so Promise.all doesn't reject early
-      return TransferService.requestTransfer(env, customerId, subId, undefined, identity, 'Samsung').catch(e => e);
+      return TransferService.requestTransfer(mockCtx, env, customerId, subId, undefined, identity, 'Samsung').catch(e => e);
     });
 
     const results = await Promise.all(requests);

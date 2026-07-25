@@ -1,4 +1,21 @@
+import { RequestContext } from './logger';
 import { Env } from '../types';
+import { 
+  executeWithTimeout, 
+  withRetry, 
+  getCircuitBreaker, 
+  ResiliencePolicies,
+  LatencyWarningBudgets
+} from './resilience';
+
+const isTransientFirestoreError = (err: any) => {
+  const str = String(err);
+  if (str.includes('ALREADY_EXISTS') || str.includes('FAILED_PRECONDITION')) return false;
+  if (str.includes('TimeoutError')) return true;
+  if (str.match(/error \((500|502|503|504)\)/)) return true;
+  if (str.includes('fetch') || str.includes('network') || str.includes('ECONNRESET')) return true;
+  return false;
+};
 
 /**
  * Service Account JSON format expected in Env.FIRESTORE_SA_KEY
@@ -22,7 +39,7 @@ let cachedToken: { accessToken: string; expiresAt: number } | null = null;
 /**
  * Retrieves a valid OAuth2 Access Token for Google Cloud Firestore via Service Account Web Crypto RSA signing.
  */
-export async function getFirestoreAccessToken(env: Env): Promise<string> {
+export async function getFirestoreAccessToken(ctx: RequestContext, env: Env): Promise<string> {
   // Return cached token if valid for at least 60 more seconds
   if (cachedToken && cachedToken.expiresAt > Date.now() + 60000) {
     return cachedToken.accessToken;
@@ -119,46 +136,58 @@ export const localStore = new Map<string, Record<string, any>>();
 /**
  * Reads a single document from Google Cloud Firestore via REST API (or localStore during local dev).
  */
-export async function getDocument(env: Env, collectionPath: string, documentId: string): Promise<any | null> {
-  if (!env.FIRESTORE_SA_KEY) {
-    return localStore.get(`${collectionPath}/${documentId}`) || null;
-  }
+export async function getDocument(ctx: RequestContext, env: Env, collectionPath: string, documentId: string, mask?: string[]): Promise<any | null> {
+  return ctx.telemetry.measure('db.firestore.read', { collectionPath, documentId }, async () => {
+    return getCircuitBreaker('firestore', ResiliencePolicies.firestoreRead.circuitBreaker).execute(ctx, async () => {
+      return withRetry(ResiliencePolicies.firestoreRead.retry, async () => {
+        if (!env.FIRESTORE_SA_KEY) {
+          return localStore.get(`${collectionPath}/${documentId}`) || null;
+        }
 
-  const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}/${documentId}`;
+        const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
+        let url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}/${documentId}`;
+        
+        if (mask && mask.length > 0) {
+          const params = mask.map(f => `mask.fieldPaths=${encodeURIComponent(f)}`).join('&');
+          url += `?${params}`;
+        }
 
-  // If we don't have Service Account keys configured locally yet (e.g., local dev before secrets injected),
-  // attempt public/unauthenticated read first or return fallback mock if safe
-  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (env.FIRESTORE_SA_KEY) {
-    try {
-      const token = await getFirestoreAccessToken(env);
-      headers['Authorization'] = `Bearer ${token}`;
-    } catch (err) {
-      console.error('Error getting Service Account token for Firestore read:', err);
-    }
-  }
+        let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (env.FIRESTORE_SA_KEY) {
+          try {
+            const token = await getFirestoreAccessToken(ctx, env);
+            headers['Authorization'] = `Bearer ${token}`;
+          } catch (err) {
+            ctx.logger.error('Error getting Service Account token for Firestore read:', err);
+          }
+        }
 
-  const response = await fetch(url, { method: 'GET', headers });
+        const response = await executeWithTimeout(
+          ResiliencePolicies.firestoreRead.timeoutMs,
+          (signal) => fetch(url, { method: 'GET', headers, signal })
+        );
 
-  if (response.status === 404) {
-    return null;
-  }
+        if (response.status === 404) {
+          return null;
+        }
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Firestore getDocument error (${response.status}): ${errText}`);
-  }
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Firestore getDocument error (${response.status}): ${errText}`);
+        }
 
-  const data = await response.json();
-  return parseFirestoreDocument(data);
+        const data = await response.json();
+        return parseFirestoreDocument(data);
+      }, isTransientFirestoreError);
+    });
+  }, LatencyWarningBudgets.firestoreRead);
 }
 
 /**
  * Deletes a document by ID.
  */
-export async function deleteDocument(env: Env, collectionPath: string, documentId: string): Promise<boolean> {
-  const token = await getFirestoreAccessToken(env);
+export async function deleteDocument(ctx: RequestContext, env: Env, collectionPath: string, documentId: string): Promise<boolean> {
+  const token = await getFirestoreAccessToken(ctx, env);
   const url = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${collectionPath}/${documentId}`;
 
   const response = await fetch(url, {
@@ -169,7 +198,7 @@ export async function deleteDocument(env: Env, collectionPath: string, documentI
   });
 
   if (!response.ok) {
-    console.error(`Failed to delete ${collectionPath}/${documentId}:`, await response.text());
+    ctx.logger.error(`Failed to delete ${collectionPath}/${documentId}:`, await response.text());
     return false;
   }
   return true;
@@ -178,37 +207,39 @@ export async function deleteDocument(env: Env, collectionPath: string, documentI
 /**
  * Queries documents in a collection matching specified filters via Firestore REST `:runQuery` (or localStore during local dev).
  */
-export async function queryCollection(
-  env: Env,
+export async function queryCollection(ctx: RequestContext, env: Env,
   collectionPath: string,
   filters: Array<{ field: string; op: 'EQUAL' | 'GREATER_THAN' | 'LESS_THAN'; value: any }>
 ): Promise<any[]> {
-  if (!env.FIRESTORE_SA_KEY) {
-    const results: any[] = [];
-    for (const [key, doc] of localStore.entries()) {
-      if (!key.startsWith(`${collectionPath}/`)) continue;
-      let matches = true;
-      for (const filter of filters) {
-        const docVal = doc[filter.field];
-        if (filter.op === 'EQUAL' && docVal !== filter.value) matches = false;
-        else if (filter.op === 'GREATER_THAN' && !(docVal > filter.value)) matches = false;
-        else if (filter.op === 'LESS_THAN' && !(docVal < filter.value)) matches = false;
-      }
-      if (matches) results.push(doc);
-    }
-    return results;
-  }
+  return ctx.telemetry.measure('db.firestore.query', { collectionPath }, async () => {
+    return getCircuitBreaker('firestore', ResiliencePolicies.firestoreRead.circuitBreaker).execute(ctx, async () => {
+      return withRetry(ResiliencePolicies.firestoreRead.retry, async () => {
+        if (!env.FIRESTORE_SA_KEY) {
+          const results: any[] = [];
+          for (const [key, doc] of localStore.entries()) {
+            if (!key.startsWith(`${collectionPath}/`)) continue;
+            let matches = true;
+            for (const filter of filters) {
+              const docVal = doc[filter.field];
+              if (filter.op === 'EQUAL' && docVal !== filter.value) matches = false;
+              else if (filter.op === 'GREATER_THAN' && !(docVal > filter.value)) matches = false;
+              else if (filter.op === 'LESS_THAN' && !(docVal < filter.value)) matches = false;
+            }
+            if (matches) results.push(doc);
+          }
+          return results;
+        }
 
-  const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
+        const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
+        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`;
 
-  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  try {
-    const token = await getFirestoreAccessToken(env);
-    headers['Authorization'] = `Bearer ${token}`;
-  } catch (err) {
-    console.error('Error getting Service Account token for Firestore query:', err);
-  }
+        let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        try {
+          const token = await getFirestoreAccessToken(ctx, env);
+          headers['Authorization'] = `Bearer ${token}`;
+        } catch (err) {
+          ctx.logger.error('Error getting Service Account token for Firestore query:', err);
+        }
 
   const filterExpressions = filters.map((f) => {
     let valObj: any = { stringValue: String(f.value) };
@@ -242,22 +273,28 @@ export async function queryCollection(
     }
   };
 
-  const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(queryPayload) });
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Firestore queryCollection error (${response.status}): ${errText}`);
-  }
+        const response = await executeWithTimeout(
+          ResiliencePolicies.firestoreRead.timeoutMs,
+          (signal) => fetch(url, { method: 'POST', headers, body: JSON.stringify(queryPayload), signal })
+        );
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Firestore queryCollection error (${response.status}): ${errText}`);
+        }
 
-  const rawResults = await response.json();
-  if (!Array.isArray(rawResults)) return [];
+        const rawResults = await response.json();
+        if (!Array.isArray(rawResults)) return [];
 
-  const parsedList: any[] = [];
-  for (const item of rawResults) {
-    if (item && item.document && item.document.fields) {
-      parsedList.push(parseFields(item.document.fields));
-    }
-  }
-  return parsedList;
+        const parsedList: any[] = [];
+        for (const item of rawResults) {
+          if (item && item.document && item.document.fields) {
+            parsedList.push(parseFields(item.document.fields));
+          }
+        }
+        return parsedList;
+      }, isTransientFirestoreError);
+    });
+  }, LatencyWarningBudgets.firestoreRead);
 }
 
 /**
@@ -325,36 +362,48 @@ export function formatFirestoreDocument(obj: Record<string, any>): { fields: Rec
   return { fields };
 }
 
-export async function setDocument(env: Env, collectionPath: string, documentId: string, data: Record<string, any>): Promise<void> {
-  if (!env.FIRESTORE_SA_KEY) {
-    localStore.set(`${collectionPath}/${documentId}`, data);
-    return;
-  }
+export async function setDocument(ctx: RequestContext, env: Env, collectionPath: string, documentId: string, data: Record<string, any>): Promise<void> {
+  return ctx.telemetry.measure('db.firestore.write', { collectionPath, documentId }, async () => {
+    return getCircuitBreaker('firestore', ResiliencePolicies.firestoreIdempotentWrite.circuitBreaker).execute(ctx, async () => {
+      return withRetry(ResiliencePolicies.firestoreIdempotentWrite.retry, async () => {
+        if (!env.FIRESTORE_SA_KEY) {
+          localStore.set(`${collectionPath}/${documentId}`, data);
+          return;
+        }
 
-  const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}/${documentId}`;
+        const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
+        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionPath}/${documentId}`;
 
-  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (env.FIRESTORE_SA_KEY) {
-    try {
-      const token = await getFirestoreAccessToken(env);
-      headers['Authorization'] = `Bearer ${token}`;
-    } catch (err) {
-      console.error('Error getting Service Account token for Firestore write:', err);
-    }
-  }
+        let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (env.FIRESTORE_SA_KEY) {
+          try {
+            const token = await getFirestoreAccessToken(ctx, env);
+            headers['Authorization'] = `Bearer ${token}`;
+          } catch (err) {
+            ctx.logger.error('Error getting Service Account token for Firestore write:', err);
+          }
+        }
 
-  const payload = formatFirestoreDocument(data);
-  const response = await fetch(url, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(payload)
-  });
+        const payload = formatFirestoreDocument(data);
+        const response = await executeWithTimeout(
+          ResiliencePolicies.firestoreIdempotentWrite.timeoutMs,
+          (signal) => fetch(url, { method: 'PATCH', headers, body: JSON.stringify(payload), signal })
+        );
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Firestore setDocument error (${response.status}): ${errText}`);
-  }
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Firestore setDocument error (${response.status}): ${errText}`);
+        }
+      }, isTransientFirestoreError);
+    });
+  }, LatencyWarningBudgets.firestoreWrite);
+}
+
+export interface AtomicWriteOp {
+  collectionPath: string;
+  documentId: string;
+  data: Record<string, any>;
+  requireDoesNotExist?: boolean;
 }
 
 /**
@@ -362,76 +411,75 @@ export async function setDocument(env: Env, collectionPath: string, documentId: 
  * If any write fails preconditions (e.g. requireDoesNotExist for idempotency locks),
  * the entire batch of writes is aborted with zero changes applied to the database.
  */
-export async function commitAtomicWrites(
-  env: Env,
-  writes: Array<{
-    collectionPath: string;
-    documentId: string;
-    data: Record<string, any>;
-    requireDoesNotExist?: boolean;
-  }>
+export async function commitAtomicWrites(ctx: RequestContext, env: Env,
+  writes: Array<AtomicWriteOp>
 ): Promise<void> {
-  if (!env.FIRESTORE_SA_KEY) {
-    // Check preconditions atomically before applying any write (`All or Nothing`)
-    for (const w of writes) {
-      const key = `${w.collectionPath}/${w.documentId}`;
-      if (w.requireDoesNotExist === true && localStore.has(key)) {
-        const raceErr = new Error(`IDEMPOTENCY_CONCURRENCY_ABORT: Document ${key} already exists.`);
-        (raceErr as any).code = 'ALREADY_EXISTS';
-        throw raceErr;
-      }
-    }
-    // Apply all writes atomically inside local store
-    for (const w of writes) {
-      localStore.set(`${w.collectionPath}/${w.documentId}`, w.data);
-    }
-    return;
-  }
+  return ctx.telemetry.measure('db.firestore.commit', { batchSize: String(writes.length) }, async () => {
+    return getCircuitBreaker('firestore', ResiliencePolicies.firestoreNonIdempotentWrite.circuitBreaker).execute(ctx, async () => {
+      return withRetry(ResiliencePolicies.firestoreNonIdempotentWrite.retry, async () => {
+        if (!env.FIRESTORE_SA_KEY) {
+          // Check preconditions atomically before applying any write (`All or Nothing`)
+          for (const w of writes) {
+            const key = `${w.collectionPath}/${w.documentId}`;
+            if (w.requireDoesNotExist === true && localStore.has(key)) {
+              const raceErr = new Error(`IDEMPOTENCY_CONCURRENCY_ABORT: Document ${key} already exists.`);
+              (raceErr as any).code = 'ALREADY_EXISTS';
+              throw raceErr;
+            }
+          }
+          // Apply all writes atomically inside local store
+          for (const w of writes) {
+            localStore.set(`${w.collectionPath}/${w.documentId}`, w.data);
+          }
+          return;
+        }
 
-  const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:commit`;
+        const projectId = env.GCP_PROJECT_ID || 'vendsoft-prod';
+        const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:commit`;
 
-  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (env.FIRESTORE_SA_KEY) {
-    try {
-      const token = await getFirestoreAccessToken(env);
-      headers['Authorization'] = `Bearer ${token}`;
-    } catch (err) {
-      console.error('Error getting Service Account token for Firestore commit:', err);
-    }
-  }
+        let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (env.FIRESTORE_SA_KEY) {
+          try {
+            const token = await getFirestoreAccessToken(ctx, env);
+            headers['Authorization'] = `Bearer ${token}`;
+          } catch (err) {
+            ctx.logger.error('Error getting Service Account token for Firestore commit:', err);
+          }
+        }
 
-  const payloadWrites = writes.map((w) => {
-    const docPath = `projects/${projectId}/databases/(default)/documents/${w.collectionPath}/${w.documentId}`;
-    const formatted = formatFirestoreDocument(w.data);
-    const writeOp: any = {
-      update: {
-        name: docPath,
-        fields: formatted.fields
-      }
-    };
-    if (w.requireDoesNotExist === true) {
-      writeOp.currentDocument = { exists: false };
-    }
-    return writeOp;
-  });
+        const payloadWrites = writes.map((w) => {
+          const docPath = `projects/${projectId}/databases/(default)/documents/${w.collectionPath}/${w.documentId}`;
+          const formatted = formatFirestoreDocument(w.data);
+          const writeOp: any = {
+            update: {
+              name: docPath,
+              fields: formatted.fields
+            }
+          };
+          if (w.requireDoesNotExist === true) {
+            writeOp.currentDocument = { exists: false };
+          }
+          return writeOp;
+        });
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ writes: payloadWrites })
-  });
+        const response = await executeWithTimeout(
+          ResiliencePolicies.firestoreNonIdempotentWrite.timeoutMs,
+          (signal) => fetch(url, { method: 'POST', headers, body: JSON.stringify({ writes: payloadWrites }), signal })
+        );
 
-  if (!response.ok) {
-    const errText = await response.text();
-    const status = response.status;
-    if (status === 400 || status === 409 || errText.includes('ALREADY_EXISTS') || errText.includes('FAILED_PRECONDITION') || errText.includes('already exists')) {
-      const raceErr = new Error(`IDEMPOTENCY_CONCURRENCY_ABORT: ${errText}`);
-      (raceErr as any).code = 'ALREADY_EXISTS';
-      throw raceErr;
-    }
-    throw new Error(`Firestore commitAtomicWrites error (${status}): ${errText}`);
-  }
+        if (!response.ok) {
+          const errText = await response.text();
+          const status = response.status;
+          if (status === 400 || status === 409 || errText.includes('ALREADY_EXISTS') || errText.includes('FAILED_PRECONDITION') || errText.includes('already exists')) {
+            const raceErr = new Error(`IDEMPOTENCY_CONCURRENCY_ABORT: ${errText}`);
+            (raceErr as any).code = 'ALREADY_EXISTS';
+            throw raceErr;
+          }
+          throw new Error(`Firestore commitAtomicWrites error (${status}): ${errText}`);
+        }
+      }, isTransientFirestoreError);
+    });
+  }, LatencyWarningBudgets.firestoreWrite);
 }
 
 // Helpers for base64url encoding in Web Crypto
@@ -459,29 +507,49 @@ function str2ab(str: string): ArrayBuffer {
 }
 
 /**
- * Standardized system audit log writer (`Phase 4 - Audit Logs & Admin Portal`).
+ * Constructs an atomic write operation for an audit log entry (`AUD-005` pure builder).
+ * Does not perform I/O; route handlers append this op to their batchWrites array.
  */
-export async function logAuditEvent(env: Env, severityOrAction: string, metadata: Record<string, any>): Promise<void> {
-  try {
-    const logId = `log_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-    await setDocument(env, 'audit_logs', logId, {
+export function buildAuditLogOp(action: string, metadata: Record<string, any>): AtomicWriteOp {
+  const logId = `log_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+  return {
+    collectionPath: 'audit_logs',
+    documentId: logId,
+    data: {
       logId,
-      action: severityOrAction,
+      action,
       severity: 'INFO',
       metadata,
       createdAtEpochMs: Date.now()
-    });
-  } catch (err) {
-    console.error('Failed to write audit log:', err);
+    }
+  };
+}
+
+/**
+ * Standardized system audit log writer (`Phase 4 - Audit Logs & Admin Portal`).
+ */
+export async function logAuditEvent(ctx: RequestContext, env: Env, severityOrAction: string, metadata: Record<string, any>): Promise<void> {
+  const op = buildAuditLogOp(severityOrAction, metadata);
+  
+  const writePromise = setDocument(ctx, env, op.collectionPath, op.documentId, op.data).catch((err: any) => {
+    ctx.logger.error(`[Background] Failed to write audit log for ${severityOrAction}:`, err);
+  });
+
+  if (ctx.execCtx) {
+    // Fire and forget, bound to the worker lifecycle
+    ctx.execCtx.waitUntil(writePromise);
+  } else {
+    // Fallback for local dev or tests missing ExecutionContext
+    await writePromise;
   }
 }
 
 /**
  * Sends a push notification using Firebase Cloud Messaging (FCM) v1 API.
  */
-export async function sendFcmNotification(env: Env, token: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+export async function sendFcmNotification(ctx: RequestContext, env: Env, token: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
   try {
-    const accessToken = await getFirestoreAccessToken(env);
+    const accessToken = await getFirestoreAccessToken(ctx, env);
     const projectId = env.FIREBASE_PROJECT_ID || env.GCP_PROJECT_ID;
     
     if (!projectId) {
@@ -518,11 +586,11 @@ export async function sendFcmNotification(env: Env, token: string, title: string
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error(`FCM send failed (${response.status}):`, errText);
+      ctx.logger.error(`FCM send failed (${response.status}):`, errText);
     } else {
-      console.log('FCM Notification sent successfully to', token);
+      ctx.logger.info('FCM Notification sent successfully to', { token });
     }
   } catch (err) {
-    console.error('Error sending FCM Notification:', err);
+    ctx.logger.error('Error sending FCM Notification:', err);
   }
 }

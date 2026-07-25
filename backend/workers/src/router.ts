@@ -9,21 +9,30 @@ import { handleAdminSearchCustomers, handleAdminUpdateCustomer, handleAdminAppro
 import { handlePublicDownloadApk } from './routes/public';
 import { handleMigrateLegacyKey } from './routes/migrate';
 import { handleRazorpayWebhook } from './webhooks';
+import { handleGetHealth, handleAdminDiagnostics } from './routes/health';
+import { LoggerService, TelemetryService, RequestContext } from './services/logger';
 import { localStore } from './services/firestore';
-import { authenticateRequest, authenticateAdminRequest, createErrorResponse } from './authGuard';
+import { authenticateRequest, authenticateAdminRequest, createErrorResponse, Permission } from './authGuard';
+import { RateLimitPolicies } from './services/resilience/policies';
+import { checkRateLimit } from './services/resilience/rateLimiter';
 
-// Simple in-memory rate limiter for Admin API (per Worker isolate)
-const adminRateLimitMap = new Map<string, { count: number, resetTime: number }>();
-const ADMIN_RATE_LIMIT_MAX = 60; // 60 requests
-const ADMIN_RATE_LIMIT_WINDOW = 60000; // per 1 minute
+
 
 /**
  * Main API Gateway Router for VendSoft Cloudflare Workers Control Plane.
  * Enforces CORS and cleanly splits public endpoints from protected composite-identity endpoints.
  */
-export async function routeRequest(request: Request, env: Env): Promise<Response> {
+export async function routeRequest(request: Request, env: Env, execCtx?: ExecutionContext): Promise<Response> {
+  const traceId = request.headers.get('x-trace-id') || crypto.randomUUID();
+  const logger = new LoggerService(traceId);
+  const telemetry = new TelemetryService(traceId);
+  const ctx: RequestContext = { traceId, logger, telemetry, execCtx };
+  ctx.logger.info(`Incoming ${request.method} ${request.url}`);
+
   const url = new URL(request.url);
   const path = url.pathname;
+
+  return ctx.telemetry.measure('http.request.duration', { method: request.method, path }, async () => {
 
   // 1. Handle CORS Preflight (`OPTIONS`) requests cleanly
   if (request.method === 'OPTIONS') {
@@ -53,30 +62,27 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
 
     // === PUBLIC CONFIG ENDPOINTS ===
     if (normalizedPath === '/v1/config/system') {
-      return await handleGetSystemConfig(request, env);
+      return await handleGetSystemConfig(ctx, request, env);
     }
     
     if (normalizedPath === '/v1/plans') {
-      return await handleGetPlans(request, env);
+      return await handleGetPlans(ctx, request, env);
     }
 
     if (normalizedPath.startsWith('/v1/public/apks/') && request.method === 'GET') {
-      return await handlePublicDownloadApk(request, env);
+      return await handlePublicDownloadApk(ctx, request, env);
     }
 
 
 
   // Phase 3: Razorpay Webhook Receiver (`POST /v1/webhooks/razorpay`)
   if (normalizedPath === '/v1/webhooks/razorpay' && request.method === 'POST') {
-    return handleRazorpayWebhook(request, env);
+    return handleRazorpayWebhook(ctx, request, env);
   }
 
-  // Health check / Control plane status
+  // Phase 5C: Health & Diagnostics
   if (normalizedPath === '/' || normalizedPath === '/health' || normalizedPath === '/v1/health') {
-    return new Response(JSON.stringify({ success: true, status: 'ONLINE', version: '1.0.0-FROZEN', timestamp: Date.now() }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
+    return await handleGetHealth(ctx, request, env);
   }
 
 
@@ -99,8 +105,23 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
       });
     }
 
-    // 2. Authenticate
-    const { adminUid, role, errorResponse: adminError } = await authenticateAdminRequest(request, env);
+    // 2. Resolve Required Permission
+    let requiredPermission: Permission = 'FULL_ACCESS'; // Secure default
+    
+    if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') requiredPermission = 'CUSTOMERS_READ';
+    else if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT') requiredPermission = 'CUSTOMERS_EDIT';
+    else if (normalizedPath.startsWith('/v1/admin/devices/') && (normalizedPath.endsWith('/ban') || normalizedPath.endsWith('/unban'))) requiredPermission = 'DEVICES_BAN';
+    else if (normalizedPath.startsWith('/v1/admin/transfers/') && (normalizedPath.endsWith('/approve') || normalizedPath.endsWith('/reject'))) requiredPermission = 'TRANSFERS_APPROVE';
+    else if (normalizedPath === '/v1/admin/transfers/pending' && request.method === 'GET') requiredPermission = 'CUSTOMERS_READ';
+    else if (normalizedPath === '/v1/admin/config/system' && request.method === 'PUT') requiredPermission = 'SYSTEM_CONFIG_EDIT';
+    else if (normalizedPath === '/v1/admin/plans' && request.method === 'POST') requiredPermission = 'PLANS_EDIT';
+    else if (normalizedPath === '/v1/admin/audit-logs' && request.method === 'GET') requiredPermission = 'AUDIT_VIEW';
+    else if (normalizedPath === '/v1/admin/diagnostics' && request.method === 'GET') requiredPermission = 'FULL_ACCESS';
+    else if (normalizedPath === '/v1/admin/upload-apk-chunk' && request.method === 'POST') requiredPermission = 'FULL_ACCESS';
+    else if (normalizedPath === '/v1/admin/auth/verify' && request.method === 'GET') requiredPermission = 'CUSTOMERS_READ';
+
+    // 3. Authenticate
+    const { adminUid, role, errorResponse: adminError } = await authenticateAdminRequest(ctx, request, env, requiredPermission);
     if (adminError || !adminUid) {
       const resp = adminError || createErrorResponse(403, 'ADMIN_UNAUTHORIZED', 'Access denied.');
       // Patch the CORS header on the error response
@@ -110,62 +131,53 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     }
 
     // 3. Simple Rate Limiting (Cloudflare KV for global persistence)
-    const now = Date.now();
-    const rlKey = `ratelimit:${adminUid}`;
-    let rlCount = 0;
-    try {
-      const rlStr = await env.APK_STORE.get(rlKey);
-      if (rlStr) {
-        rlCount = parseInt(rlStr, 10);
-      }
-      if (rlCount > ADMIN_RATE_LIMIT_MAX) {
-        return new Response(JSON.stringify({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Rate limit exceeded. Try again later.' } }), {
-          status: 429,
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': allowedOrigin }
-        });
-      }
-      await env.APK_STORE.put(rlKey, (rlCount + 1).toString(), { expirationTtl: 60 }); // 60 seconds TTL
-    } catch (err) {
-      console.error('KV Rate Limit Error:', err);
+    const rlAllowed = await checkRateLimit(env, RateLimitPolicies.ADMIN_API, `admin:${adminUid}`);
+    if (!rlAllowed) {
+      return new Response(JSON.stringify({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Rate limit exceeded. Try again later.' } }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': allowedOrigin }
+      });
     }
 
     let adminResponse: Response | null = null;
 
-    if (normalizedPath === '/v1/admin/upload-apk-chunk' && request.method === 'POST') {
-      adminResponse = await handleAdminUploadApkChunk(request, env, adminUid);
+    if (normalizedPath === '/v1/admin/diagnostics' && request.method === 'GET') {
+      adminResponse = await handleAdminDiagnostics(ctx, request, env);
+    } else if (normalizedPath === '/v1/admin/upload-apk-chunk' && request.method === 'POST') {
+      adminResponse = await handleAdminUploadApkChunk(ctx, request, env, adminUid);
     } else if (normalizedPath === '/v1/admin/customers' && request.method === 'GET') {
-      adminResponse = await handleAdminSearchCustomers(request, env);
+      adminResponse = await handleAdminSearchCustomers(ctx, request, env);
     } else if (normalizedPath.startsWith('/v1/admin/customers/') && normalizedPath.endsWith('/subscription') && request.method === 'PUT') {
       const customerId = normalizedPath.substring('/v1/admin/customers/'.length, normalizedPath.length - '/subscription'.length);
-      adminResponse = await handleAdminManageSubscription(request, env, adminUid, customerId);
+      adminResponse = await handleAdminManageSubscription(ctx, request, env, adminUid, customerId);
     } else if (normalizedPath.startsWith('/v1/admin/customers/') && request.method === 'PUT' && !normalizedPath.endsWith('/subscription')) {
       const customerId = normalizedPath.substring('/v1/admin/customers/'.length);
-      adminResponse = await handleAdminUpdateCustomer(request, env, adminUid, customerId);
+      adminResponse = await handleAdminUpdateCustomer(ctx, request, env, adminUid, customerId);
     } else if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/approve') && request.method === 'POST') {
       const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/approve'.length);
-      adminResponse = await handleAdminApproveTransfer(request, env, adminUid, transferId);
+      adminResponse = await handleAdminApproveTransfer(ctx, request, env, adminUid, transferId);
     } else if (normalizedPath.startsWith('/v1/admin/transfers/') && normalizedPath.endsWith('/reject') && request.method === 'POST') {
       const transferId = normalizedPath.substring('/v1/admin/transfers/'.length, normalizedPath.length - '/reject'.length);
-      adminResponse = await handleAdminRejectTransfer(request, env, adminUid, transferId);
+      adminResponse = await handleAdminRejectTransfer(ctx, request, env, adminUid, transferId);
     } else if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/ban') && request.method === 'PUT') {
       const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/ban'.length);
-      adminResponse = await handleAdminBanDevice(request, env, adminUid, hardwareId);
+      adminResponse = await handleAdminBanDevice(ctx, request, env, adminUid, hardwareId);
     } else if (normalizedPath.startsWith('/v1/admin/devices/') && normalizedPath.endsWith('/unban') && request.method === 'PUT') {
       const hardwareId = normalizedPath.substring('/v1/admin/devices/'.length, normalizedPath.length - '/unban'.length);
-      adminResponse = await handleAdminUnbanDevice(request, env, adminUid, hardwareId);
+      adminResponse = await handleAdminUnbanDevice(ctx, request, env, adminUid, hardwareId);
     } else if (normalizedPath === '/v1/admin/config/system' && request.method === 'PUT') {
-      adminResponse = await handleAdminUpdateSystemConfig(request, env, adminUid);
+      adminResponse = await handleAdminUpdateSystemConfig(ctx, request, env, adminUid);
     } else if (normalizedPath === '/v1/admin/audit-logs' && request.method === 'GET') {
-      adminResponse = await handleAdminGetAuditLogs(request, env);
+      adminResponse = await handleAdminGetAuditLogs(ctx, request, env);
     } else if (normalizedPath === '/v1/admin/transfers/pending' && request.method === 'GET') {
-      adminResponse = await handleAdminGetPendingTransfers(request, env);
+      adminResponse = await handleAdminGetPendingTransfers(ctx, request, env);
     } else if (normalizedPath === '/v1/admin/plans' && request.method === 'POST') {
-      adminResponse = await handleAdminUpdatePlans(request, env, adminUid);
+      adminResponse = await handleAdminUpdatePlans(ctx, request, env, adminUid);
     } else if (normalizedPath === '/v1/admin/auth/verify' && request.method === 'GET') {
       // The authenticateAdminRequest already verified the token and role.
       // We log SUCCESSFUL_LOGIN here, once per frontend initialization.
       const { logAuditEvent } = await import('./services/firestore');
-      await logAuditEvent(env, 'SUCCESSFUL_LOGIN', { adminUid, role });
+      await logAuditEvent(ctx, env, 'SUCCESSFUL_LOGIN', { adminUid, role });
       const payload = { success: true, data: { authorized: true, uid: adminUid, role: role } };
       adminResponse = new Response(JSON.stringify(payload), {
         status: 200,
@@ -188,60 +200,64 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
   // ---------------------------------------------------------------------------
   // PROTECTED ENDPOINTS (Requires valid Firebase ID Token & Composite Headers)
   // ---------------------------------------------------------------------------
-  const { identity, errorResponse } = await authenticateRequest(request, env);
+  const { identity, errorResponse } = await authenticateRequest(ctx, request, env);
   if (errorResponse || !identity) {
     return errorResponse || createErrorResponse(401, 'UNAUTHORIZED', 'Authentication failed.');
   }
 
   // Phase 2.1: Customer Onboarding & Composite Registration
   if (normalizedPath === '/v1/customers/register') {
-    return handleCustomerRegistration(request, env, identity);
+    return handleCustomerRegistration(ctx, request, env, identity);
   }
 
   if (normalizedPath === '/v1/installations/update-fcm' && request.method === 'POST') {
-    return handleUpdateFcmToken(request, env, identity);
+    return handleUpdateFcmToken(ctx, request, env, identity);
   }
 
   if (normalizedPath === '/v1/customers/logout' && request.method === 'POST') {
-    return handleCustomerLogout(request, env, identity);
+    return handleCustomerLogout(ctx, request, env, identity);
   }
 
   // Phase 2.2: Authoritative Subscription Status & Signed Lease
   if (normalizedPath === '/v1/subscriptions/status' && request.method === 'GET') {
-    return handleGetSubscriptionStatus(request, env, identity);
+    return handleGetSubscriptionStatus(ctx, request, env, identity);
   }
 
   // Phase 2.2: Peer-to-Peer Device Transfers
   if (normalizedPath === '/v1/transfers/request' && request.method === 'POST') {
-    return handleRequestTransfer(request, env, identity);
+    const rlAllowed = await checkRateLimit(env, RateLimitPolicies.TRANSFER_REQUEST, `transfer:${identity.installationId || identity.hardwareId}`);
+    if (!rlAllowed) return createErrorResponse(429, 'TOO_MANY_REQUESTS', 'Transfer request rate limit exceeded.');
+    return handleRequestTransfer(ctx, request, env, identity);
   }
   if (normalizedPath === '/v1/transfers/pending' && request.method === 'GET') {
-    return handleGetPendingTransfers(request, env, identity);
+    return handleGetPendingTransfers(ctx, request, env, identity);
   }
   if (normalizedPath.startsWith('/v1/transfers/') && normalizedPath.endsWith('/status') && request.method === 'GET') {
-    return handleGetTransferStatus(request, env, identity, normalizedPath);
+    return handleGetTransferStatus(ctx, request, env, identity, normalizedPath);
   }
   if (normalizedPath === '/v1/transfers/approve' && request.method === 'POST') {
-    return handleApproveTransfer(request, env, identity);
+    return handleApproveTransfer(ctx, request, env, identity);
   }
   if (normalizedPath === '/v1/transfers/reject' && request.method === 'POST') {
-    return handleRejectTransfer(request, env, identity);
+    return handleRejectTransfer(ctx, request, env, identity);
   }
   if (normalizedPath === '/v1/transfers/cancel' && request.method === 'POST') {
-    return handleCancelTransfer(request, env, identity);
+    return handleCancelTransfer(ctx, request, env, identity);
   }
 
   // Phase 3: Razorpay Payment Checkout & Verification
-  if (normalizedPath === '/v1/orders/create' && request.method === 'POST') {
-    return handleCreateOrder(request, env);
+  if (path.startsWith('/v1/orders/create') && request.method === 'POST') {
+    const rlAllowed = await checkRateLimit(env, RateLimitPolicies.ORDER_CREATION, `order:${identity.customerId || identity.hardwareId}`);
+    if (!rlAllowed) return createErrorResponse(429, 'TOO_MANY_REQUESTS', 'Order creation rate limit exceeded.');
+    return handleCreateOrder(ctx, request, env);
   }
-  if (normalizedPath === '/v1/orders/verify' && request.method === 'POST') {
-    return handleVerifyOrder(request, env);
+  if (path.startsWith('/v1/orders/verify') && request.method === 'POST') {
+    return handleVerifyOrder(ctx, request, env);
   }
 
   // Phase 5: Production Migration & Legacy System Sunset
   if (normalizedPath === '/v1/migrate/legacy-key' && request.method === 'POST') {
-    return handleMigrateLegacyKey(request, env, identity);
+    return handleMigrateLegacyKey(ctx, request, env, identity);
   }
 
   return createErrorResponse(
@@ -249,4 +265,5 @@ export async function routeRequest(request: Request, env: Env): Promise<Response
     'ENDPOINT_NOT_FOUND',
     `Endpoint '${normalizedPath}' does not exist on this server or has not been activated yet.`
   );
+  }); // End of telemetry.measure wrapper
 }

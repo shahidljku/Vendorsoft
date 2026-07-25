@@ -1,3 +1,4 @@
+import { RequestContext } from '../services/logger';
 import { Env, ApiResponse, SystemConfigDocument } from '../types';
 import { getDocument } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
@@ -21,13 +22,13 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfigDocument = {
  * Handles GET /api/v1/config/system
  * Public endpoint returning the authoritative global system configuration object (`system_configs/global`).
  */
-export async function handleGetSystemConfig(request: Request, env: Env): Promise<Response> {
+export async function handleGetSystemConfig(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET') {
     return createErrorResponse(405, 'METHOD_NOT_ALLOWED', 'Only GET method is permitted on /api/v1/config/system.');
   }
 
   try {
-    const firestoreDoc = await getDocument(env, 'system_configs', 'global');
+    const firestoreDoc = await getDocument(ctx, env, 'system_configs', 'global');
     
     // Merge Firestore document with default fallback values to ensure strict interface compliance
     const configData: SystemConfigDocument = firestoreDoc
@@ -59,7 +60,7 @@ export async function handleGetSystemConfig(request: Request, env: Env): Promise
       }
     });
   } catch (err: any) {
-    console.error('Failed to retrieve system_configs/global:', err);
+    ctx.logger.error('Failed to retrieve system_configs/global:', err);
     // Even if Firestore throws an error (e.g., Service Account not set up yet), return safe default
     // to prevent blocking mobile app startup checks while logging the alert.
     const responsePayload: ApiResponse<SystemConfigDocument> = {

@@ -1,5 +1,6 @@
+import { RequestContext } from './logger';
 import { Env, CompositeIdentity, DomainMutation } from '../types';
-import { getDocument, setDocument, commitAtomicWrites, logAuditEvent } from './firestore';
+import { getDocument, setDocument, commitAtomicWrites, logAuditEvent, AtomicWriteOp } from './firestore';
 import { InstallationFSM } from './fsm/installationFSM';
 import { LockService } from './lock';
 
@@ -7,9 +8,9 @@ export class InstallationService {
   /**
    * Bans a device at the hardware level, transitioning its Installation to BANNED.
    */
-  static async banDevice(env: Env, hardwareId: string, adminUid: string): Promise<{ success: boolean; message: string }> {
+  static async banDevice(ctx: RequestContext, env: Env, hardwareId: string, adminUid: string, auditOp?: AtomicWriteOp): Promise<{ success: boolean; message: string }> {
     const doWork = async () => {
-      const instDoc = await getDocument(env, 'installations', hardwareId);
+      const instDoc = await getDocument(ctx, env, 'installations', hardwareId);
       if (!instDoc) {
         const err: any = new Error('Device not found');
         err.code = 'NOT_FOUND';
@@ -23,12 +24,16 @@ export class InstallationService {
         bannedBy: adminUid
       };
       
-      await setDocument(env, 'installations', hardwareId, updated);
+      const writes: AtomicWriteOp[] = [
+        { collectionPath: 'installations', documentId: hardwareId, data: updated }
+      ];
+      if (auditOp) writes.push(auditOp);
+      await commitAtomicWrites(ctx, env, writes);
       return { success: true, message: 'Device banned successfully' };
     };
 
     try {
-      return await LockService.withLock(env, 'inst_lock', hardwareId, 30000, { requestId: adminUid }, doWork);
+      return await LockService.withLock(ctx, env, 'inst_lock', hardwareId, 30000, { requestId: adminUid }, doWork);
     } catch (err: any) {
       if (err.code === 'ALREADY_EXISTS') {
         const newErr: any = new Error('Device is currently locked by another process.');
@@ -42,9 +47,9 @@ export class InstallationService {
   /**
    * Unbans a hardware device, transitioning its Installation back to ACTIVE.
    */
-  static async unbanDevice(env: Env, hardwareId: string, adminUid: string): Promise<{ success: boolean; message: string }> {
+  static async unbanDevice(ctx: RequestContext, env: Env, hardwareId: string, adminUid: string, auditOp?: AtomicWriteOp): Promise<{ success: boolean; message: string }> {
     const doWork = async () => {
-      const instDoc = await getDocument(env, 'installations', hardwareId);
+      const instDoc = await getDocument(ctx, env, 'installations', hardwareId);
       if (!instDoc) {
         const err: any = new Error('Device not found');
         err.code = 'NOT_FOUND';
@@ -58,12 +63,16 @@ export class InstallationService {
         unbannedBy: adminUid
       };
       
-      await setDocument(env, 'installations', hardwareId, updated);
+      const writes: AtomicWriteOp[] = [
+        { collectionPath: 'installations', documentId: hardwareId, data: updated }
+      ];
+      if (auditOp) writes.push(auditOp);
+      await commitAtomicWrites(ctx, env, writes);
       return { success: true, message: 'Device unbanned successfully' };
     };
 
     try {
-      return await LockService.withLock(env, 'inst_lock', hardwareId, 30000, { requestId: adminUid }, doWork);
+      return await LockService.withLock(ctx, env, 'inst_lock', hardwareId, 30000, { requestId: adminUid }, doWork);
     } catch (err: any) {
       if (err.code === 'ALREADY_EXISTS') {
         const newErr: any = new Error('Device is currently locked by another process.');
@@ -77,9 +86,9 @@ export class InstallationService {
   /**
    * Revokes an installation on a device.
    */
-  static async revokeInstallation(env: Env, hardwareId: string, reason: string): Promise<{ success: boolean; message: string }> {
+  static async revokeInstallation(ctx: RequestContext, env: Env, hardwareId: string, reason: string): Promise<{ success: boolean; message: string }> {
     const doWork = async () => {
-      const instDoc = await getDocument(env, 'installations', hardwareId);
+      const instDoc = await getDocument(ctx, env, 'installations', hardwareId);
       if (!instDoc) {
         const err: any = new Error('Installation not found');
         err.code = 'NOT_FOUND';
@@ -93,12 +102,12 @@ export class InstallationService {
         revokedReason: reason
       };
       
-      await setDocument(env, 'installations', hardwareId, updated);
+      await setDocument(ctx, env, 'installations', hardwareId, updated);
       return { success: true, message: 'Installation revoked successfully' };
     };
 
     try {
-      return await LockService.withLock(env, 'inst_lock', hardwareId, 30000, { requestId: 'revoke' }, doWork);
+      return await LockService.withLock(ctx, env, 'inst_lock', hardwareId, 30000, { requestId: 'revoke' }, doWork);
     } catch (err: any) {
       if (err.code === 'ALREADY_EXISTS') {
         const newErr: any = new Error('Installation is currently locked by another process.');
@@ -113,11 +122,11 @@ export class InstallationService {
    * Checks if a hardware trial has already been used on a device.
    * Throws an error if used, preventing double trials.
    */
-  static async checkHardwareTrialEligibility(env: Env, hardwareId: string, identity: CompositeIdentity, inputMobileNumber: string, businessName: string, ipAddress: string, appVersion: string): Promise<{ success: boolean }> {
-    const hardwareTrialDoc = await getDocument(env, 'hardware_trials', hardwareId);
+  static async checkHardwareTrialEligibility(ctx: RequestContext, env: Env, hardwareId: string, identity: CompositeIdentity, inputMobileNumber: string, businessName: string, ipAddress: string, appVersion: string): Promise<{ success: boolean }> {
+    const hardwareTrialDoc = await getDocument(ctx, env, 'hardware_trials', hardwareId);
     
     if (hardwareTrialDoc) {
-      await logAuditEvent(env, 'REGISTRATION_REJECTED', {
+      await logAuditEvent(ctx, env, 'REGISTRATION_REJECTED', {
           actorType: 'USER',
           actorId: identity.customerId || 'unknown',
           targetType: 'hardware_trials',
@@ -175,13 +184,12 @@ export class InstallationService {
   /**
    * Builds the atomic mutation required to revoke an installation.
    */
-  static async buildRevocation(
-    env: Env,
+  static buildRevocation(
+    instDoc: any,
     hardwareId: string,
     reason: string,
     now: number
-  ): Promise<DomainMutation> {
-    const instDoc = await getDocument(env, 'installations', hardwareId);
+  ): DomainMutation {
     if (!instDoc) {
       const err: any = new Error('Installation not found');
       err.code = 'NOT_FOUND';

@@ -5,6 +5,22 @@ import { handleRazorpayWebhook } from '../../src/webhooks';
 import { handleCreateOrder } from '../../src/routes/orders';
 import { CompositeIdentity } from '../../src/types';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Payment Integration & Outcomes', () => {
   let env: any;
 
@@ -35,8 +51,7 @@ describe('Payment Integration & Outcomes', () => {
     // 2. Initiate Order (via route simulation)
     // In our test, we'll bypass the raw Request object parsing by calling PaymentService directly, 
     // OR mock Request. Let's call PaymentService directly to test the domain boundaries.
-    const { razorpayOrderId } = await PaymentService.initiateOrder(
-      env,
+    const { razorpayOrderId } = await PaymentService.initiateOrder(mockCtx, env,
       identity,
       'PRO_YEARLY',
       'Pro Annual',
@@ -74,7 +89,7 @@ describe('Payment Integration & Outcomes', () => {
       body: JSON.stringify(webhookPayload)
     });
 
-    const response = await handleRazorpayWebhook(request, env);
+    const response = await handleRazorpayWebhook(mockCtx, request, env);
     expect(response.status).toBe(200);
     const respBody = await response.json() as any;
     expect(respBody.success).toBe(true);
@@ -86,7 +101,7 @@ describe('Payment Integration & Outcomes', () => {
     expect(settledPayment.razorpayPaymentId).toBe('pay_789');
 
     // B) Subscription should be ACTIVE
-    const subId = respBody.subscriptionId;
+    const subId = settledPayment.subscriptionId;
     expect(subId).toBeDefined();
     
     const subDoc = mockFirestore._db.get(`subscriptions/${subId}`);

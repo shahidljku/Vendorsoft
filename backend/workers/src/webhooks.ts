@@ -1,12 +1,13 @@
+import { RequestContext } from './services/logger';
 import { Env } from './types';
-import { getDocument, logAuditEvent } from './services/firestore';
+import { getDocument, setDocument, logAuditEvent } from './services/firestore';
 import { PaymentService } from './services/paymentService';
 
 /**
  * Handles POST /api/v1/webhooks/razorpay
  * Verifies Razorpay webhook signature and delegates settlement to PaymentService.
  */
-export async function handleRazorpayWebhook(request: Request, env: Env): Promise<Response> {
+export async function handleRazorpayWebhook(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   const secret = env.RAZORPAY_WEBHOOK_SECRET || 'rzp_test_webhook_secret';
   const signatureHeader = request.headers.get('x-razorpay-signature');
   if (!signatureHeader) {
@@ -27,10 +28,10 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
   }
 
   // 1. Cryptographic Signature Verification (`HMAC SHA-256`) via PaymentService
-  const isValid = await PaymentService.verifyWebhook(env, rawBodyText, signatureHeader);
+  const isValid = await PaymentService.verifyWebhook(ctx, env, rawBodyText, signatureHeader);
   if (!isValid) {
     // Log unauthorized security event
-    await logAuditEvent(env, 'WEBHOOK_SIGNATURE_INVALID', { header: signatureHeader });
+    await logAuditEvent(ctx, env, 'WEBHOOK_SIGNATURE_INVALID', { header: signatureHeader });
     return new Response(JSON.stringify({ success: false, error: { code: 'INVALID_SIGNATURE', message: 'Webhook signature verification failed.' } }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
@@ -67,64 +68,37 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
     });
   }
 
-  // 2. Query authoritative payment ledger
-  const paymentDoc = await getDocument(env, 'payments', razorpayOrderId);
-  if (!paymentDoc) {
-    console.warn(`Webhook received for unknown order: ${razorpayOrderId}`);
-    return new Response(JSON.stringify({ success: true, processed: false, note: 'UNKNOWN_ORDER' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // FSM Constraints: Already terminal states or intermediate saga
-  if (paymentDoc.status === 'SUCCESS' || paymentDoc.status === 'REFUNDED') {
-    return new Response(JSON.stringify({ success: true, processed: true, note: 'ALREADY_PROCESSED' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  if (paymentDoc.status === 'REFUND_PENDING') {
-    const refundSuccess = await PaymentService.executeRefundSaga(env, paymentDoc, razorpayPaymentId);
-    if (!refundSuccess) {
-      return new Response(JSON.stringify({ success: false, error: 'RAZORPAY_REFUND_ERROR' }), {
-        status: 500, // Forces webhook retry
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    return new Response(JSON.stringify({ success: true, processed: true, note: 'ORDER_INVALIDATED_REFUNDED' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  // 4. Delegate to PaymentService to Settle
+  // 2. Persist a minimal durable receipt before queuing (Principal Engineer Refinement)
+  const receiptId = `wh_rcpt_${crypto.randomUUID()}`;
+  const eventId = payload.id || crypto.randomUUID();
+  
   try {
-    const settlementResult = await PaymentService.settleOrder(
-      env,
-      { orderId: razorpayOrderId, paymentId: razorpayPaymentId, signature: signatureHeader },
-      paymentDoc
-    );
+    await setDocument(ctx, env, 'webhook_receipts', receiptId, {
+      receiptId,
+      eventId,
+      type: eventType,
+      orderId: razorpayOrderId,
+      payload,
+      receivedAt: new Date().toISOString()
+    });
 
-    return new Response(JSON.stringify({ success: true, processed: true, subscriptionId: settlementResult.subscriptionId }), {
+    // 3. Queue lightweight settlement work (Payload is stored in the receipt)
+    await env.WEBHOOK_QUEUE.send({
+      receiptId,
+      eventId,
+      type: eventType,
+      orderId: razorpayOrderId,
+      signature: signatureHeader
+    });
+
+    // 4. Return 200 OK immediately. Settlement happens asynchronously in the queue consumer.
+    return new Response(JSON.stringify({ success: true, processed: false, note: 'QUEUED' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (err: any) {
-    if (err.code === 'ORDER_INVALIDATED') {
-      return new Response(JSON.stringify({ success: true, processed: true, note: 'ORDER_INVALIDATED_AND_REFUNDED' }), {
-        status: 200, // Processed and correctly resolved via refund
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    if (err.code === 'CONCURRENT_MUTATION_LOCKED') {
-      return new Response(JSON.stringify({ success: false, error: { code: 'CONCURRENT_MUTATION_LOCKED', message: 'Subscription is locked by another process' } }), {
-        status: 409,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    console.error('Webhook settlement error:', err);
+    ctx.logger.error('Failed to enqueue webhook or write receipt:', err);
+    // If the queue or firestore is down, return 500 so Razorpay knows to retry later.
     return new Response(JSON.stringify({ success: false, error: 'INTERNAL_ERROR' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }

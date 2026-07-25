@@ -3,17 +3,58 @@ main = "src/index.ts"
 compatibility_date = "2024-07-16"
 compatibility_flags = ["nodejs_compat"]
 
-[vars]
+[env.staging]
+name = "vendsoft-api-worker-staging"
+route = { pattern = "staging-api.vendsoft.com/*", custom_domain = true }
+
+[env.staging.vars]
+GCP_PROJECT_ID = "vendorpro-staging-1b2c3"
+FIREBASE_PROJECT_ID = "vendorpro-staging-1b2c3"
+ENVIRONMENT = "staging"
+WORKER_VERSION = "0.0.0-dev"
+
+[[env.staging.kv_namespaces]]
+binding = "APK_STORE"
+id = "mock_staging_kv_namespace_id"
+
+[env.staging.triggers]
+crons = ["0 2 * * *"]
+
+[[env.staging.queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "vendsoft-webhooks-staging"
+
+[[env.staging.queues.consumers]]
+queue = "vendsoft-webhooks-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "vendsoft-webhooks-dlq-staging"
+
+[env.production]
+name = "vendsoft-api-worker"
+route = { pattern = "api.vendsoft.com/*", custom_domain = true }
+
+[env.production.vars]
 GCP_PROJECT_ID = "vendorpro-491c4"
 FIREBASE_PROJECT_ID = "vendorpro-491c4"
 ENVIRONMENT = "production"
+WORKER_VERSION = "0.0.0-dev"
 
-# Note: The following secrets MUST be added using `wrangler secret put <KEY_NAME>`:
-# - FIRESTORE_SA_KEY: Google Cloud Service Account JSON for Firestore REST API access.
-# - RAZORPAY_KEY_ID: Razorpay Production/Test Key ID.
-# - RAZORPAY_KEY_SECRET: Razorpay Production/Test Key Secret.
-# - RAZORPAY_WEBHOOK_SECRET: Razorpay Webhook Secret for HMAC SHA-256 validation.
-
-[[kv_namespaces]]
+[[env.production.kv_namespaces]]
 binding = "APK_STORE"
 id = "90d2c06b34a14527a66b1d40f41a3064"
+
+[env.production.triggers]
+crons = ["0 2 * * *"]
+
+[[env.production.queues.producers]]
+binding = "WEBHOOK_QUEUE"
+queue = "vendsoft-webhooks-production"
+
+[[env.production.queues.consumers]]
+queue = "vendsoft-webhooks-production"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "vendsoft-webhooks-dlq-production"

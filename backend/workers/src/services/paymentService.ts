@@ -1,9 +1,11 @@
+import { RequestContext } from './logger';
 import { Env, CompositeIdentity, DomainMutation } from '../types';
 import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent } from './firestore';
 import { PaymentFSM } from './fsm/paymentFSM';
 import { LockService } from './lock';
 import { findSubscription, DiscoveryStrategy } from './discovery';
 import { SubscriptionService } from './subscriptionService';
+import { InstallationService } from './installationService';
 import { PaymentGateway, RazorpayProvider, VerifiedPayment } from './paymentGateway';
 
 export class PaymentService {
@@ -16,15 +18,15 @@ export class PaymentService {
    * Validates business rules and initiates a payment order using the configured gateway.
    * Returns a DomainMutation containing the write for the new payment record.
    */
-  static async initiateOrder(
-    env: Env,
+  static async initiateOrder(ctx: RequestContext, env: Env,
     identity: CompositeIdentity,
     planId: string,
     planName: string,
     durationDays: number,
     amountInr: number,
     amountPaise: number,
-    now: number
+    now: number,
+    instDoc?: any
   ): Promise<{ razorpayOrderId: string; writes: any[] }> {
     const customerId = identity.customerId;
     const installationId = identity.installationId || identity.installationUuid;
@@ -36,7 +38,7 @@ export class PaymentService {
     }
 
     // 1. Check global system configurations
-    const sysConfig = await getDocument(env, 'system_configs', 'global');
+    const sysConfig = await getDocument(ctx, env, 'system_configs', 'global');
     if (sysConfig) {
       if (sysConfig.maintenanceMode === true) {
         const err: any = new Error(sysConfig.maintenanceMessage || 'System maintenance in progress.');
@@ -50,12 +52,20 @@ export class PaymentService {
       }
     }
 
-    // 2. Verify installation is not banned or revoked
-    const instDoc = await getDocument(env, 'installations', installationId);
+    // 2. Validate installation state (Use provided instDoc or fetch if missing)
+    if (!instDoc) {
+      instDoc = await getDocument(ctx, env, 'installations', installationId);
+    }
+    
     if (instDoc) {
       if (instDoc.isBanned === true) {
         const err: any = new Error('This hardware installation has been banned.');
         err.code = 'INSTALLATION_BANNED';
+        throw err;
+      }
+      if (instDoc.customerId && instDoc.customerId !== customerId) {
+        const err: any = new Error('This device is registered to another customer.');
+        err.code = 'DEVICE_CONFLICT';
         throw err;
       }
       if (instDoc.status === 'REVOKED') {
@@ -66,65 +76,104 @@ export class PaymentService {
     }
 
     // 3. Prevent Pay-to-Steal
-    const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-    const activeSub = subs.find((s: any) => s.status === 'ACTIVE' && s.expiresAtEpochMs > now);
-    if (activeSub && activeSub.activeInstallationId && activeSub.activeInstallationId !== installationId) {
-      const err: any = new Error('You must transfer the active account to this device before you can purchase a subscription.');
-      err.code = 'TRANSFER_REQUIRED';
-      throw err;
+    const { sub: activeSub, isTrial } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.PAYMENT);
+    
+    if (activeSub && activeSub.status === 'ACTIVE' && activeSub.expiresAtEpochMs > now) {
+      const activeId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
+      if (activeId && activeId !== installationId && activeId !== identity.hardwareId) {
+        const err: any = new Error('You must transfer the active account to this device before you can purchase a subscription.');
+        err.code = 'TRANSFER_REQUIRED';
+        throw err;
+      }
     }
 
-    const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-    const activeTrial = trials.find((t: any) => t.status !== 'CANCELLED' && t.expiresAtEpochMs > now);
-    if (activeTrial && activeTrial.hardwareId !== installationId && activeTrial.hardwareId !== identity.hardwareId) {
-      const err: any = new Error('You must transfer your active trial to this device before you can purchase a subscription.');
-      err.code = 'TRANSFER_REQUIRED';
+    // 4. Create Order via Gateway & Persist in Firestore within Order Lock (AUD-002)
+    try {
+      return await LockService.withLock(ctx, env, 'order_lock', customerId, 15000, { installationId, planId }, async () => {
+        const gateway = this.getGateway();
+        let razorpayOrderId: string;
+        try {
+          razorpayOrderId = await gateway.createOrder(ctx, env, amountPaise, {
+            customerId,
+            installationId,
+            planId
+          });
+        } catch (gwErr) {
+          throw gwErr;
+        }
+
+        const paymentRecord = {
+          paymentId: razorpayOrderId,
+          razorpayOrderId,
+          installationId,
+          customerId,
+          planId,
+          planName,
+          durationDays,
+          amountInr,
+          idempotencyKey: identity.idempotencyKey || null,
+          status: PaymentFSM.transition({}, 'INITIATE'),
+          createdAtEpochMs: now,
+          clientIdentity: identity
+        };
+
+        const writes = [{
+          collectionPath: 'payments',
+          documentId: razorpayOrderId,
+          data: paymentRecord
+        }];
+
+        try {
+          await commitAtomicWrites(ctx, env, writes);
+        } catch (dbErr) {
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              await commitAtomicWrites(ctx, env, [{
+                collectionPath: 'payments',
+                documentId: razorpayOrderId,
+                data: null as any
+              }]);
+              break;
+            } catch (compErr) {
+              if (attempt === 3) {
+                await logAuditEvent(ctx, env, 'CRITICAL_ORPHAN_ORDER', {
+                  razorpayOrderId,
+                  customerId,
+                  installationId,
+                  planId,
+                  error: String(compErr)
+                });
+              } else {
+                await new Promise(r => setTimeout(r, 200));
+              }
+            }
+          }
+          throw dbErr;
+        }
+
+        return { razorpayOrderId, writes };
+      });
+    } catch (err: any) {
+      if (err.code === 'ALREADY_EXISTS') {
+        const lockErr: any = new Error('A payment order is already in progress for this customer.');
+        lockErr.code = 'CONCURRENT_ORDER_IN_PROGRESS';
+        throw lockErr;
+      }
       throw err;
     }
-
-    // 4. Create Order via Gateway
-    const gateway = this.getGateway();
-    const razorpayOrderId = await gateway.createOrder(env, amountPaise, {
-      customerId,
-      installationId,
-      planId
-    });
-
-    // 5. Build payment record mutation
-    const paymentRecord = {
-      paymentId: razorpayOrderId,
-      razorpayOrderId,
-      installationId,
-      customerId,
-      planId,
-      planName,
-      durationDays,
-      amountInr,
-      status: PaymentFSM.transition({}, 'INITIATE'),
-      createdAtEpochMs: now
-    };
-
-    const writes = [{
-      collectionPath: 'payments',
-      documentId: razorpayOrderId,
-      data: paymentRecord
-    }];
-
-    await commitAtomicWrites(env, writes);
-
-    return { razorpayOrderId };
   }
 
   /**
    * Pure builder for creating a settlement mutation for a verified payment.
    */
-  static buildSettlement(paymentDoc: any, razorpayPaymentId: string | null, signature: string | null, now: number): DomainMutation {
+  static buildSettlement(paymentDoc: any, subscriptionId: string, razorpayPaymentId: string | null, signature: string | null, now: number): DomainMutation {
     const writes = [{
       collectionPath: 'payments',
       documentId: paymentDoc.razorpayOrderId,
       data: {
         ...paymentDoc,
         status: PaymentFSM.transition(paymentDoc, 'SETTLE'),
+        subscriptionId,
         razorpayPaymentId: razorpayPaymentId || null,
         razorpaySignature: signature || null,
         updatedAtEpochMs: now
@@ -153,8 +202,7 @@ export class PaymentService {
    * Separated Verification Step. Verifies the authenticity of a payment via Gateway.
    * Returns a VerifiedPayment object, or throws if invalid.
    */
-  static async verifyOrder(
-    env: Env,
+  static async verifyOrder(ctx: RequestContext, env: Env,
     orderId: string,
     paymentId?: string,
     signature?: string
@@ -162,7 +210,7 @@ export class PaymentService {
     const gateway = this.getGateway();
 
     if (paymentId && signature) {
-      const isValid = await gateway.verifyPaymentSignature(env, orderId, paymentId, signature);
+      const isValid = await gateway.verifyPaymentSignature(ctx, env, orderId, paymentId, signature);
       if (isValid) {
         return { orderId, paymentId, signature };
       }
@@ -174,7 +222,7 @@ export class PaymentService {
     }
 
     // Fallback Verification
-    const fallbackPaymentId = await gateway.verifyPaymentFallback(env, orderId);
+    const fallbackPaymentId = await gateway.verifyPaymentFallback(ctx, env, orderId);
     if (fallbackPaymentId) {
       return { orderId, paymentId: fallbackPaymentId };
     }
@@ -188,9 +236,9 @@ export class PaymentService {
    * Verifies the authenticity of a webhook payload via Gateway.
    * Returns a boolean indicating validity.
    */
-  static async verifyWebhook(env: Env, rawBody: string, signature: string): Promise<boolean> {
+  static async verifyWebhook(ctx: RequestContext, env: Env, rawBody: string, signature: string): Promise<boolean> {
     const gateway = this.getGateway();
-    return await gateway.verifyWebhookSignature(env, rawBody, signature);
+    return await gateway.verifyWebhookSignature(ctx, env, rawBody, signature);
   }
 
   /**
@@ -198,89 +246,169 @@ export class PaymentService {
    * Locates the subscription, acquires a lock, builds mutations, commits atomically,
    * and triggers the refund saga if an ownership conflict is discovered.
    */
-  static async settleOrder(
-    env: Env,
+  static async settleOrder(ctx: RequestContext, env: Env,
     verifiedPayment: VerifiedPayment,
-    paymentDoc: any
-  ): Promise<{ status: 'SUCCESS' | 'REFUNDED', subscriptionId?: string, signedLeaseToken?: string, expiresAtEpochMs?: number }> {
+    razorpayOrderId: string
+  ): Promise<{ status: 'SUCCESS' | 'REFUNDED' | 'UNKNOWN' | 'ALREADY_PROCESSED' | 'REFUND_ERROR', subscriptionId?: string, signedLeaseToken?: string, expiresAtEpochMs?: number, error?: any, statusCode?: number }> {
+    return ctx.telemetry.measure('payment.saga.duration', { orderId: razorpayOrderId }, async () => {
     const now = Date.now();
-    const customerId = paymentDoc.customerId;
-    const installationId = paymentDoc.installationId;
-    const durationDays = typeof paymentDoc.durationDays === 'number' ? paymentDoc.durationDays : 365;
-    const planId = paymentDoc.planId || 'PRO_YEARLY';
-    const planName = paymentDoc.planName || 'Pro Annual License';
-
-    // 1. Deterministic Subscription Discovery
-    const { subscriptionId: foundId } = await findSubscription(env, customerId, DiscoveryStrategy.PAYMENT);
-    const subscriptionId = foundId || `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`; // Or generateShortId
-
-    let requireRefund = false;
     let resultPayload: any = null;
+    let requireRefund = false;
+    const orderLockKey = razorpayOrderId;
 
     try {
-      await LockService.withLock(
-        env,
-        'sub_lock',
-        subscriptionId,
+      await LockService.withLock(ctx, env,
+        'webhook_lock',
+        orderLockKey,
         30000,
-        { customerId, subscriptionId },
+        { orderLockKey },
         async () => {
-          const ops: any[] = [];
-          
-          try {
-            // Re-read payment document to prevent double-settlement in concurrent webhook deliveries
-            const currentPayment = await getDocument(env, 'payments', paymentDoc.paymentId);
-            if (!currentPayment || currentPayment.status !== 'INITIATED') {
-              // Already settled or refunding, no-op return.
-              resultPayload = { status: 'ALREADY_PROCESSED', subscriptionId };
+          const currentPayment = await getDocument(ctx, env, 'payments', razorpayOrderId);
+          if (!currentPayment) {
+            resultPayload = { status: 'UNKNOWN' };
+            return;
+          }
+
+          if (currentPayment.status === 'SUCCESS' || currentPayment.status === 'REFUNDED') {
+            resultPayload = { status: 'ALREADY_PROCESSED' };
+            return;
+          }
+
+          if (currentPayment.status === 'REFUND_PENDING') {
+            try {
+              const refundSuccess = await PaymentService.executeRefundSaga(ctx, env, currentPayment, verifiedPayment.paymentId);
+              if (!refundSuccess) {
+                resultPayload = { status: 'REFUND_ERROR', error: 'RAZORPAY_REFUND_ERROR', statusCode: 502 };
+                return;
+              }
+              resultPayload = { status: 'REFUNDED' };
               return;
+            } catch (err: any) {
+              if (err.code === 'CONCURRENT_REFUND_IN_PROGRESS' || err.code === 'ALREADY_EXISTS') {
+                resultPayload = { status: 'REFUND_ERROR', error: { code: 'CONCURRENT_REFUND_IN_PROGRESS', message: 'Refund is currently in progress by another process' }, statusCode: 409 };
+                return;
+              }
+              if (err.code === 'GATEWAY_REFUND_FAILED') {
+                resultPayload = { status: 'REFUND_ERROR', error: { code: 'GATEWAY_REFUND_FAILED', message: err.message }, statusCode: 502 };
+                return;
+              }
+              throw err;
             }
+          }
 
-            // Attempt to build provisioning. This will throw OWNERSHIP_CONFLICT if the sub is active on another device.
-            const provOp = await SubscriptionService.buildProvisioning(
-              env, subscriptionId, customerId, installationId, planId, planName, durationDays, now
-            );
+          if (currentPayment.status !== 'INITIATED') {
+            resultPayload = { status: 'ALREADY_PROCESSED' };
+            return;
+          }
+
+          const customerId = currentPayment.customerId;
+          const installationId = currentPayment.installationId;
+          const durationDays = typeof currentPayment.durationDays === 'number' ? currentPayment.durationDays : 365;
+          const planId = currentPayment.planId || 'PRO_YEARLY';
+          const planName = currentPayment.planName || 'Pro Annual License';
+
+          // 1. Deterministic Subscription Discovery (Moved INSIDE lock to prevent TOCTOU - AUD-003)
+          const { subscriptionId: foundId, sub: foundSub } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.PAYMENT);
+          const subscriptionId = foundId || `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
+          const doSettlement = async () => {
+            const ops: any[] = [];
             
-            // Settlement
-            const settleOp = this.buildSettlement(currentPayment, verifiedPayment.paymentId, verifiedPayment.signature || null, now);
-            
-            ops.push(...settleOp.writes);
-            ops.push(...provOp.writes);
+            try {
 
-            await commitAtomicWrites(env, ops);
-
-            resultPayload = {
-              status: 'SUCCESS',
-              subscriptionId,
-              signedLeaseToken: provOp.result.signedLeaseToken,
-              expiresAtEpochMs: provOp.result.newExpiresAt
-            };
-            
-            await logAuditEvent(env, 'PAYMENT_SETTLED', { 
-              razorpayOrderId: verifiedPayment.orderId, 
-              razorpayPaymentId: verifiedPayment.paymentId, 
-              customerId, 
-              installationId, 
-              planId 
-            });
-
-          } catch (domainErr: any) {
-            if (domainErr.code === 'OWNERSHIP_CONFLICT') {
-              requireRefund = true;
+              // Capture the predecessor installation BEFORE any mutation occurs
+              let oldInstallationId = null;
+              let targetSubDoc = foundSub;
               
-              // Request Refund
-              const refundOp = this.buildRefundRequest(paymentDoc, now);
-              ops.push(...refundOp.writes);
-              await commitAtomicWrites(env, ops);
-            } else {
-              throw domainErr;
+              if (subscriptionId.startsWith('TRIAL_')) {
+                if (foundSub) {
+                  oldInstallationId = foundSub.hardwareId;
+                  targetSubDoc = {
+                    subscriptionId,
+                    customerId: foundSub.customerId,
+                    activeInstallationId: foundSub.hardwareId,
+                    planId: 'FREE_TRIAL_30',
+                    status: foundSub.expiresAtEpochMs > now ? 'ACTIVE' : 'EXPIRED',
+                    expiresAtEpochMs: foundSub.expiresAtEpochMs,
+                    startsAtEpochMs: foundSub.startsAtEpochMs
+                  };
+                }
+              } else {
+                if (targetSubDoc) oldInstallationId = targetSubDoc.activeInstallationId;
+              }
+
+              const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+              // Attempt to build provisioning. This will throw OWNERSHIP_CONFLICT if the sub is active on another device.
+              const provOp = await SubscriptionService.buildProvisioning(
+                targetSubDoc, secretKey, subscriptionId, customerId, installationId, planId, planName, durationDays, now
+              );
+              
+              // Settlement
+              const settleOp = this.buildSettlement(currentPayment, subscriptionId, verifiedPayment.paymentId, verifiedPayment.signature || null, now);
+              
+              ops.push(...settleOp.writes);
+              ops.push(...provOp.writes);
+
+              // Activate new installation if clientIdentity was captured during order initiation
+              const identity = currentPayment.clientIdentity;
+              if (identity) {
+                const actOp = InstallationService.buildActivation(
+                  installationId, customerId, identity.hardwareId, identity, identity.deviceModel, identity.fcmToken || null, now
+                );
+                ops.push(...actOp.writes);
+              }
+
+              // Conditionally revoke old installation if ownership changed and it isn't identical (renewal)
+              if (oldInstallationId && oldInstallationId !== installationId) {
+                const oldInst = await getDocument(ctx, env, 'installations', oldInstallationId);
+                if (oldInst && oldInst.status === 'ACTIVE') {
+                  const revOp = InstallationService.buildRevocation(oldInst, oldInstallationId, 'Superseded by new payment', now);
+                  ops.push(...revOp.writes);
+                }
+              }
+
+              await commitAtomicWrites(ctx, env, ops);
+
+              resultPayload = {
+                status: 'SUCCESS',
+                subscriptionId,
+                signedLeaseToken: provOp.result.signedLeaseToken,
+                expiresAtEpochMs: provOp.result.newExpiresAt
+              };
+              
+              await logAuditEvent(ctx, env, 'PAYMENT_SETTLED', { 
+                razorpayOrderId: verifiedPayment.orderId, 
+                razorpayPaymentId: verifiedPayment.paymentId, 
+                customerId, 
+                installationId, 
+                planId 
+              });
+
+            } catch (domainErr: any) {
+              if (domainErr.code === 'OWNERSHIP_CONFLICT') {
+                requireRefund = true;
+                
+                // Request Refund
+                const refundOp = this.buildRefundRequest(currentPayment, now);
+                ops.push(...refundOp.writes);
+                await commitAtomicWrites(ctx, env, ops);
+              } else {
+                throw domainErr;
+              }
             }
+          };
+
+          if (foundId) {
+            const nestedLockType = foundId.startsWith('TRIAL_') ? 'transfer_lock' : 'sub_lock';
+            await LockService.withLock(ctx, env, nestedLockType, foundId, 30000, { customerId, subscriptionId: foundId }, doSettlement);
+          } else {
+            await doSettlement();
           }
         }
       );
     } catch (err: any) {
       if (err.code === 'ALREADY_EXISTS') {
-        const lockErr: any = new Error('Subscription is locked by another process.');
+        const lockErr: any = new Error('Order or subscription is locked by another process.');
         lockErr.code = 'CONCURRENT_MUTATION_LOCKED';
         throw lockErr;
       }
@@ -288,9 +416,9 @@ export class PaymentService {
     }
 
     if (requireRefund) {
-      const currentPaymentDoc = await getDocument(env, 'payments', verifiedPayment.orderId);
+      const currentPaymentDoc = await getDocument(ctx, env, 'payments', verifiedPayment.orderId);
       if (currentPaymentDoc) {
-        await this.executeRefundSaga(env, currentPaymentDoc, verifiedPayment.paymentId);
+        await this.executeRefundSaga(ctx, env, currentPaymentDoc, verifiedPayment.paymentId);
       }
       const refundErr: any = new Error('Subscription ownership changed. Your payment has been automatically refunded.');
       refundErr.code = 'ORDER_INVALIDATED';
@@ -298,33 +426,51 @@ export class PaymentService {
     }
 
     return resultPayload;
+    }); // End of payment.saga.duration telemetry wrapper
   }
 
   /**
    * Executes the external refund network call (the Saga), completely outside any locks or transactions.
    */
-  static async executeRefundSaga(env: Env, paymentDoc: any, razorpayPaymentId: string): Promise<boolean> {
-    const gateway = this.getGateway();
-    const success = await gateway.refundPayment(env, razorpayPaymentId);
-    
-    if (success) {
-      // FSM: REFUND_PENDING -> REFUNDED
-      await setDocument(env, 'payments', paymentDoc.razorpayOrderId, { 
-        ...paymentDoc, 
-        status: PaymentFSM.transition(paymentDoc, 'COMPLETE_REFUND'), 
-        refundedAtEpochMs: Date.now() 
+  static async executeRefundSaga(ctx: RequestContext, env: Env, paymentDoc: any, razorpayPaymentId: string): Promise<boolean> {
+    return ctx.telemetry.measure('payment.refund.duration', { razorpayPaymentId }, async () => {
+    try {
+      return await LockService.withLock(ctx, env, 'refund_lock', paymentDoc.razorpayOrderId, 15000, { razorpayPaymentId }, async () => {
+        const latestPayDoc = await getDocument(ctx, env, 'payments', paymentDoc.razorpayOrderId) || paymentDoc;
+        if (latestPayDoc.status === 'REFUNDED') {
+          return true;
+        }
+        const gateway = this.getGateway();
+        const success = await gateway.refundPayment(ctx, env, razorpayPaymentId);
+        
+        if (success) {
+          await setDocument(ctx, env, 'payments', paymentDoc.razorpayOrderId, { 
+            ...latestPayDoc, 
+            status: PaymentFSM.transition(latestPayDoc, 'COMPLETE_REFUND'), 
+            refundedAtEpochMs: Date.now() 
+          });
+          return true;
+        } else {
+          const err: any = new Error('Gateway refund failed.');
+          err.code = 'GATEWAY_REFUND_FAILED';
+          throw err;
+        }
       });
-      return true;
-    } else {
-      // Saga failed, requires retry or manual intervention. We do NOT revert FSM.
-      return false;
+    } catch (err: any) {
+      if (err.code === 'ALREADY_EXISTS') {
+        const lockErr: any = new Error('A refund is already in progress for this payment.');
+        lockErr.code = 'CONCURRENT_REFUND_IN_PROGRESS';
+        throw lockErr;
+      }
+      throw err;
     }
+    }); // End of payment.refund.duration telemetry wrapper
   }
 
   /**
    * Helper to cancel an initiated order directly (e.g. user closed modal).
    */
-  static async cancelOrder(env: Env, paymentDoc: any): Promise<void> {
+  static async cancelOrder(ctx: RequestContext, env: Env, paymentDoc: any): Promise<void> {
     if (paymentDoc.status === 'INITIATED') {
       const writes = [{
         collectionPath: 'payments',
@@ -335,7 +481,7 @@ export class PaymentService {
           updatedAtEpochMs: Date.now()
         }
       }];
-      await commitAtomicWrites(env, writes);
+      await commitAtomicWrites(ctx, env, writes);
     }
   }
 }

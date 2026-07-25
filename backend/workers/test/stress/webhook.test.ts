@@ -3,6 +3,22 @@ import { resetTestEnv, getMockEnv, mockFirestore, mockLockService, TestClock } f
 import { handleRazorpayWebhook } from '../../src/webhooks';
 import { LockService } from '../../src/services/lock';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Lock Contention & Concurrency', () => {
   let env: any;
 
@@ -28,23 +44,25 @@ describe('Lock Contention & Concurrency', () => {
       createdAtEpochMs: TestClock.now()
     });
 
-    // 2. We override the mockLockService to actually simulate a basic mutex lock
-    let isLocked = false;
-    const lockWaiters: (() => void)[] = [];
+    // 2. We override the mockLockService to actually simulate a mutex lock per resourceId
+    const locks: Record<string, boolean> = {};
+    const lockWaiters: Record<string, (() => void)[]> = {};
     
-    mockLockService.withLock.mockImplementation(async (env, lockType, resourceId, timeoutMs, metadata, doWork) => {
-      // Very crude in-memory lock
-      while (isLocked) {
+    mockLockService.withLock.mockImplementation(async (mockCtx, env, lockType, resourceId, timeoutMs, metadata, doWork) => {
+      const key = `${lockType}:${resourceId}`;
+      if (!lockWaiters[key]) lockWaiters[key] = [];
+      
+      while (locks[key]) {
         await new Promise<void>(resolve => {
-          lockWaiters.push(resolve);
+          lockWaiters[key].push(resolve);
         });
       }
-      isLocked = true;
+      locks[key] = true;
       try {
         return await doWork();
       } finally {
-        isLocked = false;
-        const next = lockWaiters.shift();
+        locks[key] = false;
+        const next = lockWaiters[key].shift();
         if (next) next();
       }
     });
@@ -61,7 +79,7 @@ describe('Lock Contention & Concurrency', () => {
         headers: { 'x-razorpay-signature': 'valid_webhook_sig', 'Content-Type': 'application/json' },
         body: JSON.stringify(webhookPayload)
       });
-      return handleRazorpayWebhook(request, env);
+      return handleRazorpayWebhook(mockCtx, request, env);
     });
 
     const responses = await Promise.all(requests);

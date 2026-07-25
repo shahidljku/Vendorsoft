@@ -13,8 +13,14 @@ export interface Env {
   RAZORPAY_WEBHOOK_SECRET?: string;
   RSA_PRIVATE_KEY?: string;
   
-  // KV Namespaces
+  // KV Namespaces & Queues
   APK_STORE: KVNamespace;
+  WEBHOOK_QUEUE: Queue<any>;
+  
+  // Release Engineering Metadata
+  WORKER_VERSION?: string;
+  GIT_COMMIT?: string;
+  BUILD_TIMESTAMP?: string;
 }
 
 /**

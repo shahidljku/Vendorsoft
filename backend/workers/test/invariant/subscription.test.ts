@@ -2,6 +2,22 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { resetTestEnv, getMockEnv, mockFirestore, TestClock } from '../setup';
 import { InstallationService } from '../../src/services/installationService';
 
+
+const mockCtx = {
+  traceId: 'test-trace',
+  logger: {
+    trace: () => {},
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {}
+  },
+  telemetry: {
+    measure: async (name, tags, fn) => fn()
+  }
+} as any;
+
+
 describe('Business Invariants', () => {
   let env: any;
 
@@ -29,7 +45,7 @@ describe('Business Invariants', () => {
     
     // 2. Attempt to check eligibility again (simulating a re-registration)
     await expect(
-      InstallationService.checkHardwareTrialEligibility(env, hardwareId, { customerId } as any, '1234567890', 'Test', '1.1.1.1', '1.0')
+      InstallationService.checkHardwareTrialEligibility(mockCtx, env, hardwareId, { customerId } as any, '1234567890', 'Test', '1.1.1.1', '1.0')
     ).rejects.toThrow('This device has already consumed its lifetime trial.');
   });
 });

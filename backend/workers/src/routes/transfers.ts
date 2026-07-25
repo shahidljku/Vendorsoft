@@ -1,3 +1,4 @@
+import { RequestContext } from '../services/logger';
 import { Env, CompositeIdentity } from '../types';
 import { getDocument, queryCollection } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
@@ -8,9 +9,9 @@ import { TransferService } from '../services/transferService';
  * Initiates a Peer-to-Peer device transfer claim.
  * See API_SPECIFICATION.md Section 2.5.1 & FIRESTORE_SCHEMA.md Section 3.7.
  */
-export async function handleRequestTransfer(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleRequestTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
-    const config = await getDocument(env, 'system_configs', 'global');
+    const config = await getDocument(ctx, env, 'system_configs', 'global');
     if (config && (config.allowTransfers === false || config.maintenanceMode === true)) {
       return createErrorResponse(
         config.maintenanceMode ? 503 : 403,
@@ -34,7 +35,7 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
 
     const deviceModel = (body.deviceModel || 'Unknown New Device').substring(0, 100);
 
-    const result = await TransferService.requestTransfer(env, customerId, subscriptionId, mobileNumber, identity, deviceModel);
+    const result = await TransferService.requestTransfer(ctx, env, customerId, subscriptionId, mobileNumber, identity, deviceModel);
     
     return new Response(JSON.stringify(result), {
       status: result.data.transferId === 'trn_already_active' ? 200 : 202,
@@ -42,7 +43,7 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
     });
 
   } catch (err: any) {
-    console.error('Error in POST /api/v1/transfers/request:', err);
+    ctx.logger.error('Error in POST /api/v1/transfers/request:', err);
     if (err.code === 'NO_CUSTOMER_FOUND' || err.code === 'NO_ACTIVE_SUBSCRIPTION') return createErrorResponse(404, err.code, err.message);
     if (err.code === 'TOO_MANY_REQUESTS') return createErrorResponse(429, err.code, err.message);
     if (err.code === 'ONLY_ONE_PENDING_TRANSFER_ALLOWED') return createErrorResponse(409, err.code, err.message, err.details);
@@ -56,20 +57,20 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
  * Mandatory polling endpoint called by old device upon foregrounding/sync to detect pending claims.
  * See API_SPECIFICATION.md Section 2.5.2.
  */
-export async function handleGetPendingTransfers(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleGetPendingTransfers(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     if (!identity.installationId) {
       return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Header x-installation-uuid is required.');
     }
 
-    const rawPendingList = await queryCollection(env, 'device_transfers', [
+    const rawPendingList = await queryCollection(ctx, env, 'device_transfers', [
       { field: 'oldInstallationId', op: 'EQUAL', value: identity.installationId }
     ]);
     
     const pendingList = rawPendingList.filter((t: any) => t.status === 'PENDING');
 
     if (identity.hardwareId && identity.hardwareId !== identity.installationId) {
-      const trialRawList = await queryCollection(env, 'device_transfers', [
+      const trialRawList = await queryCollection(ctx, env, 'device_transfers', [
         { field: 'oldInstallationId', op: 'EQUAL', value: identity.hardwareId }
       ]);
       pendingList.push(...trialRawList.filter((t: any) => t.status === 'PENDING'));
@@ -89,7 +90,7 @@ export async function handleGetPendingTransfers(request: Request, env: Env, iden
       data: { pendingTransfers: activePending }
     }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
   } catch (err: any) {
-    console.error('Error in GET /api/v1/transfers/pending:', err);
+    ctx.logger.error('Error in GET /api/v1/transfers/pending:', err);
     return createErrorResponse(500, 'TRANSFER_POLL_FAILED', `Failed to query pending transfers: ${err.message || err}`);
   }
 }
@@ -99,7 +100,7 @@ export async function handleGetPendingTransfers(request: Request, env: Env, iden
  * Atomically approves transfer, reassigns activeInstallationId, revokes old device, and generates signedLeaseToken.
  * See API_SPECIFICATION.md Section 2.5.3.
  */
-export async function handleApproveTransfer(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleApproveTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     const body = await request.json() as any;
     const transferId = body.transferId;
@@ -110,7 +111,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
     }
 
     if (idempotencyKey) {
-      const existingIdem = await getDocument(env, 'idempotency_keys', idempotencyKey);
+      const existingIdem = await getDocument(ctx, env, 'idempotency_keys', idempotencyKey);
       if (existingIdem && existingIdem.expiresAtEpochMs > Date.now() && existingIdem.responsePayload) {
         let cachedData: any;
         try { cachedData = JSON.parse(existingIdem.responsePayload); } catch (e) { cachedData = existingIdem.responsePayload; }
@@ -121,19 +122,19 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
       }
     }
 
-    const result = await TransferService.approveTransfer(env, transferId, identity, idempotencyKey);
+    const result = await TransferService.approveTransfer(ctx, env, transferId, identity, idempotencyKey);
 
     return new Response(JSON.stringify(result), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in POST /api/v1/transfers/approve:', err);
+    ctx.logger.error('Error in POST /api/v1/transfers/approve:', err);
     if (err.code === 'TRANSFER_NOT_PENDING') return createErrorResponse(400, err.code, err.message);
     if (err.code === 'UNAUTHORIZED_APPROVAL') return createErrorResponse(403, err.code, err.message);
     if (err.code === 'SUBSCRIPTION_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
     if (err.code === 'TRANSFER_ALREADY_PROCESSED') return createErrorResponse(409, err.code, err.message);
     if (err.code === 'TRIAL_ALREADY_USED') return createErrorResponse(403, err.code, err.message);
-    if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED' || err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', err.message);
     return createErrorResponse(500, 'TRANSFER_APPROVAL_FAILED', `Failed to approve transfer: ${err.message || err}`);
   }
 }
@@ -143,7 +144,7 @@ export async function handleApproveTransfer(request: Request, env: Env, identity
  * Rejects transfer claim, preserving old device's rights.
  * See API_SPECIFICATION.md Section 2.5.4.
  */
-export async function handleRejectTransfer(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleRejectTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     const body = await request.json() as any;
     const transferId = body.transferId;
@@ -154,7 +155,7 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
     }
 
     if (idempotencyKey) {
-      const existingIdem = await getDocument(env, 'idempotency_keys', idempotencyKey);
+      const existingIdem = await getDocument(ctx, env, 'idempotency_keys', idempotencyKey);
       if (existingIdem && existingIdem.expiresAtEpochMs > Date.now() && existingIdem.responsePayload) {
         let cachedData: any;
         try { cachedData = JSON.parse(existingIdem.responsePayload); } catch (e) { cachedData = existingIdem.responsePayload; }
@@ -165,17 +166,18 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
       }
     }
 
-    const result = await TransferService.rejectTransfer(env, transferId, identity, idempotencyKey);
+    const result = await TransferService.rejectTransfer(ctx, env, transferId, identity, idempotencyKey);
 
     return new Response(JSON.stringify(result), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
 
   } catch (err: any) {
-    console.error('Error in POST /api/v1/transfers/reject:', err);
+    ctx.logger.error('Error in POST /api/v1/transfers/reject:', err);
     if (err.code === 'TRANSFER_NOT_PENDING') return createErrorResponse(400, err.code, err.message);
     if (err.code === 'UNAUTHORIZED_REJECTION') return createErrorResponse(403, err.code, err.message);
     if (err.code === 'TRANSFER_ALREADY_PROCESSED') return createErrorResponse(409, err.code, err.message);
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED' || err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', err.message);
     return createErrorResponse(500, 'TRANSFER_REJECTION_FAILED', `Failed to reject transfer: ${err.message || err}`);
   }
 }
@@ -184,7 +186,7 @@ export async function handleRejectTransfer(request: Request, env: Env, identity:
  * Handles GET /api/v1/transfers/:transferId/status
  * Allows the requesting device to poll for the status of a transfer.
  */
-export async function handleGetTransferStatus(request: Request, env: Env, identity: CompositeIdentity, path: string): Promise<Response> {
+export async function handleGetTransferStatus(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity, path: string): Promise<Response> {
   try {
     const transferId = path.substring('/v1/transfers/'.length, path.length - '/status'.length);
     
@@ -192,7 +194,7 @@ export async function handleGetTransferStatus(request: Request, env: Env, identi
       return createErrorResponse(400, 'MISSING_TRANSFER_ID', 'Transfer ID is required in URL path.');
     }
 
-    const transferDoc = await getDocument(env, 'device_transfers', transferId);
+    const transferDoc = await getDocument(ctx, env, 'device_transfers', transferId);
     
     if (!transferDoc) {
       return createErrorResponse(404, 'TRANSFER_NOT_FOUND', 'The requested transfer was not found.');
@@ -217,7 +219,7 @@ export async function handleGetTransferStatus(request: Request, env: Env, identi
     }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
     
   } catch (err: any) {
-    console.error('Error in GET /api/v1/transfers/status:', err);
+    ctx.logger.error('Error in GET /api/v1/transfers/status:', err);
     return createErrorResponse(500, 'TRANSFER_STATUS_FAILED', `Failed to get transfer status: ${err.message || err}`);
   }
 }
@@ -226,7 +228,7 @@ export async function handleGetTransferStatus(request: Request, env: Env, identi
  * Handles POST /api/v1/transfers/cancel
  * Cancels a transfer claim from the requesting device (new device).
  */
-export async function handleCancelTransfer(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleCancelTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     const body = await request.json() as any;
     const transferId = body.transferId;
@@ -235,17 +237,18 @@ export async function handleCancelTransfer(request: Request, env: Env, identity:
       return createErrorResponse(400, 'MISSING_TRANSFER_ID', 'Parameter transferId is required.');
     }
 
-    const result = await TransferService.cancelTransfer(env, transferId, identity);
+    const result = await TransferService.cancelTransfer(ctx, env, transferId, identity);
 
     return new Response(JSON.stringify(result), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
 
   } catch (err: any) {
-    console.error('Error in POST /api/v1/transfers/cancel:', err);
+    ctx.logger.error('Error in POST /api/v1/transfers/cancel:', err);
     if (err.code === 'TRANSFER_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
     if (err.code === 'TRANSFER_NOT_PENDING') return createErrorResponse(409, err.code, err.message);
     if (err.code === 'UNAUTHORIZED_CANCEL') return createErrorResponse(403, err.code, err.message);
+    if (err.code === 'CONCURRENT_MUTATION_LOCKED' || err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', err.message);
     return createErrorResponse(500, 'TRANSFER_CANCELLATION_FAILED', `Failed to cancel transfer: ${err.message || err}`);
   }
 }

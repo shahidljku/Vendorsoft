@@ -1,3 +1,4 @@
+import { RequestContext } from '../services/logger';
 import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { getDocument, setDocument, queryCollection } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
@@ -9,10 +10,10 @@ import { findSubscription, DiscoveryStrategy } from '../services/discovery';
  * Authoritative entitlement check enforcing the One Active Device Rule (`activeInstallationId == x-installation-id`).
  * See API_SPECIFICATION.md Section 2.3 & SECURITY_RULES.md Section 1.1 & 1.2.
  */
-export async function handleGetSubscriptionStatus(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleGetSubscriptionStatus(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     // 1. Check system maintenance gate
-    const config = await getDocument(env, 'system_configs', 'global');
+    const config = await getDocument(ctx, env, 'system_configs', 'global');
     if (config && config.maintenanceMode === true) {
       return createErrorResponse(
         503,
@@ -26,7 +27,7 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
     let customerId = identity.customerId || url.searchParams.get('customerId') || undefined;
 
     if (!customerId && identity.installationId) {
-      const instDoc = await getDocument(env, 'installations', identity.installationId);
+      const instDoc = await getDocument(ctx, env, 'installations', identity.installationId);
       if (instDoc && instDoc.customerId) {
         customerId = instDoc.customerId;
       }
@@ -41,7 +42,7 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
     }
 
     // 2.5 Check if customer is deactivated
-    const customerDoc = await getDocument(env, 'customers', customerId);
+    const customerDoc = await getDocument(ctx, env, 'customers', customerId);
     if (customerDoc && customerDoc.status === 'DEACTIVATED') {
       return createErrorResponse(
         403,
@@ -54,7 +55,7 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
     let sub: any = null;
     const now = Date.now();
     try {
-      const { sub: foundSub } = await findSubscription(env, customerId, DiscoveryStrategy.SUBSCRIPTION_STATUS, identity);
+      const { sub: foundSub } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.SUBSCRIPTION_STATUS, identity);
       sub = foundSub;
     } catch (err: any) {
       if (err.code === 'SUBSCRIPTION_CANCELLED') {
@@ -67,6 +68,8 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
         return createErrorResponse(403, 'INSTALLATION_SUPERSEDED', 'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.', err.details);
       } else if (err.code === 'TRIAL_OWNERSHIP_MISMATCH') {
         return createErrorResponse(403, 'TRIAL_OWNERSHIP_MISMATCH', 'This device hardware trial is associated with a different customer account.');
+      } else if (err.code === 'TRIAL_PROVISION_LOCKED' || err.code === 'ALREADY_EXISTS') {
+        return createErrorResponse(500, 'TRIAL_PROVISION_LOCKED', 'Trial provisioning is currently locked by another process.');
       }
       throw err;
     }
@@ -121,46 +124,46 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
     let signedLeaseToken = sub.signedLeaseToken;
     let needsNewToken = false;
 
-    if (signedLeaseToken) {
-      try {
-        const parts = signedLeaseToken.split('.');
-        const payloadStr = atob(parts[0].replace(/-/g, '+').replace(/_/g, '/'));
-        const parsed = JSON.parse(payloadStr);
-        // Only regenerate if offline validity drops below 24 hours or key details change
-        if (
-          !parsed.offlineValidUntilEpochMs || 
-          parsed.offlineValidUntilEpochMs < now + (24 * 60 * 60 * 1000) ||
-          parsed.planId !== sub.planId ||
-          parsed.deviceId !== leasePayload.deviceId
-        ) {
-          needsNewToken = true;
-        }
-      } catch (e) {
+    if (signedLeaseToken && sub.leaseIssuedAtEpochMs) {
+      // Only regenerate if the lease is older than 24 hours (for offline renewal buffer)
+      // or if key details that belong in the token payload have changed
+      const leaseAgeMs = now - sub.leaseIssuedAtEpochMs;
+      if (
+        leaseAgeMs > (24 * 60 * 60 * 1000) ||
+        sub.lastLeasePlanId !== sub.planId ||
+        sub.lastLeaseDeviceId !== leasePayload.deviceId
+      ) {
         needsNewToken = true;
       }
     } else {
-      needsNewToken = true;
+      needsNewToken = true; // Legacy records (leaseIssuedAtEpochMs == null) issue a fresh lease once
     }
 
     if (needsNewToken) {
       signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
       
-      // Save the generated token so future requests skip the RSA signing
+      const updatedMetadata = {
+        signedLeaseToken,
+        leaseIssuedAtEpochMs: now,
+        lastLeasePlanId: sub.planId,
+        lastLeaseDeviceId: leasePayload.deviceId,
+        updatedAtEpochMs: now
+      };
+      
+      // Save the generated token and metadata so future requests skip the RSA signing
       if (sub.subscriptionId && sub.subscriptionId.startsWith('TRIAL_')) {
         const hardwareId = sub.subscriptionId.replace('TRIAL_', '');
-        const trialDoc = await getDocument(env, 'hardware_trials', hardwareId);
+        const trialDoc = await getDocument(ctx, env, 'hardware_trials', hardwareId);
         if (trialDoc) {
-          await setDocument(env, 'hardware_trials', hardwareId, {
+          await setDocument(ctx, env, 'hardware_trials', hardwareId, {
             ...trialDoc,
-            signedLeaseToken,
-            updatedAtEpochMs: now
+            ...updatedMetadata
           });
         }
       } else if (sub.subscriptionId) {
-        await setDocument(env, 'subscriptions', sub.subscriptionId, {
+        await setDocument(ctx, env, 'subscriptions', sub.subscriptionId, {
           ...sub,
-          signedLeaseToken,
-          updatedAtEpochMs: now
+          ...updatedMetadata
         });
       }
     }
@@ -194,7 +197,7 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       }
     });
   } catch (err: any) {
-    console.error('Error in GET /api/v1/subscriptions/status:', err);
+    ctx.logger.error('Error in GET /api/v1/subscriptions/status:', err);
     return createErrorResponse(
       500,
       'SUBSCRIPTION_CHECK_FAILED',

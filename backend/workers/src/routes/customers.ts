@@ -1,3 +1,4 @@
+import { RequestContext } from '../services/logger';
 import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
@@ -12,8 +13,7 @@ import { InstallationService } from '../services/installationService';
  * and grants a 30-day DEMO_FREE subscription where activeInstallationId == inst_xxxxxxxxx.
  * See API_SPECIFICATION.md Section 2.2 & FIRESTORE_SCHEMA.md Section 3.2, 3.3, 3.4.
  */
-export async function handleCustomerRegistration(
-  request: Request,
+export async function handleCustomerRegistration(ctx: RequestContext, request: Request,
   env: Env,
   identity: CompositeIdentity
 ): Promise<Response> {
@@ -23,7 +23,7 @@ export async function handleCustomerRegistration(
 
   // 1. Check global system configuration flags (`system_configs/global`)
   try {
-    const sysConfig = await getDocument(env, 'system_configs', 'global');
+    const sysConfig = await getDocument(ctx, env, 'system_configs', 'global');
     if (sysConfig) {
       if (sysConfig.maintenanceMode === true) {
         return createErrorResponse(
@@ -48,7 +48,7 @@ export async function handleCustomerRegistration(
   const idempotencyKey = identity.idempotencyKey;
   if (idempotencyKey) {
     try {
-      const existingIdem = await getDocument(env, 'idempotency_keys', idempotencyKey);
+      const existingIdem = await getDocument(ctx, env, 'idempotency_keys', idempotencyKey);
       if (existingIdem && existingIdem.expiresAtEpochMs > Date.now() && existingIdem.responsePayload) {
         let cachedData: any;
         try {
@@ -123,7 +123,7 @@ export async function handleCustomerRegistration(
 
   // 4. Strict One-Device Limit: Check by Mobile Number FIRST
   try {
-    const existingCustomers = await queryCollection(env, 'customers', [
+    const existingCustomers = await queryCollection(ctx, env, 'customers', [
       { field: 'mobileNumber', op: 'EQUAL', value: inputMobileNumber }
     ]);
 
@@ -135,7 +135,7 @@ export async function handleCustomerRegistration(
       }
 
       // Fetch their subscriptions
-      const { sub: foundSub } = await findSubscription(env, oldCust.customerId, DiscoveryStrategy.CUSTOMER_UPDATE);
+      const { sub: foundSub } = await findSubscription(ctx, env, oldCust.customerId, DiscoveryStrategy.CUSTOMER_UPDATE);
       let latestSub = foundSub;
 
       if (!latestSub) {
@@ -157,7 +157,7 @@ export async function handleCustomerRegistration(
         if (!latestSub.activeInstallationId && latestSub.planId === 'FREE_TRIAL_30') {
           isSameDevice = true;
           try {
-            await setDocument(env, 'hardware_trials', reqHardwareId, {
+            await setDocument(ctx, env, 'hardware_trials', reqHardwareId, {
               hardwareId: reqHardwareId,
               startedAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
               expiresAtEpochMs: latestSub.expiresAtEpochMs,
@@ -168,17 +168,14 @@ export async function handleCustomerRegistration(
         }
 
         if (!isSameDevice) {
-          const activeInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
+          const activeInst = await getDocument(ctx, env, 'installations', latestSub.activeInstallationId);
           if (activeInst && activeInst.hardwareId === reqHardwareId) {
             isSameDevice = true;
           } else if (latestSub.status === 'EXPIRED' || latestSub.status === 'CANCELLED' || (latestSub.expiresAtEpochMs && now > latestSub.expiresAtEpochMs)) {
-            // If subscription is dead, allow login on new device so they can purchase a new one
+            // If subscription is dead, allow login on new device so they can purchase a new one.
+            // This is completely stateless. We do NOT update the activeInstallationId in the database here.
+            // Ownership will atomically transfer only if and when payment settlement completes.
             isSameDevice = true;
-            if (latestSub.planId !== 'FREE_TRIAL_30') {
-              latestSub.activeInstallationId = reqHardwareId || identity.installationId;
-              latestSub.updatedAtEpochMs = now;
-              await setDocument(env, 'subscriptions', latestSub.subscriptionId, latestSub);
-            }
           }
         }
 
@@ -191,7 +188,7 @@ export async function handleCustomerRegistration(
             const leasePayload = {
               subscriptionId: latestSub.subscriptionId,
               customerId: oldCust.customerId,
-              activeInstallationId: latestSub.activeInstallationId,
+              activeInstallationId: reqHardwareId || identity.installationId || latestSub.activeInstallationId,
               planId: latestSub.planId,
               planName: '30-Day Pro Trial',
               startsAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
@@ -205,14 +202,14 @@ export async function handleCustomerRegistration(
           }
 
           if (body.fcmToken) {
-            const existingInst = await getDocument(env, 'installations', latestSub.activeInstallationId);
+            const existingInst = await getDocument(ctx, env, 'installations', latestSub.activeInstallationId);
             if (existingInst) {
               const updatedInst = {
                 ...existingInst,
                 fcmToken: body.fcmToken,
                 lastSeenAtEpochMs: Date.now()
               };
-              await setDocument(env, 'installations', latestSub.activeInstallationId, updatedInst);
+              await setDocument(ctx, env, 'installations', latestSub.activeInstallationId, updatedInst);
             }
           }
 
@@ -236,7 +233,7 @@ export async function handleCustomerRegistration(
       }
     }
   } catch (err: any) {
-    console.error('Database error during mobileNumber lookup:', err);
+    ctx.logger.error('Database error during mobileNumber lookup:', err);
     return createErrorResponse(500, 'DB_ERROR', 'Failed to verify account uniqueness. Please try again.');
   }
 
@@ -248,12 +245,12 @@ export async function handleCustomerRegistration(
   let isHardwareTrialExpired = false;
 
   try {
-    await InstallationService.checkHardwareTrialEligibility(env, reqHardwareId, identity, inputMobileNumber, businessName, ipAddress, request.headers.get('x-app-version') || 'unknown');
+    await InstallationService.checkHardwareTrialEligibility(ctx, env, reqHardwareId, identity, inputMobileNumber, businessName, ipAddress, request.headers.get('x-app-version') || 'unknown');
   } catch(err: any) {
     if (err.code === 'TRIAL_ALREADY_USED') {
       return createErrorResponse(409, 'TRIAL_ALREADY_USED', err.message);
     }
-    console.error('Hardware Trial check error:', err);
+    ctx.logger.error('Hardware Trial check error:', err);
     return createErrorResponse(500, 'DB_ERROR', 'Failed to verify hardware trial status.');
   }
 
@@ -322,6 +319,10 @@ export async function handleCustomerRegistration(
         customerId: customerId,
         trialUsed: true,
         lastSeenAtEpochMs: now,
+        signedLeaseToken,
+        leaseIssuedAtEpochMs: now,
+        lastLeasePlanId: 'FREE_TRIAL_30',
+        lastLeaseDeviceId: installationId
       },
       requireDoesNotExist: true // Guarantees atomic one-time trial creation
     }
@@ -352,7 +353,7 @@ export async function handleCustomerRegistration(
   }
 
   try {
-    await commitAtomicWrites(env, batchWrites);
+    await commitAtomicWrites(ctx, env, batchWrites);
 
     const responseWrapper: ApiResponse = {
       success: true,
@@ -360,7 +361,7 @@ export async function handleCustomerRegistration(
     };
 
     // SUCCESS AUDIT LOG
-    await logAuditEvent(env, 'REGISTRATION_SUCCESS', {
+    await logAuditEvent(ctx, env, 'REGISTRATION_SUCCESS', {
         actorType: 'USER',
         actorId: identity.customerId || 'unknown',
         targetType: 'hardware_trials',
@@ -384,7 +385,7 @@ export async function handleCustomerRegistration(
     // If two requests raced with the exact same idempotencyKey, the second fails precondition (`ALREADY_EXISTS`)
     if (err.code === 'ALREADY_EXISTS' && idempotencyKey) {
       try {
-        const existingIdem = await getDocument(env, 'idempotency_keys', idempotencyKey);
+        const existingIdem = await getDocument(ctx, env, 'idempotency_keys', idempotencyKey);
         if (existingIdem && existingIdem.responsePayload) {
           let cachedData: any;
           try {
@@ -402,7 +403,7 @@ export async function handleCustomerRegistration(
       }
     }
 
-    console.error('Error committing onboarding records to Firestore:', err);
+    ctx.logger.error('Error committing onboarding records to Firestore:', err);
     return createErrorResponse(
       500,
       'REGISTRATION_FAILED',
@@ -411,7 +412,7 @@ export async function handleCustomerRegistration(
   }
 }
 
-export async function handleUpdateFcmToken(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleUpdateFcmToken(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   try {
     if (!identity.installationId) {
       return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing x-installation-uuid');
@@ -422,15 +423,15 @@ export async function handleUpdateFcmToken(request: Request, env: Env, identity:
       return createErrorResponse(400, 'MISSING_FCM_TOKEN', 'Missing fcmToken in body');
     }
 
-    const instDoc = await getDocument(env, 'installations', identity.installationId);
+    const instDoc = await getDocument(ctx, env, 'installations', identity.installationId);
     if (instDoc) {
       if (instDoc.fcmToken !== fcmToken) {
         const updated = { ...instDoc, fcmToken, lastSeenAtEpochMs: Date.now() };
-        await setDocument(env, 'installations', identity.installationId, updated);
+        await setDocument(ctx, env, 'installations', identity.installationId, updated);
       }
     } else {
       // If it doesn't exist, we could create it, but usually registration creates it.
-      await setDocument(env, 'installations', identity.installationId, {
+      await setDocument(ctx, env, 'installations', identity.installationId, {
         installationId: identity.installationId,
         hardwareId: identity.hardwareId,
         customerId: identity.customerId || 'UNKNOWN',
@@ -446,26 +447,26 @@ export async function handleUpdateFcmToken(request: Request, env: Env, identity:
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error updating FCM token:', err);
+    ctx.logger.error('Error updating FCM token:', err);
     return createErrorResponse(500, 'FCM_UPDATE_FAILED', 'Failed to update FCM token');
   }
 }
 
-export async function handleCustomerLogout(request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleCustomerLogout(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
   const installationId = identity.installationId || identity.installationUuid;
   if (!installationId) {
     return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing installation UUID.');
   }
 
   try {
-    const inst = await getDocument(env, 'installations', installationId);
+    const inst = await getDocument(ctx, env, 'installations', installationId);
     if (inst) {
       inst.fcmToken = null;
       inst.updatedAtEpochMs = Date.now();
-      await setDocument(env, 'installations', installationId, inst);
+      await setDocument(ctx, env, 'installations', installationId, inst);
     }
   } catch (err) {
-    console.error('Error logging out from server:', err);
+    ctx.logger.error('Error logging out from server:', err);
   }
 
   return new Response(JSON.stringify({ success: true, message: 'Logged out successfully' }), {

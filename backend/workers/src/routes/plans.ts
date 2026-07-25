@@ -1,14 +1,15 @@
+import { RequestContext } from '../services/logger';
 import { Env, ApiResponse } from '../types';
 import { queryCollection } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 
-export async function handleGetPlans(request: Request, env: Env): Promise<Response> {
+export async function handleGetPlans(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET') {
     return createErrorResponse(405, 'METHOD_NOT_ALLOWED', 'Only GET method is permitted on /api/v1/plans.');
   }
 
   try {
-    const plans = await queryCollection(env, 'plans', [{ field: 'isActive', op: 'EQUAL', value: true }]);
+    const plans = await queryCollection(ctx, env, 'plans', [{ field: 'isActive', op: 'EQUAL', value: true }]);
     const sortedPlans = plans.sort((a, b) => (b.amountPaise || 0) - (a.amountPaise || 0)); // Expensive first
 
     if (sortedPlans.length === 0) {
@@ -43,7 +44,7 @@ export async function handleGetPlans(request: Request, env: Env): Promise<Respon
       }
     });
   } catch (err: any) {
-    console.error('Failed to retrieve plans:', err);
+    ctx.logger.error('Failed to retrieve plans:', err);
     // Fallback if not seeded
     return new Response(JSON.stringify({
       success: true,

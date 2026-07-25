@@ -1,11 +1,12 @@
+import { RequestContext } from '../services/logger';
 import { Env, ApiResponse } from '../types';
-import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryCollection, logAuditEvent, getFirestoreAccessToken } from '../services/firestore';
+import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryCollection, logAuditEvent, getFirestoreAccessToken, buildAuditLogOp, AtomicWriteOp } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { LockService } from '../services/lock';
 import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
-import { TransferFSM } from '../services/fsm/transferFSM';
+import { TransferService } from '../services/transferService';
 import { InstallationFSM } from '../services/fsm/installationFSM';
 import { SubscriptionService } from '../services/subscriptionService';
 import { InstallationService } from '../services/installationService';
@@ -14,13 +15,13 @@ import { InstallationService } from '../services/installationService';
  * Handles GET /api/v1/admin/customers
  * Returns 360° profile view of customers including installations and active subscriptions.
  */
-export async function handleAdminSearchCustomers(request: Request, env: Env): Promise<Response> {
+export async function handleAdminSearchCustomers(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   try {
     const url = new URL(request.url);
     const query = url.searchParams.get('query')?.toLowerCase().trim() || '';
 
     // Fetch all customers or query
-    const allCustomers = await queryCollection(env, 'customers', []);
+    const allCustomers = await queryCollection(ctx, env, 'customers', []);
     const filteredCustomers = allCustomers.filter((c: any) => {
       if (!query) return true;
       return (
@@ -33,10 +34,10 @@ export async function handleAdminSearchCustomers(request: Request, env: Env): Pr
 
     const detailedCustomers = [];
     for (const customer of filteredCustomers.slice(0, 50)) {
-      const installations = await queryCollection(env, 'installations', [
+      const installations = await queryCollection(ctx, env, 'installations', [
         { field: 'customerId', op: 'EQUAL', value: customer.customerId }
       ]);
-      const { sub } = await findSubscription(env, customer.customerId, DiscoveryStrategy.ADMIN_SEARCH);
+      const { sub } = await findSubscription(ctx, env, customer.customerId, DiscoveryStrategy.ADMIN_SEARCH);
       let activeSub = sub;
 
       detailedCustomers.push({
@@ -60,7 +61,7 @@ export async function handleAdminSearchCustomers(request: Request, env: Env): Pr
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminSearchCustomers:', err);
+    ctx.logger.error('Error in handleAdminSearchCustomers:', err);
     return createErrorResponse(500, 'ADMIN_SEARCH_FAILED', `Failed to search customers: ${err.message || err}`);
   }
 }
@@ -69,10 +70,10 @@ export async function handleAdminSearchCustomers(request: Request, env: Env): Pr
  * Handles PUT /api/v1/admin/customers/:customerId
  * Safely updates customer metadata without disrupting underlying subscriptions.
  */
-export async function handleAdminUpdateCustomer(request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
+export async function handleAdminUpdateCustomer(ctx: RequestContext, request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
   try {
     const body = await request.json() as Record<string, any>;
-    const customer = await getDocument(env, 'customers', customerId);
+    const customer = await getDocument(ctx, env, 'customers', customerId);
     if (!customer) {
       return createErrorResponse(404, 'CUSTOMER_NOT_FOUND', `Customer ${customerId} not found.`);
     }
@@ -88,12 +89,15 @@ export async function handleAdminUpdateCustomer(request: Request, env: Env, admi
     if (typeof body.city === 'string') updatedData.city = body.city.substring(0, 100);
     if (typeof body.status === 'string') updatedData.status = body.status.substring(0, 20);
 
-    await setDocument(env, 'customers', customerId, updatedData);
-    await logAuditEvent(env, 'ADMIN_UPDATE_CUSTOMER_METADATA', {
+    const auditOp = buildAuditLogOp('ADMIN_UPDATE_CUSTOMER_METADATA', {
       adminUid,
       customerId,
       changes: body
     });
+    await commitAtomicWrites(ctx, env, [
+      { collectionPath: 'customers', documentId: customerId, data: updatedData },
+      auditOp
+    ]);
 
     const responseWrapper: ApiResponse = {
       success: true,
@@ -105,7 +109,7 @@ export async function handleAdminUpdateCustomer(request: Request, env: Env, admi
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminUpdateCustomer:', err);
+    ctx.logger.error('Error in handleAdminUpdateCustomer:', err);
     return createErrorResponse(500, 'ADMIN_UPDATE_FAILED', `Failed to update customer: ${err.message || err}`);
   }
 }
@@ -114,206 +118,16 @@ export async function handleAdminUpdateCustomer(request: Request, env: Env, admi
  * Handles POST /api/v1/admin/transfers/:transferId/approve
  * The "Lost or Broken Phone Case" override: allows support admins to approve P2P device transfers manually.
  */
-export async function handleAdminApproveTransfer(request: Request, env: Env, adminUid: string, transferId: string): Promise<Response> {
+export async function handleAdminApproveTransfer(ctx: RequestContext, request: Request, env: Env, adminUid: string, transferId: string): Promise<Response> {
   try {
-    const transferDoc = await getDocument(env, 'device_transfers', transferId);
-    if (!transferDoc) {
-      return createErrorResponse(404, 'TRANSFER_NOT_FOUND', `Transfer request ${transferId} not found.`);
-    }
-
-    if (transferDoc.status !== 'PENDING') {
-      return createErrorResponse(409, 'TRANSFER_NOT_PENDING', `Transfer request is already ${transferDoc.status}.`);
-    }
-
-    const { subscriptionId, customerId } = transferDoc;
-    const sourceInstallationId = transferDoc.oldInstallationId || transferDoc.sourceInstallationId;
-    const targetInstallationId = transferDoc.newInstallationId || transferDoc.targetInstallationId;
-    const now = Date.now();
-    try {
-      return await LockService.withLock(
-        env,
-        'sub_lock',
-        subscriptionId,
-        30000,
-        { customerId, subscriptionId, transferId },
-        async () => {
-          // 2. Fetch Authoritative Subscription or Trial BEFORE applying partial updates
-          let subDoc: any = null;
-          let isTrial = false;
-          if (subscriptionId && subscriptionId.startsWith('TRIAL_')) {
-            isTrial = true;
-            const hardwareId = subscriptionId.replace('TRIAL_', '');
-            const trial = await getDocument(env, 'hardware_trials', hardwareId);
-            if (trial) {
-              subDoc = {
-                subscriptionId,
-                customerId: trial.customerId,
-                activeInstallationId: trial.hardwareId,
-                planId: 'FREE_TRIAL_30',
-                startsAtEpochMs: trial.startedAtEpochMs,
-                expiresAtEpochMs: trial.expiresAtEpochMs
-              };
-            }
-          } else {
-            subDoc = await getDocument(env, 'subscriptions', subscriptionId);
-          }
-
-          if (!subDoc) {
-            return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', 'The subscription or trial associated with this transfer no longer exists.');
-          }
-
-          // 2. Prepare Atomic Batch
-          const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [];
-
-          // Mark transfer as APPROVED by admin
-          const updatedTransfer = {
-            ...transferDoc,
-            status: TransferFSM.transition(transferDoc, 'APPROVE'),
-            approvedBy: `ADMIN_${adminUid}`,
-            updatedAtEpochMs: now
-          };
-          batchWrites.push({ collectionPath: 'device_transfers', documentId: transferId, data: updatedTransfer });
-
-          // 3. Revoke old device installation status
-          if (sourceInstallationId && sourceInstallationId !== targetInstallationId) {
-            const sourceInst = await getDocument(env, 'installations', sourceInstallationId);
-            if (sourceInst) {
-              batchWrites.push({
-                collectionPath: 'installations',
-                documentId: sourceInstallationId,
-                data: {
-                  ...sourceInst,
-                  status: InstallationFSM.transition(sourceInst, 'REVOKE'),
-                  revokedAtEpochMs: now,
-                  revokedReason: `Admin approved transfer ${transferId} (Lost/Broken Phone override)`
-                }
-              });
-            }
-          }
-
-          // 4. Activate target device installation status
-          const targetInst = await getDocument(env, 'installations', targetInstallationId);
-          if (targetInst) {
-            batchWrites.push({
-              collectionPath: 'installations',
-              documentId: targetInstallationId,
-              data: {
-                ...targetInst,
-                status: InstallationFSM.transition(targetInst, 'ACTIVATE'),
-                updatedAtEpochMs: now
-              }
-            });
-          } else {
-            batchWrites.push({
-              collectionPath: 'installations',
-              documentId: targetInstallationId,
-              data: {
-                installationId: targetInstallationId,
-                customerId,
-                hardwareId: targetInstallationId,
-                installationUuid: targetInstallationId,
-                platform: 'android',
-                deviceModel: transferDoc.deviceModel || 'Unknown Device',
-                appVersion: '1.0.0',
-                status: InstallationFSM.transition({}, 'ACTIVATE'),
-                createdAtEpochMs: now,
-                lastSeenAtEpochMs: now
-              }
-            });
-          }
-
-          // 5. Update authoritative subscription activeInstallationId and GENERATE TOKEN FIRST
-          const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
-          const leasePayload = {
-            subscriptionId: subDoc.subscriptionId,
-            customerId: subDoc.customerId,
-            activeInstallationId: targetInstallationId,
-            planId: subDoc.planId || 'PRO_YEARLY',
-            planName: subDoc.planName || 'Pro Annual License',
-            startsAtEpochMs: subDoc.startsAtEpochMs || now,
-            expiresAtEpochMs: subDoc.expiresAtEpochMs || (now + 365 * 86400 * 1000),
-            maxCustomers: 10000,
-            allowWhatsAppAutoSend: true,
-            allowThermalPrinting: true,
-            issuedAt: now
-          };
-          const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
-
-          if (isTrial) {
-            const hardwareId = subscriptionId.replace('TRIAL_', '');
-            const trial = await getDocument(env, 'hardware_trials', hardwareId);
-            if (trial) {
-              // Pillar 5: Check if target device already used a trial
-              const targetTrial = await getDocument(env, 'hardware_trials', targetInstallationId);
-              if (targetTrial) {
-                return createErrorResponse(403, 'TRIAL_ALREADY_USED', 'Target device has already used a trial. Admin cannot force transfer a trial to a device that has already used one.');
-              }
-
-              // Write new device
-              batchWrites.push({
-                collectionPath: 'hardware_trials',
-                documentId: targetInstallationId,
-                data: {
-                  ...trial,
-                  hardwareId: targetInstallationId
-                }
-              });
-              // Pillar 5: Preserve old device history (mark as expired, DO NOT DELETE)
-              batchWrites.push({
-                collectionPath: 'hardware_trials',
-                documentId: hardwareId,
-                data: {
-                  ...trial,
-                  expiresAtEpochMs: 0
-                }
-              });
-            }
-          } else {
-            batchWrites.push({
-              collectionPath: 'subscriptions',
-              documentId: subDoc.subscriptionId,
-              data: {
-                ...subDoc,
-                activeInstallationId: targetInstallationId,
-                signedLeaseToken, // Admin issues a new token forcefully
-                updatedAtEpochMs: now
-              }
-            });
-          }
-
-          // Single Atomic Commit
-          await commitAtomicWrites(env, batchWrites);
-
-          // 5. Log audit trail
-          await logAuditEvent(env, 'ADMIN_APPROVED_TRANSFER_LOST_DEVICE', {
-            adminUid,
-            transferId,
-            subscriptionId,
-            sourceInstallationId,
-            targetInstallationId
-          });
-
-          const responseWrapper: ApiResponse = {
-            success: true,
-            data: {
-              transferId,
-              status: 'APPROVED',
-              message: 'Transfer manually approved and old device revoked.',
-              newLeaseToken: signedLeaseToken
-            }
-          };
-
-          return new Response(JSON.stringify(responseWrapper), { status: 200, headers: { 'Content-Type': 'application/json' } });
-        }
-      );
-    } catch (err: any) {
-      if (err.code === 'ALREADY_EXISTS') {
-        return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
-      }
-      throw err;
-    }
+    const result = await TransferService.adminApproveTransfer(ctx, env, transferId, adminUid);
+    return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (err: any) {
-    console.error('Error in handleAdminApproveTransfer:', err);
+    if (err.code === 'TRANSFER_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
+    if (err.code === 'TRANSFER_NOT_PENDING' || err.code === 'TRIAL_ALREADY_USED') return createErrorResponse(403, err.code, err.message);
+    if (err.code === 'SUBSCRIPTION_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
+    if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
+    ctx.logger.error('Error in handleAdminApproveTransfer:', err);
     return createErrorResponse(500, 'ADMIN_TRANSFER_APPROVAL_FAILED', `Failed to approve transfer: ${err.message || err}`);
   }
 }
@@ -322,45 +136,14 @@ export async function handleAdminApproveTransfer(request: Request, env: Env, adm
  * Handles POST /api/v1/admin/transfers/:transferId/reject
  * Rejects a device transfer request manually.
  */
-export async function handleAdminRejectTransfer(request: Request, env: Env, adminUid: string, transferId: string): Promise<Response> {
+export async function handleAdminRejectTransfer(ctx: RequestContext, request: Request, env: Env, adminUid: string, transferId: string): Promise<Response> {
   try {
-    const transferDoc = await getDocument(env, 'device_transfers', transferId);
-    if (!transferDoc) {
-      return createErrorResponse(404, 'TRANSFER_NOT_FOUND', `Transfer request ${transferId} not found.`);
-    }
-
-    if (transferDoc.status !== 'PENDING') {
-      return createErrorResponse(409, 'TRANSFER_NOT_PENDING', `Transfer request is already ${transferDoc.status}.`);
-    }
-
-    const now = Date.now();
-    const updatedTransfer = {
-      ...transferDoc,
-      status: TransferFSM.transition(transferDoc, 'REJECT'),
-      rejectedBy: `ADMIN_${adminUid}`,
-      updatedAtEpochMs: now
-    };
-    await setDocument(env, 'device_transfers', transferId, updatedTransfer);
-
-    await logAuditEvent(env, 'ADMIN_REJECTED_TRANSFER', {
-      adminUid,
-      transferId
-    });
-
-    const responseWrapper: ApiResponse = {
-      success: true,
-      data: {
-        transferId,
-        status: 'REJECTED'
-      }
-    };
-
-    return new Response(JSON.stringify(responseWrapper), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
+    const result = await TransferService.adminRejectTransfer(ctx, env, transferId, adminUid);
+    return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } });
   } catch (err: any) {
-    console.error('Error in handleAdminRejectTransfer:', err);
+    if (err.code === 'TRANSFER_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
+    if (err.code === 'TRANSFER_NOT_PENDING') return createErrorResponse(409, err.code, err.message);
+    ctx.logger.error('Error in handleAdminRejectTransfer:', err);
     return createErrorResponse(500, 'ADMIN_TRANSFER_REJECTION_FAILED', `Failed to reject transfer: ${err.message || err}`);
   }
 }
@@ -369,16 +152,16 @@ export async function handleAdminRejectTransfer(request: Request, env: Env, admi
  * Handles PUT /api/v1/admin/devices/:hardwareId/ban
  * Bans a device at the hardware level.
  */
-export async function handleAdminBanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
+export async function handleAdminBanDevice(ctx: RequestContext, request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
   try {
-    await InstallationService.banDevice(env, hardwareId, adminUid);
-    await logAuditEvent(env, 'ADMIN_BANNED_DEVICE', { adminUid, hardwareId });
+    const auditOp = buildAuditLogOp('ADMIN_BANNED_DEVICE', { adminUid, hardwareId });
+    await InstallationService.banDevice(ctx, env, hardwareId, adminUid, auditOp);
     
     return new Response(JSON.stringify({ success: true, message: 'Device banned successfully' }), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminBanDevice:', err);
+    ctx.logger.error('Error in handleAdminBanDevice:', err);
     if (err.code === 'NOT_FOUND') return createErrorResponse(404, 'NOT_FOUND', err.message);
     if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
     return createErrorResponse(500, 'ADMIN_BAN_FAILED', `Failed to ban device: ${err.message || err}`);
@@ -389,16 +172,16 @@ export async function handleAdminBanDevice(request: Request, env: Env, adminUid:
  * Handles PUT /api/v1/admin/devices/:hardwareId/unban
  * Unbans a hardware device.
  */
-export async function handleAdminUnbanDevice(request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
+export async function handleAdminUnbanDevice(ctx: RequestContext, request: Request, env: Env, adminUid: string, hardwareId: string): Promise<Response> {
   try {
-    await InstallationService.unbanDevice(env, hardwareId, adminUid);
-    await logAuditEvent(env, 'ADMIN_UNBANNED_DEVICE', { adminUid, hardwareId });
+    const auditOp = buildAuditLogOp('ADMIN_UNBANNED_DEVICE', { adminUid, hardwareId });
+    await InstallationService.unbanDevice(ctx, env, hardwareId, adminUid, auditOp);
     
     return new Response(JSON.stringify({ success: true, message: 'Device unbanned successfully' }), {
       status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminUnbanDevice:', err);
+    ctx.logger.error('Error in handleAdminUnbanDevice:', err);
     if (err.code === 'NOT_FOUND') return createErrorResponse(404, 'NOT_FOUND', err.message);
     if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
     return createErrorResponse(500, 'ADMIN_UNBAN_FAILED', `Failed to unban device: ${err.message || err}`);
@@ -409,10 +192,10 @@ export async function handleAdminUnbanDevice(request: Request, env: Env, adminUi
  * Handles PUT /api/v1/admin/config/system
  * Toggles global system controls (`allowPayments`, `allowP2PTransfers`, `maintenanceMode`).
  */
-export async function handleAdminUpdateSystemConfig(request: Request, env: Env, adminUid: string): Promise<Response> {
+export async function handleAdminUpdateSystemConfig(ctx: RequestContext, request: Request, env: Env, adminUid: string): Promise<Response> {
   try {
     const body = await request.json() as Record<string, any>;
-    const existingConfig = await getDocument(env, 'system_configs', 'global') || {};
+    const existingConfig = await getDocument(ctx, env, 'system_configs', 'global') || {};
 
     const updatedConfig = {
       ...existingConfig,
@@ -427,11 +210,14 @@ export async function handleAdminUpdateSystemConfig(request: Request, env: Env, 
       updatedBy: adminUid
     };
 
-    await setDocument(env, 'system_configs', 'global', updatedConfig);
-    await logAuditEvent(env, 'ADMIN_UPDATED_SYSTEM_CONFIG', {
+    const auditOp = buildAuditLogOp('ADMIN_UPDATED_SYSTEM_CONFIG', {
       adminUid,
       newConfig: updatedConfig
     });
+    await commitAtomicWrites(ctx, env, [
+      { collectionPath: 'system_configs', documentId: 'global', data: updatedConfig },
+      auditOp
+    ]);
 
     const responseWrapper: ApiResponse = {
       success: true,
@@ -443,7 +229,7 @@ export async function handleAdminUpdateSystemConfig(request: Request, env: Env, 
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminUpdateSystemConfig:', err);
+    ctx.logger.error('Error in handleAdminUpdateSystemConfig:', err);
     return createErrorResponse(500, 'ADMIN_CONFIG_UPDATE_FAILED', `Failed to update config: ${err.message || err}`);
   }
 }
@@ -452,9 +238,9 @@ export async function handleAdminUpdateSystemConfig(request: Request, env: Env, 
  * Handles GET /api/v1/admin/audit-logs
  * Retrieves immutable system audit logs.
  */
-export async function handleAdminGetAuditLogs(request: Request, env: Env): Promise<Response> {
+export async function handleAdminGetAuditLogs(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   try {
-    const logs = await queryCollection(env, 'audit_logs', []);
+    const logs = await queryCollection(ctx, env, 'audit_logs', []);
     logs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
 
     const responseWrapper: ApiResponse = {
@@ -470,7 +256,7 @@ export async function handleAdminGetAuditLogs(request: Request, env: Env): Promi
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminGetAuditLogs:', err);
+    ctx.logger.error('Error in handleAdminGetAuditLogs:', err);
     return createErrorResponse(500, 'ADMIN_LOGS_FAILED', `Failed to fetch audit logs: ${err.message || err}`);
   }
 }
@@ -479,9 +265,9 @@ export async function handleAdminGetAuditLogs(request: Request, env: Env): Promi
  * Handles GET /api/v1/admin/transfers/pending
  * Retrieves all pending transfers globally for support overriding.
  */
-export async function handleAdminGetPendingTransfers(request: Request, env: Env): Promise<Response> {
+export async function handleAdminGetPendingTransfers(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
   try {
-    const pendingList = await queryCollection(env, 'device_transfers', [
+    const pendingList = await queryCollection(ctx, env, 'device_transfers', [
       { field: 'status', op: 'EQUAL', value: 'PENDING' }
     ]);
     
@@ -498,7 +284,7 @@ export async function handleAdminGetPendingTransfers(request: Request, env: Env)
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminGetPendingTransfers:', err);
+    ctx.logger.error('Error in handleAdminGetPendingTransfers:', err);
     return createErrorResponse(500, 'ADMIN_POLL_FAILED', `Failed to query pending transfers: ${err.message || err}`);
   }
 }
@@ -507,17 +293,18 @@ export async function handleAdminGetPendingTransfers(request: Request, env: Env)
  * Handles POST /api/v1/admin/plans
  * Updates the prices of the plans.
  */
-export async function handleAdminUpdatePlans(request: Request, env: Env, adminUid: string): Promise<Response> {
+export async function handleAdminUpdatePlans(ctx: RequestContext, request: Request, env: Env, adminUid: string): Promise<Response> {
   try {
     const body = await request.json() as { plans: any[] };
     if (!body.plans || !Array.isArray(body.plans)) {
       return createErrorResponse(400, 'INVALID_PAYLOAD', 'Payload must contain a plans array.');
     }
 
+    const batchWrites: AtomicWriteOp[] = [];
     for (const plan of body.plans) {
       if (!plan.planId) continue;
       
-      const existingPlan = await getDocument(env, 'plans', plan.planId);
+      const existingPlan = await getDocument(ctx, env, 'plans', plan.planId);
       const updatedPlan = {
         ...(existingPlan || {}),
         ...plan,
@@ -525,20 +312,23 @@ export async function handleAdminUpdatePlans(request: Request, env: Env, adminUi
         updatedAtEpochMs: Date.now()
       };
       
-      await setDocument(env, 'plans', plan.planId, updatedPlan);
+      batchWrites.push({ collectionPath: 'plans', documentId: plan.planId, data: updatedPlan });
     }
 
-    await logAuditEvent(env, 'ADMIN_UPDATE_PLANS', {
-      adminUid,
-      action: 'Updated subscription plan prices'
-    });
+    if (batchWrites.length > 0) {
+      batchWrites.push(buildAuditLogOp('ADMIN_UPDATE_PLANS', {
+        adminUid,
+        action: 'Updated subscription plan prices'
+      }));
+      await commitAtomicWrites(ctx, env, batchWrites);
+    }
 
     return new Response(JSON.stringify({ success: true, message: 'Plans updated successfully' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   } catch (err: any) {
-    console.error('Error in handleAdminUpdatePlans:', err);
+    ctx.logger.error('Error in handleAdminUpdatePlans:', err);
     return createErrorResponse(500, 'ADMIN_UPDATE_PLANS_FAILED', `Failed to update plans: ${err.message || err}`);
   }
 }
@@ -547,15 +337,15 @@ export async function handleAdminUpdatePlans(request: Request, env: Env, adminUi
  * Handles PUT /api/v1/admin/customers/:customerId/subscription
  * Manages the subscription (Extend, Change Plan, Transfer, Remove).
  */
-export async function handleAdminManageSubscription(request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
+export async function handleAdminManageSubscription(ctx: RequestContext, request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
   try {
     const body = await request.json() as { action: string; daysToAdd?: number; newPlanId?: string; newHardwareId?: string };
     const action = typeof body.action === 'string' ? body.action.substring(0, 20).toUpperCase() : '';
     
     if (action === 'EXTEND') {
       try {
-        const result = await SubscriptionService.extendSubscription(env, customerId, body.daysToAdd as number);
-        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        const auditOp = buildAuditLogOp('ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        const result = await SubscriptionService.extendSubscription(ctx, env, customerId, body.daysToAdd as number, auditOp);
         return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
       } catch (err: any) {
         if (err.code === 'MISSING_DAYS') return createErrorResponse(400, 'MISSING_DAYS', err.message);
@@ -565,8 +355,8 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
     } 
     else if (action === 'CHANGE_PLAN') {
       try {
-        const result = await SubscriptionService.changePlan(env, customerId, body.newPlanId as string);
-        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        const auditOp = buildAuditLogOp('ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+        const result = await SubscriptionService.changePlan(ctx, env, customerId, body.newPlanId as string, auditOp);
         return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
       } catch (err: any) {
         if (err.code === 'MISSING_PLAN_ID') return createErrorResponse(400, 'MISSING_PLAN_ID', err.message);
@@ -576,20 +366,42 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
     }
     else if (action === 'REMOVE') {
       try {
-        const { success, hardwareIdToRevoke } = await SubscriptionService.cancelSubscription(env, customerId);
-        
-        if (hardwareIdToRevoke) {
-          try {
-            await InstallationService.revokeInstallation(env, hardwareIdToRevoke, 'Subscription removed by Admin');
-          } catch (revokeErr) {
-            console.warn('Failed to revoke installation during subscription removal:', revokeErr);
+        const { sub, isTrial, trialId, subscriptionId } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
+        if (!sub) return createErrorResponse(404, 'SUBSCRIPTION_NOT_FOUND', 'No active subscription found.');
+
+        const now = Date.now();
+        const auditOp = buildAuditLogOp('ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+
+        const doRemove = async () => {
+          // Re-fetch inside lock
+          const { sub: activeSub, isTrial: actIsTrial, trialId: actTrialId, subscriptionId: foundId } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
+          if (!activeSub) throw Object.assign(new Error('No active subscription found.'), { code: 'SUBSCRIPTION_NOT_FOUND' });
+
+          const cancelOp = SubscriptionService.buildCancellation(activeSub, actIsTrial, actTrialId || null, now);
+          const batchWrites: AtomicWriteOp[] = [...cancelOp.writes];
+          
+          if (cancelOp.result.hardwareIdToRevoke) {
+             const oldInst = await getDocument(ctx, env, 'installations', cancelOp.result.hardwareIdToRevoke);
+             const revOp = InstallationService.buildRevocation(oldInst, cancelOp.result.hardwareIdToRevoke, 'Subscription removed by Admin', now);
+             batchWrites.push(...revOp.writes);
           }
+          batchWrites.push(auditOp);
+          await commitAtomicWrites(ctx, env, batchWrites);
+          return { success: true, message: 'Subscription removed successfully' };
+        };
+
+        if (subscriptionId) {
+          try {
+            const result = await LockService.withLock(ctx, env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doRemove);
+            return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+          } catch (err: any) {
+            if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked');
+            throw err;
+          }
+        } else {
+           const result = await doRemove();
+           return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
         }
-        
-        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
-        return new Response(JSON.stringify({ success: true, message: 'Subscription removed successfully' }), {
-          status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        });
       } catch (err: any) {
         if (err.code === 'SUBSCRIPTION_NOT_FOUND') return createErrorResponse(404, err.code, err.message);
         if (err.code === 'CONCURRENT_MUTATION_LOCKED') return createErrorResponse(409, err.code, err.message);
@@ -597,79 +409,20 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
       }
     }
     else if (action === 'TRANSFER') {
-      // NOTE: Left inline for Phase 4A. Will migrate in Phase 4C to TransferService.
       if (!body.newHardwareId) return createErrorResponse(400, 'MISSING_HARDWARE_ID', 'newHardwareId is required for transfer.');
-      
-      let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
-      
-      const now = Date.now();
-      const doWork = async () => {
-        if (subscriptionId) {
-          if (isTrial && trialId) {
-            const trial = await getDocument(env, 'hardware_trials', trialId as string);
-            if (trial) activeSub = trial;
-          } else {
-            const sub = await getDocument(env, 'subscriptions', subscriptionId);
-            if (sub) activeSub = sub;
-          }
-        }
-        
-        const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
-        const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [];
-        
-        if (isTrial) {
-          const targetTrial = await getDocument(env, 'hardware_trials', body.newHardwareId as string);
-          if (targetTrial) {
-             return createErrorResponse(403, 'TRIAL_ALREADY_USED', 'Target device has already used a trial.');
-          }
-
-          batchWrites.push({ collectionPath: 'hardware_trials', documentId: body.newHardwareId as string, data: { ...activeSub, hardwareId: body.newHardwareId } });
-          batchWrites.push({ collectionPath: 'hardware_trials', documentId: hardwareId, data: { ...activeSub, expiresAtEpochMs: 0 } });
-        } else {
-          activeSub.activeInstallationId = body.newHardwareId;
-          activeSub.updatedAtEpochMs = now;
-          batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
-        }
-        
-        if (hardwareId && hardwareId !== body.newHardwareId) {
-          const sourceInst = await getDocument(env, 'installations', hardwareId);
-          if (sourceInst) {
-            batchWrites.push({
-              collectionPath: 'installations',
-              documentId: hardwareId,
-              data: {
-                ...sourceInst,
-                status: InstallationFSM.transition(sourceInst, 'REVOKE'),
-                revokedAtEpochMs: now,
-                revokedReason: `Admin transfer override to ${body.newHardwareId}`
-              }
-            });
-          }
-        }
-        
-        await commitAtomicWrites(env, batchWrites);
-        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
-        
-        return new Response(JSON.stringify({ success: true, message: 'Subscription transferred successfully' }), {
-          status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        });
-      };
-
-      if (subscriptionId) {
-        try {
-          return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
-        } catch (err: any) {
-          if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
-          throw err;
-        }
-      } else {
-        return await doWork();
+      try {
+        const result = await TransferService.adminForceTransfer(ctx, env, customerId, body.newHardwareId as string, adminUid, body);
+        return new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      } catch (err: any) {
+        if (err.code === 'TRIAL_ALREADY_USED') return createErrorResponse(403, err.code, err.message);
+        if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription or trial is currently locked by another process.');
+        throw err;
       }
     } else {
       return createErrorResponse(400, 'INVALID_ACTION', 'Action must be one of: EXTEND, CHANGE_PLAN, TRANSFER, REMOVE');
     }
   } catch (err: any) {
-    console.error('Error in handleAdminManageSubscription:', err);
+    ctx.logger.error('Error in handleAdminManageSubscription:', err);
     return createErrorResponse(500, 'ADMIN_MANAGE_SUB_FAILED', `Failed to manage subscription: ${err.message || err}`);
   }
 }
@@ -678,7 +431,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
  * Handles POST /api/v1/admin/upload-apk-chunk
  * Uploads an APK chunk directly into Cloudflare KV.
  */
-export async function handleAdminUploadApkChunk(request: Request, env: Env, adminUid: string): Promise<Response> {
+export async function handleAdminUploadApkChunk(ctx: RequestContext, request: Request, env: Env, adminUid: string): Promise<Response> {
   try {
     const formData = await request.formData();
     const chunk = formData.get('chunk') as unknown as File;
@@ -717,7 +470,7 @@ export async function handleAdminUploadApkChunk(request: Request, env: Env, admi
       
       await env.APK_STORE.put(metaKey, JSON.stringify(metadata));
 
-      await logAuditEvent(env, 'ADMIN_UPLOAD_APK_KV', {
+      await logAuditEvent(ctx, env, 'ADMIN_UPLOAD_APK_KV', {
         adminUid,
         version,
         totalSize,
@@ -738,7 +491,7 @@ export async function handleAdminUploadApkChunk(request: Request, env: Env, admi
     });
 
   } catch (err: any) {
-    console.error('Error in handleAdminUploadApkChunk:', err);
+    ctx.logger.error('Error in handleAdminUploadApkChunk:', err);
     return createErrorResponse(500, 'UPLOAD_FAILED', `Failed to upload APK chunk: ${err.message || err}`);
   }
 }
