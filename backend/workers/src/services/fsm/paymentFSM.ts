@@ -13,7 +13,7 @@ export class PaymentFSM {
                 if (currentStatus === 'INITIATED') return 'SUCCESS';
                 break;
             case 'REQUEST_REFUND':
-                if (currentStatus === 'SUCCESS') return 'REFUND_PENDING';
+                if (currentStatus === 'SUCCESS' || currentStatus === 'INITIATED') return 'REFUND_PENDING';
                 break;
             case 'COMPLETE_REFUND':
                 if (currentStatus === 'REFUND_PENDING') return 'REFUNDED';

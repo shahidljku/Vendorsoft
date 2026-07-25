@@ -110,7 +110,9 @@ export class PaymentService {
       data: paymentRecord
     }];
 
-    return { razorpayOrderId, writes };
+    await commitAtomicWrites(env, writes);
+
+    return { razorpayOrderId };
   }
 
   /**
@@ -226,13 +228,21 @@ export class PaymentService {
           const ops: any[] = [];
           
           try {
+            // Re-read payment document to prevent double-settlement in concurrent webhook deliveries
+            const currentPayment = await getDocument(env, 'payments', paymentDoc.paymentId);
+            if (!currentPayment || currentPayment.status !== 'INITIATED') {
+              // Already settled or refunding, no-op return.
+              resultPayload = { status: 'ALREADY_PROCESSED', subscriptionId };
+              return;
+            }
+
             // Attempt to build provisioning. This will throw OWNERSHIP_CONFLICT if the sub is active on another device.
             const provOp = await SubscriptionService.buildProvisioning(
               env, subscriptionId, customerId, installationId, planId, planName, durationDays, now
             );
             
             // Settlement
-            const settleOp = this.buildSettlement(paymentDoc, verifiedPayment.paymentId, verifiedPayment.signature || null, now);
+            const settleOp = this.buildSettlement(currentPayment, verifiedPayment.paymentId, verifiedPayment.signature || null, now);
             
             ops.push(...settleOp.writes);
             ops.push(...provOp.writes);
