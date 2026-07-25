@@ -7,6 +7,7 @@ import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 import { SubscriptionFSM } from '../services/fsm/subscriptionFSM';
 import { TransferFSM } from '../services/fsm/transferFSM';
 import { InstallationFSM } from '../services/fsm/installationFSM';
+import { SubscriptionService } from '../services/subscriptionService';
 
 /**
  * Handles GET /api/v1/admin/customers
@@ -564,151 +565,73 @@ export async function handleAdminUpdatePlans(request: Request, env: Env, adminUi
 export async function handleAdminManageSubscription(request: Request, env: Env, adminUid: string, customerId: string): Promise<Response> {
   try {
     const body = await request.json() as { action: string; daysToAdd?: number; newPlanId?: string; newHardwareId?: string };
-    
-    // Find active subscription or trial
-    // Find active subscription or trial
-    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
-    
-    const now = Date.now();
     const action = typeof body.action === 'string' ? body.action.substring(0, 20).toUpperCase() : '';
     
-    const doWork = async () => {
-      if (subscriptionId) {
-        // Re-fetch now that we hold the lock (Authoritative Read)
-        if (isTrial) {
-          const trial = await getDocument(env, 'hardware_trials', trialId as string);
-          if (trial) activeSub = trial;
-        } else {
-          const sub = await getDocument(env, 'subscriptions', subscriptionId);
-          if (sub) activeSub = sub;
+    if (action === 'EXTEND') {
+      const response = await SubscriptionService.extendSubscription(env, customerId, body.daysToAdd as number);
+      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+      return response;
+    } 
+    else if (action === 'CHANGE_PLAN') {
+      const response = await SubscriptionService.changePlan(env, customerId, body.newPlanId as string);
+      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+      return response;
+    }
+    else if (action === 'REMOVE') {
+      const { success, hardwareIdToRevoke, response } = await SubscriptionService.cancelSubscription(env, customerId);
+      if (!success) return response as Response;
+      
+      // Inline revocation logic until Phase 4B extracts this into InstallationService
+      if (hardwareIdToRevoke) {
+        const sourceInst = await getDocument(env, 'installations', hardwareIdToRevoke);
+        if (sourceInst) {
+          await setDocument(env, 'installations', hardwareIdToRevoke, {
+            ...sourceInst,
+            status: InstallationFSM.transition(sourceInst, 'REVOKE'),
+            revokedAtEpochMs: Date.now(),
+            revokedReason: 'Subscription removed by Admin'
+          });
         }
       }
-
-      if (action === 'EXTEND') {
-        if (typeof body.daysToAdd !== 'number') return createErrorResponse(400, 'MISSING_DAYS', 'daysToAdd must be a number.');
-        const newExpiresAt = (activeSub?.expiresAtEpochMs || now) + (body.daysToAdd * 86400 * 1000);
-        
-        if (!activeSub) {
-           // Create a new subscription if none exists
-           let hwId = null;
-           const installs = await queryCollection(env, 'installations', [
-              { field: 'customerId', op: 'EQUAL', value: customerId }
-           ]);
-           if (installs.length > 0) {
-              installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
-              hwId = installs[0].hardwareId || installs[0].installationId;
-           }
-           
-           const newSubId = `SUB_${crypto.randomUUID()}`;
-           activeSub = {
-             subscriptionId: newSubId,
-             customerId,
-             activeInstallationId: hwId,
-             planId: 'FREE_TRIAL_30',
-             status: SubscriptionFSM.transition({}, 'ACTIVATE'),
-             startsAtEpochMs: now,
-             expiresAtEpochMs: newExpiresAt,
-             createdAtEpochMs: now,
-             updatedAtEpochMs: now
-           };
-           await setDocument(env, 'subscriptions', newSubId, activeSub);
-        } else {
-          activeSub.expiresAtEpochMs = newExpiresAt;
-          activeSub.status = SubscriptionFSM.transition(activeSub, 'ACTIVATE');
-          activeSub.updatedAtEpochMs = now;
-          
-          if (isTrial) {
-            await setDocument(env, 'hardware_trials', trialId as string, activeSub);
-          } else {
-            await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
-          }
-        }
-
-      } else if (action === 'CHANGE_PLAN') {
-        if (!body.newPlanId) return createErrorResponse(400, 'MISSING_PLAN_ID', 'newPlanId is required.');
-        
-        const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [];
-        
-        if (isTrial || !activeSub) {
-          let hwId = activeSub?.hardwareId || activeSub?.activeInstallationId;
-          if (!hwId) {
-            const installs = await queryCollection(env, 'installations', [
-               { field: 'customerId', op: 'EQUAL', value: customerId }
-            ]);
-            if (installs.length > 0) {
-               installs.sort((a: any, b: any) => (b.lastSeenAtEpochMs || 0) - (a.lastSeenAtEpochMs || 0));
-               hwId = installs[0].hardwareId || installs[0].installationId;
-            }
-          }
-          
-          let planDays = 30;
-          if (body.newPlanId.includes('YEAR')) planDays = 365;
-          
-          let baseDate = new Date();
-          baseDate.setDate(baseDate.getDate() + planDays);
-          
-          const newSubId = `SUB_${crypto.randomUUID()}`;
-          const newSub = {
-            subscriptionId: newSubId,
-            customerId,
-            activeInstallationId: hwId,
-            planId: body.newPlanId,
-            status: SubscriptionFSM.transition({}, 'ACTIVATE'),
-            startsAtEpochMs: now,
-            expiresAtEpochMs: baseDate.getTime(),
-            createdAtEpochMs: now,
-            updatedAtEpochMs: now
-          };
-          batchWrites.push({ collectionPath: 'subscriptions', documentId: newSubId, data: newSub });
-          
+      
+      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
+      return new Response(JSON.stringify({ success: true, message: 'Subscription removed successfully' }), {
+        status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
+    else if (action === 'TRANSFER') {
+      // NOTE: Left inline for Phase 4A. Will migrate in Phase 4C to TransferService.
+      if (!body.newHardwareId) return createErrorResponse(400, 'MISSING_HARDWARE_ID', 'newHardwareId is required for transfer.');
+      
+      let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
+      
+      const now = Date.now();
+      const doWork = async () => {
+        if (subscriptionId) {
           if (isTrial && trialId) {
-            const oldTrial = await getDocument(env, 'hardware_trials', trialId);
-            if (oldTrial) {
-               batchWrites.push({
-                 collectionPath: 'hardware_trials', 
-                 documentId: trialId, 
-                 data: { ...oldTrial, expiresAtEpochMs: 0 }
-               });
-            }
+            const trial = await getDocument(env, 'hardware_trials', trialId as string);
+            if (trial) activeSub = trial;
+          } else {
+            const sub = await getDocument(env, 'subscriptions', subscriptionId);
+            if (sub) activeSub = sub;
           }
-        } else {
-          activeSub.planId = body.newPlanId;
-          activeSub.updatedAtEpochMs = now;
-          batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
         }
-        
-        await commitAtomicWrites(env, batchWrites);
-
-      } else if (action === 'TRANSFER') {
-        if (!body.newHardwareId) return createErrorResponse(400, 'MISSING_HARDWARE_ID', 'newHardwareId is required for transfer.');
         
         const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
         const batchWrites: Array<{ collectionPath: string; documentId: string; data: Record<string, any> }> = [];
         
         if (isTrial) {
-          const targetTrial = await getDocument(env, 'hardware_trials', body.newHardwareId);
+          const targetTrial = await getDocument(env, 'hardware_trials', body.newHardwareId as string);
           if (targetTrial) {
              return createErrorResponse(403, 'TRIAL_ALREADY_USED', 'Target device has already used a trial.');
           }
 
-          batchWrites.push({
-            collectionPath: 'hardware_trials',
-            documentId: body.newHardwareId,
-            data: { ...activeSub, hardwareId: body.newHardwareId }
-          });
-          batchWrites.push({
-            collectionPath: 'hardware_trials',
-            documentId: hardwareId,
-            data: { ...activeSub, expiresAtEpochMs: 0 }
-          });
+          batchWrites.push({ collectionPath: 'hardware_trials', documentId: body.newHardwareId as string, data: { ...activeSub, hardwareId: body.newHardwareId } });
+          batchWrites.push({ collectionPath: 'hardware_trials', documentId: hardwareId, data: { ...activeSub, expiresAtEpochMs: 0 } });
         } else {
           activeSub.activeInstallationId = body.newHardwareId;
           activeSub.updatedAtEpochMs = now;
-          batchWrites.push({
-            collectionPath: 'subscriptions',
-            documentId: activeSub.subscriptionId,
-            data: activeSub
-          });
+          batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
         }
         
         if (hardwareId && hardwareId !== body.newHardwareId) {
@@ -728,63 +651,25 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
         }
         
         await commitAtomicWrites(env, batchWrites);
-
-      } else if (action === 'REMOVE') {
-        const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
-        if (isTrial) {
-          activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
-          await setDocument(env, 'hardware_trials', trialId as string, activeSub);
-        } else {
-          activeSub.status = SubscriptionFSM.transition(activeSub, 'CANCEL');
-          activeSub.updatedAtEpochMs = now;
-          await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
-        }
+        await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
         
-        if (hardwareId) {
-          const sourceInst = await getDocument(env, 'installations', hardwareId);
-          if (sourceInst) {
-            await setDocument(env, 'installations', hardwareId, {
-              ...sourceInst,
-              status: InstallationFSM.transition(sourceInst, 'REVOKE'),
-              revokedAtEpochMs: now,
-              revokedReason: 'Subscription removed by Admin'
-            });
-          }
+        return new Response(JSON.stringify({ success: true, message: 'Subscription transferred successfully' }), {
+          status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      };
+
+      if (subscriptionId) {
+        try {
+          return await LockService.withLock(env, 'sub_lock', subscriptionId, 30000, { customerId, subscriptionId }, doWork);
+        } catch (err: any) {
+          if (err.code === 'ALREADY_EXISTS') return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
+          throw err;
         }
       } else {
-        return createErrorResponse(400, 'INVALID_ACTION', 'Action must be one of: EXTEND, CHANGE_PLAN, TRANSFER, REMOVE');
-      }
-
-      await logAuditEvent(env, 'ADMIN_MANAGE_SUBSCRIPTION', {
-        adminUid,
-        customerId,
-        action,
-        details: body
-      });
-
-      return new Response(JSON.stringify({ success: true, message: `Subscription successfully processed for action: ${action}` }), {
-        status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
-    };
-
-    if (subscriptionId) {
-      try {
-        return await LockService.withLock(
-          env,
-          'sub_lock',
-          subscriptionId,
-          30000,
-          { customerId, subscriptionId },
-          doWork
-        );
-      } catch (err: any) {
-        if (err.code === 'ALREADY_EXISTS') {
-          return createErrorResponse(409, 'CONCURRENT_MUTATION_LOCKED', 'Subscription is currently locked by another process.');
-        }
-        throw err;
+        return await doWork();
       }
     } else {
-      return await doWork();
+      return createErrorResponse(400, 'INVALID_ACTION', 'Action must be one of: EXTEND, CHANGE_PLAN, TRANSFER, REMOVE');
     }
   } catch (err: any) {
     console.error('Error in handleAdminManageSubscription:', err);
