@@ -2,6 +2,7 @@ import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { getDocument, setDocument, commitAtomicWrites, queryCollection, logAuditEvent } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
+import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 
 /**
  * Handles POST /api/v1/customers/register
@@ -132,31 +133,8 @@ export async function handleCustomerRegistration(
       }
 
       // Fetch their subscriptions
-      const subs = await queryCollection(env, 'subscriptions', [
-        { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
-      ]);
-
-      let latestSub: any = null;
-      if (subs && subs.length > 0) {
-        subs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
-        latestSub = subs[0];
-      } else {
-        // Fallback: Check if they have a hardware trial
-        const trials = await queryCollection(env, 'hardware_trials', [
-          { field: 'customerId', op: 'EQUAL', value: oldCust.customerId }
-        ]);
-        if (trials && trials.length > 0) {
-          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-          const trial = trials[0];
-          latestSub = {
-            subscriptionId: `TRIAL_${trial.hardwareId}`,
-            planId: 'FREE_TRIAL_30',
-            activeInstallationId: trial.hardwareId,
-            status: Date.now() > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE',
-            expiresAtEpochMs: trial.expiresAtEpochMs
-          };
-        }
-      }
+      const { sub: foundSub } = await findSubscription(env, oldCust.customerId, DiscoveryStrategy.CUSTOMER_UPDATE);
+      let latestSub = foundSub;
 
       if (!latestSub) {
         // The user exists but has no subscriptions or trials (e.g. they were completely deleted).

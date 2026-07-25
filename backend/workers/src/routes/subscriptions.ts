@@ -2,6 +2,7 @@ import { Env, CompositeIdentity, ApiResponse } from '../types';
 import { getDocument, setDocument, queryCollection } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 import { generateSignedLeaseToken } from '../cryptoEngine';
+import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 
 /**
  * Handles GET /api/v1/subscriptions/status
@@ -49,100 +50,25 @@ export async function handleGetSubscriptionStatus(request: Request, env: Env, id
       );
     }
 
-    // 2.75 Check for any explicitly CANCELLED subscriptions or trials
-    const allSubs = await queryCollection(env, 'subscriptions', [
-      { field: 'customerId', op: 'EQUAL', value: customerId }
-    ]);
-    const cancelledSubs = allSubs.filter((s: any) => s.status === 'CANCELLED');
-    
-    const allTrials = await queryCollection(env, 'hardware_trials', [
-      { field: 'customerId', op: 'EQUAL', value: customerId }
-    ]);
-    const cancelledTrials = allTrials.filter((t: any) => t.status === 'CANCELLED');
-
-    if (cancelledSubs.length > 0 || cancelledTrials.length > 0) {
-      return createErrorResponse(
-        403,
-        'SUBSCRIPTION_CANCELLED',
-        'Your subscription has been cancelled. Please activate a new plan.'
-      );
-    }
-
-    // 3. Find active subscriptions for this customer
-    const activeSubs = allSubs.filter((s: any) => s.status === 'ACTIVE');
-
+    // 2.75 Check for any explicitly CANCELLED subscriptions or trials & Find active subscriptions
     let sub: any = null;
     const now = Date.now();
-
-    if (!activeSubs || activeSubs.length === 0) {
-      // Hardware-Locked Trial Logic
-      if (!identity.installationId) {
-        return createErrorResponse(
-          404,
-          'NO_ACTIVE_SUBSCRIPTION',
-          `No active subscription found for customer '${customerId}', and hardware ID is missing for trial fallback.`
-        );
+    try {
+      const { sub: foundSub } = await findSubscription(env, customerId, DiscoveryStrategy.SUBSCRIPTION_STATUS, identity);
+      sub = foundSub;
+    } catch (err: any) {
+      if (err.code === 'SUBSCRIPTION_CANCELLED') {
+        return createErrorResponse(403, 'SUBSCRIPTION_CANCELLED', 'Your subscription has been cancelled. Please activate a new plan.');
+      } else if (err.code === 'NO_ACTIVE_SUBSCRIPTION') {
+        return createErrorResponse(404, 'NO_ACTIVE_SUBSCRIPTION', `No active subscription found for customer '${customerId}', and hardware ID is missing for trial fallback.`);
+      } else if (err.code === 'TRIAL_EXPIRED') {
+        return createErrorResponse(403, 'TRIAL_EXPIRED', 'Your 30-Day Hardware Free Trial has expired. Please activate with a Pro plan.');
+      } else if (err.code === 'INSTALLATION_SUPERSEDED') {
+        return createErrorResponse(403, 'INSTALLATION_SUPERSEDED', 'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.', err.details);
+      } else if (err.code === 'TRIAL_OWNERSHIP_MISMATCH') {
+        return createErrorResponse(403, 'TRIAL_OWNERSHIP_MISMATCH', 'This device hardware trial is associated with a different customer account.');
       }
-
-      // Check for hardware trial
-      const hardwareTrialDoc = await getDocument(env, 'hardware_trials', identity.installationId);
-      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-      
-      let trialStartsAt = now;
-      let trialExpiresAt = now + THIRTY_DAYS_MS;
-
-      if (!hardwareTrialDoc) {
-        if (allTrials.length > 0) {
-          const existingTrial = allTrials.find((t: any) => t.status !== 'CANCELLED');
-          if (existingTrial) {
-            if (now > existingTrial.expiresAtEpochMs) {
-              return createErrorResponse(
-                403,
-                'TRIAL_EXPIRED',
-                'Your 30-Day Hardware Free Trial has expired. Please activate with a Pro plan.'
-              );
-            }
-            return createErrorResponse(
-              403,
-              'INSTALLATION_SUPERSEDED',
-              'Another device is currently the active installation for this trial. Please request a device transfer to activate this phone.',
-              { activeInstallationId: existingTrial.hardwareId }
-            );
-          }
-        }
-
-        // Start new trial
-        await setDocument(env, 'hardware_trials', identity.installationId, {
-          hardwareId: identity.hardwareId,
-          startedAtEpochMs: trialStartsAt,
-          expiresAtEpochMs: trialExpiresAt,
-          customerId: customerId
-        });
-      } else {
-        trialStartsAt = hardwareTrialDoc.startedAtEpochMs;
-        trialExpiresAt = hardwareTrialDoc.expiresAtEpochMs;
-      }
-
-      if (now > trialExpiresAt) {
-        return createErrorResponse(
-          403,
-          'TRIAL_EXPIRED',
-          'Your 30-Day Hardware Free Trial has expired. Please activate with a Pro plan.'
-        );
-      }
-
-      // Construct a mock subscription for the trial
-      sub = {
-        subscriptionId: `TRIAL_${identity.installationId}`,
-        customerId: customerId,
-        activeInstallationId: identity.installationId,
-        planId: 'FREE_TRIAL_30',
-        startsAtEpochMs: trialStartsAt,
-        expiresAtEpochMs: trialExpiresAt,
-        signedLeaseToken: hardwareTrialDoc ? hardwareTrialDoc.signedLeaseToken : undefined
-      };
-    } else {
-      sub = activeSubs[0];
+      throw err;
     }
 
     // 4. Enforce One Active Device Rule (`API_SPECIFICATION.md Section 2.3`)

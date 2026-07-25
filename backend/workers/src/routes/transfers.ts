@@ -3,6 +3,7 @@ import { getDocument, setDocument, queryCollection, commitAtomicWrites, sendFcmN
 import { createErrorResponse } from '../authGuard';
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { LockService } from '../services/lock';
+import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 
 /**
  * Handles POST /api/v1/transfers/request
@@ -68,30 +69,8 @@ export async function handleRequestTransfer(request: Request, env: Env, identity
         sub = await getDocument(env, 'subscriptions', subscriptionId);
       }
     } else if (customerId) {
-      const subs = await queryCollection(env, 'subscriptions', [
-        { field: 'customerId', op: 'EQUAL', value: customerId },
-        { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
-      ]);
-      if (subs && subs.length > 0) {
-        sub = subs[0];
-      } else {
-        // Fallback to hardware trials
-        const trials = await queryCollection(env, 'hardware_trials', [
-          { field: 'customerId', op: 'EQUAL', value: customerId }
-        ]);
-        if (trials && trials.length > 0) {
-          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-          const trial = trials[0];
-          sub = {
-            subscriptionId: `TRIAL_${trial.hardwareId}`,
-            customerId: trial.customerId,
-            activeInstallationId: trial.hardwareId,
-            planId: 'FREE_TRIAL_30',
-            status: now > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE',
-            expiresAtEpochMs: trial.expiresAtEpochMs
-          };
-        }
-      }
+      const { sub: foundSub } = await findSubscription(env, customerId, DiscoveryStrategy.TRANSFER);
+      sub = foundSub;
     }
 
     if (!sub || (sub.status !== 'ACTIVE' && sub.status !== 'EXPIRED')) {

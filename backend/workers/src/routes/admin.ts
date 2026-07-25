@@ -3,6 +3,7 @@ import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryColl
 import { createErrorResponse } from '../authGuard';
 import { generateSignedLeaseToken } from '../cryptoEngine';
 import { LockService } from '../services/lock';
+import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 
 /**
  * Handles GET /api/v1/admin/customers
@@ -30,26 +31,8 @@ export async function handleAdminSearchCustomers(request: Request, env: Env): Pr
       const installations = await queryCollection(env, 'installations', [
         { field: 'customerId', op: 'EQUAL', value: customer.customerId }
       ]);
-      const subscriptions = await queryCollection(env, 'subscriptions', [
-        { field: 'customerId', op: 'EQUAL', value: customer.customerId }
-      ]);
-      let activeSub = subscriptions.find((s: any) => s.status === 'ACTIVE') || subscriptions[0] || null;
-      
-      if (!activeSub) {
-        const trials = await queryCollection(env, 'hardware_trials', [
-          { field: 'customerId', op: 'EQUAL', value: customer.customerId }
-        ]);
-        if (trials.length > 0) {
-          trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-          const trial = trials[0];
-          activeSub = {
-            subscriptionId: `TRIAL_${trial.hardwareId}`,
-            planId: 'FREE_TRIAL_30',
-            status: trial.status === 'CANCELLED' ? 'CANCELLED' : (Date.now() > trial.expiresAtEpochMs ? 'EXPIRED' : 'ACTIVE'),
-            expiresAtEpochMs: trial.expiresAtEpochMs
-          };
-        }
-      }
+      const { sub } = await findSubscription(env, customer.customerId, DiscoveryStrategy.ADMIN_SEARCH);
+      let activeSub = sub;
 
       detailedCustomers.push({
         ...customer,
@@ -580,45 +563,17 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
     const body = await request.json() as { action: string; daysToAdd?: number; newPlanId?: string; newHardwareId?: string };
     
     // Find active subscription or trial
-    const subscriptions = await queryCollection(env, 'subscriptions', [
-      { field: 'customerId', op: 'EQUAL', value: customerId }
-    ]);
+    // Find active subscription or trial
+    let { sub: activeSub, isTrial, trialId, subscriptionId } = await findSubscription(env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
     
-    let activeSub: any = null;
-    const activeSubs = subscriptions.filter((s: any) => s.status === 'ACTIVE');
-    if (activeSubs.length > 0) {
-      activeSubs.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-      activeSub = activeSubs[0];
-    } else if (subscriptions.length > 0) {
-      subscriptions.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-      activeSub = subscriptions[0];
-    }
-    
-    let isTrial = false;
-    let trialId = '';
-    
-    if (!activeSub) {
-      // Check for hardware trial
-      const existingTrials = await queryCollection(env, 'hardware_trials', [
-        { field: 'customerId', op: 'EQUAL', value: customerId }
-      ]);
-      if (existingTrials.length > 0) {
-        existingTrials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-        activeSub = existingTrials[0];
-        isTrial = true;
-        trialId = activeSub.hardwareId || activeSub.installationId;
-      }
-    }
     const now = Date.now();
     const action = typeof body.action === 'string' ? body.action.substring(0, 20).toUpperCase() : '';
-
-    let subscriptionId = activeSub?.subscriptionId || (isTrial ? `TRIAL_${trialId}` : null);
     
     const doWork = async () => {
       if (subscriptionId) {
         // Re-fetch now that we hold the lock (Authoritative Read)
         if (isTrial) {
-          const trial = await getDocument(env, 'hardware_trials', trialId);
+          const trial = await getDocument(env, 'hardware_trials', trialId as string);
           if (trial) activeSub = trial;
         } else {
           const sub = await getDocument(env, 'subscriptions', subscriptionId);
@@ -660,7 +615,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
           activeSub.updatedAtEpochMs = now;
           
           if (isTrial) {
-            await setDocument(env, 'hardware_trials', trialId, activeSub);
+            await setDocument(env, 'hardware_trials', trialId as string, activeSub);
           } else {
             await setDocument(env, 'subscriptions', activeSub.subscriptionId, activeSub);
           }
@@ -775,7 +730,7 @@ export async function handleAdminManageSubscription(request: Request, env: Env, 
         const hardwareId = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
         if (isTrial) {
           activeSub.status = 'CANCELLED';
-          await setDocument(env, 'hardware_trials', trialId, activeSub);
+          await setDocument(env, 'hardware_trials', trialId as string, activeSub);
         } else {
           activeSub.status = 'CANCELLED';
           activeSub.updatedAtEpochMs = now;

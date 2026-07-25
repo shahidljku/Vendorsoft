@@ -2,6 +2,7 @@ import { Env, ApiResponse } from './types';
 import { getDocument, setDocument, commitAtomicWrites, deleteDocument, queryCollection, logAuditEvent } from './services/firestore';
 import { generateShortId, generateSignedLeaseToken } from './cryptoEngine';
 import { LockService } from './services/lock';
+import { findSubscription, DiscoveryStrategy } from './services/discovery';
 
 /**
  * Handles POST /api/v1/webhooks/razorpay
@@ -116,23 +117,8 @@ export async function handleRazorpayWebhook(request: Request, env: Env): Promise
   const planId = paymentDoc.planId || 'PRO_YEARLY';
   const planName = paymentDoc.planName || 'Pro Annual License';
 
-  const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-  let subscriptionId: string | null = null;
-  
-  const activeSub = subs.find((s: any) => s.status === 'ACTIVE');
-  if (activeSub) {
-    subscriptionId = activeSub.subscriptionId;
-  } else if (subs.length > 0) {
-    subs.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-    subscriptionId = subs[0].subscriptionId;
-  } else {
-    // Fall back to hardware trial
-    const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-    if (trials.length > 0) {
-      trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-      subscriptionId = `TRIAL_${trials[0].hardwareId}`;
-    }
-  }
+  const { subscriptionId: foundId } = await findSubscription(env, customerId, DiscoveryStrategy.PAYMENT);
+  let subscriptionId = foundId;
 
   if (!subscriptionId) {
     subscriptionId = `sub_${generateShortId()}`;

@@ -4,6 +4,7 @@ import { getDocument, setDocument, commitAtomicWrites, queryCollection, deleteDo
 import { generateShortId, generateSignedLeaseToken } from '../cryptoEngine';
 import { executeRefundSaga } from '../webhooks';
 import { LockService } from '../services/lock';
+import { findSubscription, DiscoveryStrategy } from '../services/discovery';
 
 /**
  * Handles POST /api/v1/orders/create
@@ -301,23 +302,8 @@ export async function handleVerifyOrder(request: Request, env: Env): Promise<Res
   const planId = paymentDoc.planId || 'PRO_YEARLY';
   const planName = paymentDoc.planName || 'Pro Annual License';
 
-  const subs = await queryCollection(env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-  let subscriptionId: string | null = null;
-  
-  const activeSub = subs.find((s: any) => s.status === 'ACTIVE');
-  if (activeSub) {
-    subscriptionId = activeSub.subscriptionId;
-  } else if (subs.length > 0) {
-    subs.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-    subscriptionId = subs[0].subscriptionId;
-  } else {
-    // Fall back to hardware trial
-    const trials = await queryCollection(env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-    if (trials.length > 0) {
-      trials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
-      subscriptionId = `TRIAL_${trials[0].hardwareId}`;
-    }
-  }
+  const { subscriptionId: foundId } = await findSubscription(env, customerId, DiscoveryStrategy.PAYMENT);
+  let subscriptionId = foundId;
 
   if (!subscriptionId) {
     subscriptionId = `sub_${generateShortId()}`;
