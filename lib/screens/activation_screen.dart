@@ -430,6 +430,14 @@ class _ActivationScreenState extends State<ActivationScreen> {
                       ),
                       const SizedBox(height: 16),
                       */
+                      if (_errorMessage.isNotEmpty) ...[
+                        Text(
+                          _errorMessage,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.redAccent.shade100, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
                       if (_wasCancelled) ...[
                         Text(
                           'Your subscription has expired or been cancelled. Please select a plan to continue.',

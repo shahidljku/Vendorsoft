@@ -135,6 +135,7 @@ export async function findSubscription(ctx: RequestContext, env: Env,
             { field: 'status', op: 'EQUAL', value: 'ACTIVE' }
         ]);
         if (subs && subs.length > 0) {
+            subs.sort((a: any, b: any) => (b.createdAtEpochMs || 0) - (a.createdAtEpochMs || 0));
             sub = subs[0];
         } else {
             const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
@@ -185,25 +186,42 @@ export async function findSubscription(ctx: RequestContext, env: Env,
     }
 
     // Mirrors historical behavior of handleGetSubscriptionStatus.
-    // Intentionally fails on CANCELLED, checks ACTIVE directly, and handles active trial creation.
-    // Do not modify during Phase 2.
     if (strategy === DiscoveryStrategy.SUBSCRIPTION_STATUS) {
         if (!identity) throw new DiscoveryError('MISSING_IDENTITY', "SUBSCRIPTION_STATUS requires identity object");
         
+        const now = Date.now();
         const allSubs = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-        const cancelledSubs = allSubs.filter((s: any) => s.status === 'CANCELLED');
+        const activeSubs = allSubs.filter((s: any) => s.status === 'ACTIVE' && (s.expiresAtEpochMs || 0) > now);
         
-        const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
-        const cancelledTrials = allTrials.filter((t: any) => t.status === 'CANCELLED');
+        if (activeSubs.length > 0) {
+            activeSubs.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
+            return { subscriptionId: activeSubs[0].subscriptionId, sub: activeSubs[0], isTrial: false };
+        }
 
+        const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+        const activeTrials = allTrials.filter((t: any) => t.status !== 'CANCELLED' && (t.expiresAtEpochMs || 0) > now);
+        if (activeTrials.length > 0) {
+            activeTrials.sort((a: any, b: any) => (b.expiresAtEpochMs || 0) - (a.expiresAtEpochMs || 0));
+            const t = activeTrials[0];
+            const activeTrialSub = {
+                subscriptionId: `TRIAL_${t.hardwareId || t.installationId || t.documentId || t.id}`,
+                planId: 'FREE_TRIAL_30',
+                activeInstallationId: t.hardwareId || t.installationId || t.documentId || t.id,
+                status: 'ACTIVE',
+                expiresAtEpochMs: t.expiresAtEpochMs,
+                startsAtEpochMs: t.startsAtEpochMs
+            };
+            return { subscriptionId: activeTrialSub.subscriptionId, sub: activeTrialSub, isTrial: true };
+        }
+
+        const cancelledSubs = allSubs.filter((s: any) => s.status === 'CANCELLED');
+        const cancelledTrials = allTrials.filter((t: any) => t.status === 'CANCELLED');
         if (cancelledSubs.length > 0 || cancelledTrials.length > 0) {
             throw new DiscoveryError('SUBSCRIPTION_CANCELLED');
         }
 
-        const activeSubs = allSubs.filter((s: any) => s.status === 'ACTIVE');
         let sub: any = null;
         let isTrial = false;
-        const now = Date.now();
 
         if (!activeSubs || activeSubs.length === 0) {
             if (!identity.installationId) {

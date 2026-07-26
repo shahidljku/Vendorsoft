@@ -292,6 +292,7 @@ class SubscriptionDialog {
                       );
                       // Close dialogs and reload
                       Navigator.of(context).popUntil((route) => route.isFirst);
+                      LicenseService().pollOnlineSubscriptionStatus(force: true);
                     } else if (message != null) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text(message), backgroundColor: Colors.redAccent),

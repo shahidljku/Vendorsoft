@@ -4,14 +4,13 @@ export class InstallationFSM {
 
         switch (action) {
             case 'ACTIVATE':
-                if (currentStatus === null || currentStatus === 'REVOKED' || currentStatus === 'BANNED') return 'ACTIVE';
+                if (currentStatus === null || currentStatus === 'REVOKED' || currentStatus === 'BANNED' || currentStatus === 'ACTIVE') return 'ACTIVE';
                 break;
             case 'REVOKE':
-                if (currentStatus === 'ACTIVE') return 'REVOKED';
+                if (currentStatus === null || currentStatus === 'ACTIVE' || currentStatus === 'REVOKED' || currentStatus === 'BANNED') return 'REVOKED';
                 break;
             case 'BAN':
-                // Can ban an active or revoked device
-                if (currentStatus === 'ACTIVE' || currentStatus === 'REVOKED') return 'BANNED';
+                if (currentStatus === null || currentStatus === 'ACTIVE' || currentStatus === 'REVOKED' || currentStatus === 'BANNED') return 'BANNED';
                 break;
         }
 

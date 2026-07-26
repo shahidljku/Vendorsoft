@@ -9,12 +9,13 @@ import { TransferFSM } from './fsm/transferFSM';
 import { SubscriptionService } from './subscriptionService';
 import { InstallationService } from './installationService';
 import { InstallationFSM } from './fsm/installationFSM';
+import { resetRateLimit } from './resilience/rateLimiter';
 
 export class TransferService {
   /**
    * Initiates a Peer-to-Peer device transfer claim.
    */
-  static async requestTransfer(ctx: RequestContext, env: Env, customerId: string | undefined, subscriptionId: string | undefined, mobileNumber: string | undefined, identity: CompositeIdentity, deviceModel: string): Promise<{ success: boolean; data: any }> {
+  static async requestTransfer(ctx: RequestContext, env: Env, customerId: string | undefined, subscriptionId: string | undefined, mobileNumber: string | undefined, identity: CompositeIdentity, deviceModel: string, isRateLimited: boolean = false): Promise<{ success: boolean; data: any }> {
     const now = Date.now();
 
     // Lookup customer by mobile number if customerId is not directly provided
@@ -33,7 +34,9 @@ export class TransferService {
 
     let sub: any = null;
     if (subscriptionId) {
-      if (subscriptionId.startsWith('TRIAL_')) {
+      sub = await getDocument(ctx, env, 'subscriptions', subscriptionId);
+
+      if (!sub && subscriptionId.startsWith('TRIAL_')) {
         const hardwareId = subscriptionId.replace('TRIAL_', '');
         const trial = await getDocument(ctx, env, 'hardware_trials', hardwareId);
         if (trial) {
@@ -46,8 +49,6 @@ export class TransferService {
             expiresAtEpochMs: trial.expiresAtEpochMs
           };
         }
-      } else {
-        sub = await getDocument(ctx, env, 'subscriptions', subscriptionId);
       }
     } else if (customerId) {
       const { sub: foundSub } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.TRANSFER);
@@ -83,10 +84,13 @@ export class TransferService {
           ]);
           
           const recentTransfers = rawPendingListForSub.filter((t: any) => t.requestedAtEpochMs > now - (24 * 60 * 60 * 1000));
-          if (recentTransfers.length >= 5) {
+          if (recentTransfers.length >= 20) {
             const err: any = new Error('Too many transfer attempts. Please try again tomorrow to protect the account owner from spam.');
             err.code = 'TOO_MANY_REQUESTS';
             throw err;
+          }
+          if (recentTransfers.length >= 5) {
+            isRateLimited = true;
           }
 
           const pendingList = rawPendingListForSub.filter((t: any) => t.status === 'PENDING');
@@ -105,8 +109,8 @@ export class TransferService {
 
           if (sub.planId === 'FREE_TRIAL_30') {
             const trialHistory = await getDocument(ctx, env, 'hardware_trials', identity.hardwareId);
-            if (trialHistory) {
-              const err: any = new Error('This device has already used a 30-Day Free Trial. Please purchase a Pro Plan to use this device.');
+            if (trialHistory && (trialHistory.status === 'EXPIRED' || trialHistory.status === 'CANCELLED' || (trialHistory.expiresAtEpochMs && trialHistory.expiresAtEpochMs > 0 && now > trialHistory.expiresAtEpochMs))) {
+              const err: any = new Error('This device has an expired Free Trial. Cannot transfer another Free Trial to an expired device. Please purchase a Pro Plan.');
               err.code = 'TRIAL_ALREADY_USED';
               throw err;
             }
@@ -120,7 +124,7 @@ export class TransferService {
             newInstallationId: identity.installationId,
             newHardwareId: identity.hardwareId,
             deviceModel,
-            status: TransferFSM.transition({}, 'REQUEST'),
+            status: isRateLimited ? 'RATE_LIMITED' : TransferFSM.transition({}, 'REQUEST'),
             requestedAtEpochMs: now,
             expiresAtEpochMs
           };
@@ -128,9 +132,22 @@ export class TransferService {
           await setDocument(ctx, env, 'device_transfers', transferId, transferData);
 
           const oldInstallationId = sub.activeInstallationId;
-          if (oldInstallationId) {
+          if (oldInstallationId && !isRateLimited) {
             try {
-              const oldInstallation = await getDocument(ctx, env, 'installations', oldInstallationId);
+              let oldInstallation = null;
+              if (sub.customerId) {
+                const oldInstallations = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: sub.customerId }]);
+                oldInstallation = oldInstallations.find((inst: any) => 
+                  inst.installationId === oldInstallationId || 
+                  inst.hardwareId === oldInstallationId || 
+                  inst.id === oldInstallationId || 
+                  inst.documentId === oldInstallationId
+                );
+              }
+              if (!oldInstallation) {
+                oldInstallation = await getDocument(ctx, env, 'installations', oldInstallationId);
+              }
+              
               if (oldInstallation && oldInstallation.fcmToken) {
                 await sendFcmNotification(ctx, env,
                   oldInstallation.fcmToken,
@@ -140,7 +157,7 @@ export class TransferService {
                 );
               }
             } catch (fcmErr) {
-              ctx.logger.error('FCM Notification error:', fcmErr);
+              ctx.logger.error('Failed to notify old device about transfer request:', fcmErr);
             }
           }
 
@@ -234,9 +251,40 @@ export class TransferService {
           );
           ops.push(...ownershipOp.writes);
           
-          const oldInst = await getDocument(ctx, env, 'installations', transferDoc.oldInstallationId);
-          const revocationOp = InstallationService.buildRevocation(oldInst, transferDoc.oldInstallationId, 'Transfer approved', now);
-          ops.push(...revocationOp.writes);
+          // Sweep ALL installations for this customer and revoke every one except the new device
+          const allInsts = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: transferDoc.customerId }]);
+          for (const inst of allInsts) {
+            if (inst.installationId !== transferDoc.newInstallationId && inst.hardwareId !== newHardwareId && inst.status !== 'REVOKED' && inst.status !== 'BANNED') {
+              ops.push({
+                collectionPath: 'installations',
+                documentId: inst.installationId || inst.hardwareId,
+                data: {
+                  ...inst,
+                  status: InstallationFSM.transition(inst, 'REVOKE'),
+                  revokedAtEpochMs: now,
+                  revokedReason: `Peer transfer approved (${transferId})`
+                }
+              });
+            }
+          }
+
+          // For trials, sweep ALL trials for this customer and expire every one except the new device
+          if (isTrial) {
+            const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: transferDoc.customerId }]);
+            for (const t of allTrials) {
+              if (t.hardwareId !== newHardwareId && t.hardwareId !== transferDoc.newInstallationId) {
+                ops.push({
+                  collectionPath: 'hardware_trials',
+                  documentId: t.hardwareId,
+                  data: {
+                    ...t,
+                    expiresAtEpochMs: 0,
+                    updatedAtEpochMs: now
+                  }
+                });
+              }
+            }
+          }
           
           const activationOp = InstallationService.buildActivation(transferDoc.newInstallationId, transferDoc.customerId, newHardwareId, { ...identity, installationUuid: transferDoc.newInstallationId } as any, transferDoc.deviceModel, null, now);
           ops.push(...activationOp.writes);
@@ -288,6 +336,15 @@ export class TransferService {
           }
 
           await commitAtomicWrites(ctx, env, ops);
+
+          try {
+            await env.APK_STORE.delete(`ratelimit:transfer:${newHardwareId}`);
+            await env.APK_STORE.delete(`ratelimit:transfer_hard:${newHardwareId}`);
+            if (transferDoc.newInstallationId && transferDoc.newInstallationId !== newHardwareId) {
+              await env.APK_STORE.delete(`ratelimit:transfer:${transferDoc.newInstallationId}`);
+              await env.APK_STORE.delete(`ratelimit:transfer_hard:${transferDoc.newInstallationId}`);
+            }
+          } catch(e) {}
 
           return {
             success: true,
@@ -481,8 +538,8 @@ export class TransferService {
       
       if (isTrial) {
         const targetTrial = await getDocument(ctx, env, 'hardware_trials', newHardwareId);
-        if (targetTrial) {
-           const err: any = new Error('Target device has already used a trial.');
+        if (targetTrial && (targetTrial.status === 'EXPIRED' || targetTrial.status === 'CANCELLED' || (targetTrial.expiresAtEpochMs && targetTrial.expiresAtEpochMs > 0 && now > targetTrial.expiresAtEpochMs))) {
+           const err: any = new Error('Target device has an expired Free Trial. Cannot transfer another Free Trial to an expired device.');
            err.code = 'TRIAL_ALREADY_USED';
            throw err;
         }
@@ -490,6 +547,9 @@ export class TransferService {
 
       const batchWrites = await this._buildForceTransferMutation(ctx, env, activeSub, isTrial, hardwareId, newHardwareId, adminUid, now, bodyDetails);
       await commitAtomicWrites(ctx, env, batchWrites);
+      
+      await resetRateLimit(env, `transfer:${newHardwareId}`);
+      await resetRateLimit(env, `transfer_hard:${newHardwareId}`);
       
       return { success: true, data: { message: 'Subscription transferred successfully' } };
     };
@@ -507,28 +567,65 @@ export class TransferService {
   private static async _buildForceTransferMutation(ctx: RequestContext, env: Env, activeSub: any, isTrial: boolean, hardwareId: string, newHardwareId: string, adminUid: string, now: number, bodyDetails: any): Promise<AtomicWriteOp[]> {
     const batchWrites: AtomicWriteOp[] = [];
     if (isTrial) {
+      const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: activeSub.customerId }]);
       batchWrites.push({ collectionPath: 'hardware_trials', documentId: newHardwareId, data: { ...activeSub, hardwareId: newHardwareId, updatedAtEpochMs: now } });
-      batchWrites.push({ collectionPath: 'hardware_trials', documentId: hardwareId, data: { ...activeSub, expiresAtEpochMs: 0, updatedAtEpochMs: now } });
+      for (const t of allTrials) {
+        if (t.hardwareId !== newHardwareId) {
+          batchWrites.push({ collectionPath: 'hardware_trials', documentId: t.hardwareId, data: { ...t, expiresAtEpochMs: 0, updatedAtEpochMs: now } });
+        }
+      }
     } else {
       activeSub.activeInstallationId = newHardwareId;
       activeSub.updatedAtEpochMs = now;
       batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
     }
     
-    if (hardwareId && hardwareId !== newHardwareId) {
-      const sourceInst = await getDocument(ctx, env, 'installations', hardwareId);
-      if (sourceInst) {
+    // Ensure all other installations for this customer are revoked
+    const allInsts = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: activeSub.customerId }]);
+    for (const inst of allInsts) {
+      const instDocId = inst.installationId || inst.hardwareId || inst.documentId || inst.id;
+      if (instDocId !== newHardwareId && inst.status !== 'REVOKED' && inst.status !== 'BANNED') {
         batchWrites.push({
           collectionPath: 'installations',
-          documentId: hardwareId,
+          documentId: instDocId,
           data: {
-            ...sourceInst,
-            status: InstallationFSM.transition(sourceInst, 'REVOKE'),
+            ...inst,
+            status: InstallationFSM.transition(inst, 'REVOKE'),
             revokedAtEpochMs: now,
             revokedReason: `Admin transfer override to ${newHardwareId}`
           }
         });
       }
+    }
+    const targetInst = await getDocument(ctx, env, 'installations', newHardwareId);
+    if (targetInst) {
+      batchWrites.push({
+        collectionPath: 'installations',
+        documentId: newHardwareId,
+        data: {
+          ...targetInst,
+          customerId: activeSub.customerId,
+          status: InstallationFSM.transition(targetInst, 'ACTIVATE'),
+          updatedAtEpochMs: now
+        }
+      });
+    } else {
+      batchWrites.push({
+        collectionPath: 'installations',
+        documentId: newHardwareId,
+        data: {
+          installationId: newHardwareId,
+          customerId: activeSub.customerId,
+          hardwareId: newHardwareId,
+          installationUuid: newHardwareId,
+          platform: 'android',
+          deviceModel: 'Unknown Device',
+          appVersion: '1.0.0',
+          status: InstallationFSM.transition({}, 'ACTIVATE'),
+          createdAtEpochMs: now,
+          lastSeenAtEpochMs: now
+        }
+      });
     }
     batchWrites.push(buildAuditLogOp('ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId: activeSub.customerId, action: 'TRANSFER', details: bodyDetails }));
     return batchWrites;
@@ -540,7 +637,7 @@ export class TransferService {
       const err: any = new Error(`Transfer request ${transferId} not found.`);
       err.code = 'TRANSFER_NOT_FOUND'; throw err;
     }
-    if (transferDoc.status !== 'PENDING') {
+    if (transferDoc.status !== 'PENDING' && transferDoc.status !== 'RATE_LIMITED') {
       const err: any = new Error(`Transfer request is already ${transferDoc.status}.`);
       err.code = 'TRANSFER_NOT_PENDING'; throw err;
     }
@@ -558,7 +655,11 @@ export class TransferService {
       async () => {
         let subDoc: any = null;
         let isTrial = false;
-        if (subscriptionId && subscriptionId.startsWith('TRIAL_')) {
+
+        // First, check if it's a paid subscription (even if it has a TRIAL_ prefix due to an upgrade)
+        subDoc = await getDocument(ctx, env, 'subscriptions', subscriptionId);
+
+        if (!subDoc && subscriptionId && subscriptionId.startsWith('TRIAL_')) {
           isTrial = true;
           const hardwareId = subscriptionId.replace('TRIAL_', '');
           const trial = await getDocument(ctx, env, 'hardware_trials', hardwareId);
@@ -572,8 +673,6 @@ export class TransferService {
               expiresAtEpochMs: trial.expiresAtEpochMs
             };
           }
-        } else {
-          subDoc = await getDocument(ctx, env, 'subscriptions', subscriptionId);
         }
 
         if (!subDoc) {
@@ -583,14 +682,23 @@ export class TransferService {
         
         if (isTrial) {
           const targetTrial = await getDocument(ctx, env, 'hardware_trials', targetInstallationId);
-          if (targetTrial) {
-            const err: any = new Error('Target device has already used a trial. Admin cannot force transfer a trial to a device that has already used one.');
+          if (targetTrial && (targetTrial.status === 'EXPIRED' || targetTrial.status === 'CANCELLED' || (targetTrial.expiresAtEpochMs && targetTrial.expiresAtEpochMs > 0 && now > targetTrial.expiresAtEpochMs))) {
+            const err: any = new Error('Target device has an expired Free Trial. Cannot transfer another Free Trial to an expired device.');
             err.code = 'TRIAL_ALREADY_USED'; throw err;
           }
         }
 
         const { writes, newLeaseToken } = await this._buildApprovalMutation(ctx, env, transferId, transferDoc, subDoc, isTrial, targetInstallationId, sourceInstallationId, adminUid, now);
         await commitAtomicWrites(ctx, env, writes);
+
+        try {
+          await env.APK_STORE.delete(`ratelimit:transfer:${targetInstallationId}`);
+          await env.APK_STORE.delete(`ratelimit:transfer_hard:${targetInstallationId}`);
+          if (transferDoc.newHardwareId && transferDoc.newHardwareId !== targetInstallationId) {
+            await env.APK_STORE.delete(`ratelimit:transfer:${transferDoc.newHardwareId}`);
+            await env.APK_STORE.delete(`ratelimit:transfer_hard:${transferDoc.newHardwareId}`);
+          }
+        } catch(e) {}
 
         return {
           success: true,
@@ -616,15 +724,17 @@ export class TransferService {
     };
     batchWrites.push({ collectionPath: 'device_transfers', documentId: transferId, data: updatedTransfer });
 
-    if (sourceInstallationId && sourceInstallationId !== targetInstallationId) {
-      const sourceInst = await getDocument(ctx, env, 'installations', sourceInstallationId);
-      if (sourceInst) {
+    // Sweep ALL installations for this customer and revoke every one except the target device
+    const allInsts = await queryCollection(ctx, env, 'installations', [{ field: 'customerId', op: 'EQUAL', value: subDoc.customerId }]);
+    for (const inst of allInsts) {
+      const instDocId = inst.installationId || inst.hardwareId;
+      if (instDocId !== targetInstallationId && inst.status !== 'REVOKED' && inst.status !== 'BANNED') {
         batchWrites.push({
           collectionPath: 'installations',
-          documentId: sourceInstallationId,
+          documentId: instDocId,
           data: {
-            ...sourceInst,
-            status: InstallationFSM.transition(sourceInst, 'REVOKE'),
+            ...inst,
+            status: InstallationFSM.transition(inst, 'REVOKE'),
             revokedAtEpochMs: now,
             revokedReason: `Admin approved transfer ${transferId} (Lost/Broken Phone override)`
           }
@@ -639,6 +749,7 @@ export class TransferService {
         documentId: targetInstallationId,
         data: {
           ...targetInst,
+          customerId: subDoc.customerId,
           status: InstallationFSM.transition(targetInst, 'ACTIVATE'),
           updatedAtEpochMs: now
         }
@@ -670,7 +781,7 @@ export class TransferService {
       planId: subDoc.planId || 'PRO_YEARLY',
       planName: subDoc.planName || 'Pro Annual License',
       startsAtEpochMs: subDoc.startsAtEpochMs || now,
-      expiresAtEpochMs: subDoc.expiresAtEpochMs || (now + 365 * 86400 * 1000),
+      expiresAtEpochMs: subDoc.expiresAtEpochMs || (now + 395 * 86400 * 1000),
       maxCustomers: 10000,
       allowWhatsAppAutoSend: true,
       allowThermalPrinting: true,
@@ -679,14 +790,15 @@ export class TransferService {
     const signedLeaseToken = await generateSignedLeaseToken(leasePayload, secretKey);
 
     if (isTrial) {
-      const hardwareId = subDoc.subscriptionId.replace('TRIAL_', '');
-      const trial = await getDocument(ctx, env, 'hardware_trials', hardwareId);
-      if (trial) {
+      const sourceTrialHwId = subDoc.subscriptionId.replace('TRIAL_', '');
+      const sourceTrial = await getDocument(ctx, env, 'hardware_trials', sourceTrialHwId);
+      if (sourceTrial) {
+        // Create new trial for target device
         batchWrites.push({
           collectionPath: 'hardware_trials',
           documentId: targetInstallationId,
           data: {
-            ...trial,
+            ...sourceTrial,
             hardwareId: targetInstallationId,
             signedLeaseToken,
             leaseIssuedAtEpochMs: now,
@@ -695,14 +807,21 @@ export class TransferService {
             updatedAtEpochMs: now
           }
         });
-        batchWrites.push({
-          collectionPath: 'hardware_trials',
-          documentId: hardwareId,
-          data: {
-            ...trial,
-            expiresAtEpochMs: 0
-          }
-        });
+      }
+      // Sweep ALL trials for this customer and expire every one except the target device
+      const allTrials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: subDoc.customerId }]);
+      for (const t of allTrials) {
+        if (t.hardwareId !== targetInstallationId) {
+          batchWrites.push({
+            collectionPath: 'hardware_trials',
+            documentId: t.hardwareId,
+            data: {
+              ...t,
+              expiresAtEpochMs: 0,
+              updatedAtEpochMs: now
+            }
+          });
+        }
       }
     } else {
       batchWrites.push({
@@ -737,7 +856,7 @@ export class TransferService {
       const err: any = new Error(`Transfer request ${transferId} not found.`);
       err.code = 'TRANSFER_NOT_FOUND'; throw err;
     }
-    if (transferDoc.status !== 'PENDING') {
+    if (transferDoc.status !== 'PENDING' && transferDoc.status !== 'RATE_LIMITED') {
       const err: any = new Error(`Transfer request is already ${transferDoc.status}.`);
       err.code = 'TRANSFER_NOT_PENDING'; throw err;
     }

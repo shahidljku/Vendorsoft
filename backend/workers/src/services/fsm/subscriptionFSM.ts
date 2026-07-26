@@ -4,10 +4,10 @@ export class SubscriptionFSM {
 
         switch (action) {
             case 'ACTIVATE':
-                if (currentStatus === null || currentStatus === 'ACTIVE' || currentStatus === 'CANCELLED') return 'ACTIVE';
+                if (currentStatus === null || currentStatus === 'ACTIVE' || currentStatus === 'CANCELLED' || currentStatus === 'EXPIRED' || currentStatus === 'REVOKED') return 'ACTIVE';
                 break;
             case 'CANCEL':
-                if (currentStatus === 'ACTIVE') return 'CANCELLED';
+                if (currentStatus === null || currentStatus === 'ACTIVE' || currentStatus === 'CANCELLED' || currentStatus === 'EXPIRED' || currentStatus === 'REVOKED') return 'CANCELLED';
                 break;
         }
 

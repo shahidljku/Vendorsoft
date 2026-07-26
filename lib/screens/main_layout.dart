@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -55,6 +56,9 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   bool _isPollingTransfers = false;
   late final StreamSubscription _fcmSubscription;
+  StreamSubscription? _licenseSubscription;
+  StreamSubscription? _fcmOpenedAppSubscription;
+  Timer? _transferPollTimer;
   
   String _currentPlanName = '';
   int _daysLeft = 0;
@@ -68,6 +72,19 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
       _checkCorruptionRecovery();
     });
     _fcmSubscription = PushNotificationService().onMessageStream.listen((_) {
+      if (mounted) _pollTransfers();
+    });
+    _fcmOpenedAppSubscription = FirebaseMessaging.onMessageOpenedApp.listen((_) {
+      if (mounted) _pollTransfers();
+    });
+    _licenseSubscription = LicenseService().onLicenseRevoked.listen((event) {
+      if (mounted && (event == 'RESTORED' || event == 'REVOKED' || event == 'UPDATED')) {
+        _loadPlanInfo();
+      }
+    });
+    // Periodic transfer polling every 30s — FCM is best-effort and unreliable,
+    // so this timer ensures the old device always detects incoming P2P requests.
+    _transferPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) _pollTransfers();
     });
     _checkPermissions(isStartup: true);
@@ -156,7 +173,10 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _transferPollTimer?.cancel();
     _fcmSubscription.cancel();
+    _fcmOpenedAppSubscription?.cancel();
+    _licenseSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -761,7 +781,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'First-Install Trial Active (${widget.trialDaysRemaining} days left • 50-Customer Demo Limit)',
+                    'First-Install Trial Active (${widget.trialDaysRemaining} days left)',
                     style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                 ),

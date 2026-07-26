@@ -37,6 +37,9 @@ export async function handleAdminSearchCustomers(ctx: RequestContext, request: R
       const installations = await queryCollection(ctx, env, 'installations', [
         { field: 'customerId', op: 'EQUAL', value: customer.customerId }
       ]);
+      const hardwareTrials = await queryCollection(ctx, env, 'hardware_trials', [
+        { field: 'customerId', op: 'EQUAL', value: customer.customerId }
+      ]);
       const { sub } = await findSubscription(ctx, env, customer.customerId, DiscoveryStrategy.ADMIN_SEARCH);
       let activeSub = sub;
 
@@ -44,6 +47,7 @@ export async function handleAdminSearchCustomers(ctx: RequestContext, request: R
         ...customer,
         installationsCount: installations.length,
         installations,
+        hardwareTrials,
         activeSubscription: activeSub
       });
     }
@@ -270,13 +274,18 @@ export async function handleAdminGetPendingTransfers(ctx: RequestContext, reques
     const pendingList = await queryCollection(ctx, env, 'device_transfers', [
       { field: 'status', op: 'EQUAL', value: 'PENDING' }
     ]);
+    const rateLimitedList = await queryCollection(ctx, env, 'device_transfers', [
+      { field: 'status', op: 'EQUAL', value: 'RATE_LIMITED' }
+    ]);
+    
+    const combinedList = [...pendingList, ...rateLimitedList];
     
     // Sort by requestedAtEpochMs descending
-    pendingList.sort((a: any, b: any) => (b.requestedAtEpochMs || 0) - (a.requestedAtEpochMs || 0));
+    combinedList.sort((a: any, b: any) => (b.requestedAtEpochMs || 0) - (a.requestedAtEpochMs || 0));
 
     const responseWrapper: ApiResponse = {
       success: true,
-      data: { transfers: pendingList }
+      data: { transfers: combinedList }
     };
 
     return new Response(JSON.stringify(responseWrapper), {
@@ -301,11 +310,36 @@ export async function handleAdminUpdatePlans(ctx: RequestContext, request: Reque
     }
 
     const batchWrites: AtomicWriteOp[] = [];
+    let monthlyPrice: string | null = null;
+    let yearlyPrice: string | null = null;
+
     for (const plan of body.plans) {
       if (!plan.planId) continue;
       
+      if (plan.planId === 'PRO_MONTHLY' && plan.amountPaise) {
+        monthlyPrice = `₹${Math.floor(plan.amountPaise / 100)} / month`;
+      } else if (plan.planId === 'PRO_YEARLY' && plan.amountPaise) {
+        yearlyPrice = `₹${Math.floor(plan.amountPaise / 100)} / year (12 + 1 Month FREE)`;
+      }
+
+      let defaultProps = {};
+      if (plan.planId === 'PRO_MONTHLY') {
+        defaultProps = {
+          planName: 'Pro Monthly License',
+          durationDays: 30,
+          description: 'Full feature access for 30 days.'
+        };
+      } else if (plan.planId === 'PRO_YEARLY') {
+        defaultProps = {
+          planName: 'Pro Annual License',
+          durationDays: 395,
+          description: 'Best value! 12 + 1 Month FREE (395 Days).'
+        };
+      }
+
       const existingPlan = await getDocument(ctx, env, 'plans', plan.planId);
       const updatedPlan = {
+        ...defaultProps,
         ...(existingPlan || {}),
         ...plan,
         isActive: true,
@@ -316,6 +350,19 @@ export async function handleAdminUpdatePlans(ctx: RequestContext, request: Reque
     }
 
     if (batchWrites.length > 0) {
+      if (monthlyPrice || yearlyPrice) {
+        const existingConfig = await getDocument(ctx, env, 'system_configs', 'global') || {};
+        const updatedConfig = {
+          ...existingConfig,
+          pricing: {
+            monthly: monthlyPrice || existingConfig.pricing?.monthly || '₹799 / month',
+            yearly: yearlyPrice || existingConfig.pricing?.yearly || '₹9,499 / year (12 + 1 Month FREE)'
+          },
+          updatedAtEpochMs: Date.now()
+        };
+        batchWrites.push({ collectionPath: 'system_configs', documentId: 'global', data: updatedConfig });
+      }
+
       batchWrites.push(buildAuditLogOp('ADMIN_UPDATE_PLANS', {
         adminUid,
         action: 'Updated subscription plan prices'
@@ -373,21 +420,31 @@ export async function handleAdminManageSubscription(ctx: RequestContext, request
         const auditOp = buildAuditLogOp('ADMIN_MANAGE_SUBSCRIPTION', { adminUid, customerId, action, details: body });
 
         const doRemove = async () => {
-          // Re-fetch inside lock
-          const { sub: activeSub, isTrial: actIsTrial, trialId: actTrialId, subscriptionId: foundId } = await findSubscription(ctx, env, customerId, DiscoveryStrategy.ADMIN_MANAGE);
-          if (!activeSub) throw Object.assign(new Error('No active subscription found.'), { code: 'SUBSCRIPTION_NOT_FOUND' });
-
-          const cancelOp = SubscriptionService.buildCancellation(activeSub, actIsTrial, actTrialId || null, now);
-          const batchWrites: AtomicWriteOp[] = [...cancelOp.writes];
+          const batchWrites: AtomicWriteOp[] = [];
           
-          if (cancelOp.result.hardwareIdToRevoke) {
-             const oldInst = await getDocument(ctx, env, 'installations', cancelOp.result.hardwareIdToRevoke);
-             const revOp = InstallationService.buildRevocation(oldInst, cancelOp.result.hardwareIdToRevoke, 'Subscription removed by Admin', now);
-             batchWrites.push(...revOp.writes);
+          const subs = await queryCollection(ctx, env, 'subscriptions', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+          for (const s of subs) {
+            if (s.status !== 'CANCELLED' || s.expiresAtEpochMs !== 0) {
+              const op = SubscriptionService.buildCancellation(s, false, null, now);
+              batchWrites.push(...op.writes);
+            }
           }
+
+          const trials = await queryCollection(ctx, env, 'hardware_trials', [{ field: 'customerId', op: 'EQUAL', value: customerId }]);
+          for (const t of trials) {
+            if (t.status !== 'CANCELLED' || t.expiresAtEpochMs !== 0) {
+              const op = SubscriptionService.buildCancellation(t, true, t.hardwareId || t.documentId || t.id, now);
+              batchWrites.push(...op.writes);
+            }
+          }
+
+          if (batchWrites.length === 0) {
+            throw Object.assign(new Error('No active subscriptions or trials found to cancel.'), { code: 'SUBSCRIPTION_NOT_FOUND' });
+          }
+
           batchWrites.push(auditOp);
           await commitAtomicWrites(ctx, env, batchWrites);
-          return { success: true, message: 'Subscription removed successfully' };
+          return { success: true, message: 'Subscription and trials removed successfully' };
         };
 
         if (subscriptionId) {
@@ -447,6 +504,10 @@ export async function handleAdminUploadApkChunk(ctx: RequestContext, request: Re
     const chunkIndex = parseInt(chunkIndexStr, 10);
     const totalChunks = parseInt(totalChunksStr, 10);
     const totalSize = parseInt(totalSizeStr, 10);
+
+    if (Number.isNaN(chunkIndex) || Number.isNaN(totalChunks)) {
+      return createErrorResponse(400, 'BAD_REQUEST', 'chunkIndex and totalChunks must be valid numbers.');
+    }
 
     const chunkBuffer = await chunk.arrayBuffer();
 

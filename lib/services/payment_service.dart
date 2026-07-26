@@ -45,12 +45,15 @@ class PaymentService {
       print('Failed to get Firebase token for PaymentService: $e');
     }
 
+    final hardwareId = await LicenseService().getDeviceId();
+    final deviceModel = await LicenseService().getDeviceModel();
     return {
       'Content-Type': 'application/json',
       if (idToken != null) 'Authorization': 'Bearer $idToken',
-      'x-installation-uuid': deviceId,
-      'x-installation-id': deviceId,
-      'x-hardware-id': deviceId,
+      'x-installation-uuid': hardwareId,
+      'x-installation-id': hardwareId,
+      'x-hardware-id': hardwareId,
+      'x-device-model': deviceModel,
       'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'x-app-version': '1.0.0'
     };

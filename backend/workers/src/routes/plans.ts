@@ -1,6 +1,6 @@
 import { RequestContext } from '../services/logger';
 import { Env, ApiResponse } from '../types';
-import { queryCollection } from '../services/firestore';
+import { queryCollection, setDocument } from '../services/firestore';
 import { createErrorResponse } from '../authGuard';
 
 export async function handleGetPlans(ctx: RequestContext, request: Request, env: Env): Promise<Response> {
@@ -10,6 +10,13 @@ export async function handleGetPlans(ctx: RequestContext, request: Request, env:
 
   try {
     const plans = await queryCollection(ctx, env, 'plans', [{ field: 'isActive', op: 'EQUAL', value: true }]);
+    for (const p of plans) {
+      if (p.planId === 'PRO_YEARLY' && p.durationDays !== 395) {
+        p.durationDays = 395;
+        p.description = '12 + 1 Month FREE (395 Days)';
+        setDocument(ctx, env, 'plans', 'PRO_YEARLY', p).catch(() => {});
+      }
+    }
     const sortedPlans = plans.sort((a, b) => (b.amountPaise || 0) - (a.amountPaise || 0)); // Expensive first
 
     if (sortedPlans.length === 0) {

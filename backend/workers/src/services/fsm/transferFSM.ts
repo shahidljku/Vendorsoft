@@ -7,13 +7,13 @@ export class TransferFSM {
                 if (currentStatus === null) return 'PENDING';
                 break;
             case 'APPROVE':
-                if (currentStatus === 'PENDING') return 'APPROVED';
+                if (currentStatus === 'PENDING' || currentStatus === 'RATE_LIMITED') return 'APPROVED';
                 break;
             case 'REJECT':
-                if (currentStatus === 'PENDING') return 'REJECTED';
+                if (currentStatus === 'PENDING' || currentStatus === 'RATE_LIMITED') return 'REJECTED';
                 break;
             case 'CANCEL':
-                if (currentStatus === 'PENDING') return 'CANCELLED';
+                if (currentStatus === 'PENDING' || currentStatus === 'RATE_LIMITED') return 'CANCELLED';
                 break;
         }
 

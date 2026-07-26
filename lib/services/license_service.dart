@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'clock_guard_service.dart';
 import 'hardware_fingerprint_service.dart';
+import 'config_service.dart';
 
 enum TokenValidationResult {
   valid,
@@ -68,11 +69,36 @@ JQIDAQAB
     _revocationController.add('REVOKED');
   }
 
+  void triggerDeviceSuperseded() {
+    _revocationController.add('SUPERSEDED');
+  }
+
   /// Generate a stable, un-spoofable Cryptographic Hardware Signature.
   Future<String> getDeviceId() async {
     if (_deviceIdCache != null) return _deviceIdCache!;
     _deviceIdCache = await HardwareFingerprintService().getFingerprint();
     return _deviceIdCache!;
+  }
+
+  /// Get the human-readable device model (e.g. "SM-G998B")
+  Future<String> getDeviceModel() async {
+    try {
+      final deviceInfo = DeviceInfoPlugin();
+      if (kIsWeb) {
+        return 'Web Browser';
+      } else if (Platform.isAndroid) {
+        final androidInfo = await deviceInfo.androidInfo;
+        return androidInfo.model;
+      } else if (Platform.isIOS) {
+        final iosInfo = await deviceInfo.iosInfo;
+        return iosInfo.utsname.machine;
+      } else if (Platform.isWindows) {
+        return 'Windows PC';
+      }
+    } catch (e) {
+      debugPrint('Error getting device model: $e');
+    }
+    return 'Unknown Device';
   }
 
   /// Verifies a license key (base64 encoded JSON containing payload and signature)
@@ -475,12 +501,9 @@ JQIDAQAB
     return isLicenseExpired();
   }
 
-  /// Maximum number of customers allowed when in Demo Mode
-  int getDemoCustomerLimit() => 50;
-
   /// Subscription pricing helpers
-  String getMonthlyPlanPrice() => '₹799 / month';
-  String getYearlyPlanPrice() => '₹9,499 / year (12 + 1 Month FREE)';
+  String getMonthlyPlanPrice() => ConfigService().monthlyPlanPrice;
+  String getYearlyPlanPrice() => ConfigService().yearlyPlanPrice;
   
   /// IMPORTANT REMINDER: Developer must replace this with active UPI ID before release
   String getDeveloperUpiId() => '9427698665@paytm';
@@ -489,8 +512,12 @@ JQIDAQAB
 
   void startBackgroundPolling() {
     _pollingTimer?.cancel();
-    pollOnlineSubscriptionStatus(); // Fire immediately on boot
-    // Timer removed in Iteration 2. Will be cleaned up later.
+    pollOnlineSubscriptionStatus(force: true); // Fire immediately on boot
+    
+    // Check every 5 minutes to ensure instant revocation if the admin forces a transfer
+    _pollingTimer = Timer.periodic(const Duration(minutes: 5), (timer) {
+      pollOnlineSubscriptionStatus(force: true);
+    });
   }
 
   void stopBackgroundPolling() {
@@ -556,19 +583,27 @@ JQIDAQAB
           print('CRITICAL: This installation was superseded. Removing license.');
           await TrialService().killTrial();
           await removeLicense();
-          _revocationController.add('SUPERSEDED');
+          await FirebaseAuth.instance.signOut();
+          if (hasLic || hasTrial) {
+            _revocationController.add('SUPERSEDED');
+          }
         } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
           print('CRITICAL: Customer deactivated by admin. Signing out.');
           await TrialService().killTrial();
           await removeLicense();
           await FirebaseAuth.instance.signOut();
-          _revocationController.add('DEACTIVATED');
+          if (hasLic || hasTrial) {
+            _revocationController.add('DEACTIVATED');
+          }
         } else if (errorCode == 'TRIAL_EXPIRED' || errorCode == 'SUBSCRIPTION_EXPIRED' || errorCode == 'SUBSCRIPTION_CANCELLED') {
           print('CRITICAL: Subscription/Trial expired or cancelled. Removing license.');
           await TrialService().killTrial();
           await _storage.write(key: 'was_cancelled_on_device', value: 'true');
           await removeLicense();
-          _revocationController.add('REVOKED');
+          await FirebaseAuth.instance.signOut();
+          if (hasLic || hasTrial) {
+            _revocationController.add('TRIAL_EXPIRED');
+          }
         }
       } else if (response.statusCode == 404 || response.statusCode == 400) {
         print('WARNING: 400/404 from server. This could be a transient network/identity error on resume. Falling back to offline grace period.');

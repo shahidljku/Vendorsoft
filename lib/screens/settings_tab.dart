@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/security_service.dart';
@@ -51,17 +52,24 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   String _dynamicAppName = '';
   String _currentPlanName = 'Free Trial';
   int _daysLeft = 0;
+  StreamSubscription? _licenseSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _securityService = SecurityService(widget.settingsService);
+    _licenseSubscription = LicenseService().onLicenseRevoked.listen((event) {
+      if (mounted && (event == 'RESTORED' || event == 'REVOKED' || event == 'UPDATED')) {
+        _loadSettings();
+      }
+    });
     _loadSettings();
   }
 
   @override
   void dispose() {
+    _licenseSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

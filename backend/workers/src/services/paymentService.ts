@@ -68,11 +68,6 @@ export class PaymentService {
         err.code = 'DEVICE_CONFLICT';
         throw err;
       }
-      if (instDoc.status === 'REVOKED') {
-        const err: any = new Error('This installation has been revoked. Please request a device transfer.');
-        err.code = 'INSTALLATION_REVOKED';
-        throw err;
-      }
     }
 
     // 3. Prevent Pay-to-Steal
@@ -303,7 +298,7 @@ export class PaymentService {
 
           const customerId = currentPayment.customerId;
           const installationId = currentPayment.installationId;
-          const durationDays = typeof currentPayment.durationDays === 'number' ? currentPayment.durationDays : 365;
+          const durationDays = typeof currentPayment.durationDays === 'number' ? currentPayment.durationDays : 395;
           const planId = currentPayment.planId || 'PRO_YEARLY';
           const planName = currentPayment.planName || 'Pro Annual License';
 
@@ -328,8 +323,8 @@ export class PaymentService {
                     customerId: foundSub.customerId,
                     activeInstallationId: foundSub.hardwareId,
                     planId: 'FREE_TRIAL_30',
-                    status: foundSub.expiresAtEpochMs > now ? 'ACTIVE' : 'EXPIRED',
-                    expiresAtEpochMs: foundSub.expiresAtEpochMs,
+                    status: (foundSub.status === 'CANCELLED' || foundSub.expiresAtEpochMs <= now) ? 'CANCELLED' : 'ACTIVE',
+                    expiresAtEpochMs: foundSub.status === 'CANCELLED' ? 0 : foundSub.expiresAtEpochMs,
                     startsAtEpochMs: foundSub.startsAtEpochMs
                   };
                 }

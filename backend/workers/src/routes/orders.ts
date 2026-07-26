@@ -53,28 +53,27 @@ export async function handleCreateOrder(ctx: RequestContext, request: Request, e
   }
 
   // 5. Look up plan pricing (`plans/{planId}`) or fall back to standard defaults if not in Firestore yet
-  let priceInr = 1499; // Default yearly
-  let durationDays = 365;
-  let planName = 'Pro Annual License';
+  let priceInr = planId === 'PRO_MONTHLY' ? 149 : 1499;
+  let durationDays = planId === 'PRO_MONTHLY' ? 30 : (planId === 'PRO_YEARLY' ? 395 : 365);
+  let planName = planId === 'PRO_MONTHLY' ? 'Pro Monthly License' : 'Pro Annual License';
 
   const planDoc = await getDocument(ctx, env, 'plans', planId);
   if (planDoc) {
     if (planDoc.isActive === false) {
       return createErrorResponse(400, 'PLAN_INACTIVE', `Plan '${planId}' is no longer available for purchase.`);
     }
-    priceInr = typeof planDoc.priceInr === 'number' ? planDoc.priceInr : priceInr;
-    durationDays = typeof planDoc.durationDays === 'number' ? planDoc.durationDays : durationDays;
+    if (typeof planDoc.amountPaise === 'number') {
+      priceInr = Math.floor(planDoc.amountPaise / 100);
+    } else if (typeof planDoc.priceInr === 'number') {
+      priceInr = planDoc.priceInr;
+    }
+    durationDays = (typeof planDoc.durationDays === 'number' && (planId !== 'PRO_YEARLY' || planDoc.durationDays !== 365)) ? planDoc.durationDays : durationDays;
     planName = typeof planDoc.name === 'string' ? planDoc.name : planName;
+    if (planDoc.planName && !planDoc.name) {
+      planName = planDoc.planName;
+    }
   } else {
-    if (planId === 'PRO_MONTHLY') {
-      priceInr = 149;
-      durationDays = 30;
-      planName = 'Pro Monthly License';
-    } else if (planId === 'PRO_YEARLY') {
-      priceInr = 1499;
-      durationDays = 365;
-      planName = 'Pro Annual License';
-    } else if (planId !== 'DEMO_FREE') {
+    if (planId !== 'PRO_MONTHLY' && planId !== 'PRO_YEARLY' && planId !== 'DEMO_FREE') {
       return createErrorResponse(400, 'INVALID_PLAN_ID', `Unsupported planId: ${planId}`);
     }
   }
@@ -178,7 +177,21 @@ export async function handleVerifyOrder(ctx: RequestContext, request: Request, e
 
   // 2. If already settled by webhook, return success instantly
   if (paymentDoc.status === 'SUCCESS') {
-    const resp: ApiResponse = { success: true, data: { status: 'SUCCESS', message: 'Order already settled.' } };
+    let leaseToken = undefined;
+    if (paymentDoc.subscriptionId) {
+      const subDoc = await getDocument(ctx, env, 'subscriptions', paymentDoc.subscriptionId);
+      if (subDoc && subDoc.signedLeaseToken) {
+        leaseToken = subDoc.signedLeaseToken;
+      }
+    }
+    const resp: ApiResponse = { 
+      success: true, 
+      data: { 
+        status: 'SUCCESS', 
+        message: 'Order already settled.',
+        signedLeaseToken: leaseToken 
+      } 
+    };
     return new Response(JSON.stringify(resp), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
@@ -188,6 +201,18 @@ export async function handleVerifyOrder(ctx: RequestContext, request: Request, e
 
     // 4. Delegate to PaymentService to Settle
     const settlementResult = await PaymentService.settleOrder(ctx, env, verifiedPayment, paymentDoc);
+
+    if (settlementResult.status === 'ALREADY_PROCESSED') {
+      let leaseToken = undefined;
+      const latestPaymentDoc = await getDocument(ctx, env, 'payments', orderId);
+      if (latestPaymentDoc && latestPaymentDoc.subscriptionId) {
+        const subDoc = await getDocument(ctx, env, 'subscriptions', latestPaymentDoc.subscriptionId);
+        if (subDoc && subDoc.signedLeaseToken) {
+          leaseToken = subDoc.signedLeaseToken;
+        }
+      }
+      settlementResult.signedLeaseToken = leaseToken;
+    }
 
     const successResp: ApiResponse = {
       success: true,

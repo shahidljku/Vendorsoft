@@ -333,7 +333,7 @@ export async function handleCustomerRegistration(ctx: RequestContext, request: R
     customerId,
     reqHardwareId,
     identity,
-    body.deviceModel ? body.deviceModel.trim() : null,
+    (body.deviceModel || identity.deviceModel || identity.platform || 'Unknown').trim(),
     body.fcmToken || null,
     now
   );
@@ -435,7 +435,7 @@ export async function handleUpdateFcmToken(ctx: RequestContext, request: Request
         installationId: identity.installationId,
         hardwareId: identity.hardwareId,
         customerId: identity.customerId || 'UNKNOWN',
-        deviceModel: 'Unknown',
+        deviceModel: (body.deviceModel || identity.deviceModel || identity.platform || 'Unknown').trim(),
         fcmToken,
         createdAtEpochMs: Date.now(),
         lastSeenAtEpochMs: Date.now()

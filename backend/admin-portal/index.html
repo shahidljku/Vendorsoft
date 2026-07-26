@@ -36,8 +36,17 @@
     </div>
   </header>
 
+  <!-- Initial Loading Overlay -->
+  <div id="initialLoadingScreen" class="login-overlay active">
+    <div class="initial-loading-box glass">
+      <div class="loading-spinner"></div>
+      <h2>Initializing Session</h2>
+      <p>Establishing Zero Trust connection...</p>
+    </div>
+  </div>
+
   <!-- Login Overlay -->
-  <div id="loginScreen" class="login-overlay active">
+  <div id="loginScreen" class="login-overlay">
     <div class="login-box glass">
       <h2>VendSoft Secure Access</h2>
       <p>Authorized personnel only.</p>
@@ -409,6 +418,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ export async function handleGetSubscriptionStatus(ctx: RequestContext, request: 
 
     if (!customerId && identity.installationId) {
       const instDoc = await getDocument(ctx, env, 'installations', identity.installationId);
-      if (instDoc && instDoc.customerId) {
+      if (instDoc && instDoc.customerId && (instDoc.status === 'ACTIVE' || instDoc.status === 'REVOKED' || instDoc.status === 'BANNED')) {
         customerId = instDoc.customerId;
       }
     }
@@ -131,7 +131,8 @@ export async function handleGetSubscriptionStatus(ctx: RequestContext, request: 
       if (
         leaseAgeMs > (24 * 60 * 60 * 1000) ||
         sub.lastLeasePlanId !== sub.planId ||
-        sub.lastLeaseDeviceId !== leasePayload.deviceId
+        sub.lastLeaseDeviceId !== leasePayload.deviceId ||
+        sub.lastLeaseExpiresAt !== sub.expiresAtEpochMs
       ) {
         needsNewToken = true;
       }
@@ -147,6 +148,7 @@ export async function handleGetSubscriptionStatus(ctx: RequestContext, request: 
         leaseIssuedAtEpochMs: now,
         lastLeasePlanId: sub.planId,
         lastLeaseDeviceId: leasePayload.deviceId,
+        lastLeaseExpiresAt: sub.expiresAtEpochMs,
         updatedAtEpochMs: now
       };
       

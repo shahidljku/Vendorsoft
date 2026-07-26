@@ -1,5 +1,5 @@
 import { Env, CompositeIdentity, ApiResponse } from './types';
-import { getDocument, logAuditEvent } from './services/firestore';
+import { getDocument, setDocument, logAuditEvent } from './services/firestore';
 import { decodeBase64Url } from './cryptoEngine';
 import { RequestContext } from './services/logger';
 
@@ -23,6 +23,7 @@ export async function authenticateRequest(
   const installationUuid = request.headers.get('x-installation-uuid');
   const appVersion = request.headers.get('x-app-version');
   const platform = request.headers.get('x-platform');
+  const deviceModel = request.headers.get('x-device-model');
   const customerId = request.headers.get('x-customer-id') || undefined;
   const installationId = request.headers.get('x-installation-id') || request.headers.get('x-installation-uuid') || undefined;
   const idempotencyKey = request.headers.get('x-idempotency-key') || undefined;
@@ -57,14 +58,44 @@ export async function authenticateRequest(
   if (hardwareId) {
     try {
       const instDoc = await getDocument(ctx, env, 'installations', hardwareId);
-      if (instDoc && instDoc.status === 'BANNED') {
-        return {
-          errorResponse: createErrorResponse(
-            403,
-            'DEVICE_BANNED',
-            'Your device is permanently blocked due to unethical activity or Terms of Service violations.'
-          )
-        };
+      if (instDoc) {
+        if (instDoc.status === 'BANNED') {
+          return {
+            errorResponse: createErrorResponse(
+              403,
+              'DEVICE_BANNED',
+              'Your device is permanently blocked due to unethical activity or Terms of Service violations.'
+            )
+          };
+        }
+        if (instDoc.status === 'REVOKED') {
+          // Allow revoked devices to still hit transfer and registration endpoints so they aren't permanently locked out
+          const allowedRevokedPaths = [
+            '/v1/customers/register',
+            '/v1/transfers/request',
+            '/v1/transfers/pending',
+            '/v1/transfers/approve',
+            '/v1/transfers/reject',
+            '/v1/transfers/cancel',
+            '/v1/installations/update-fcm'
+          ];
+          let isAllowed = false;
+          for (const p of allowedRevokedPaths) {
+            if (request.url.includes(p)) {
+              isAllowed = true;
+              break;
+            }
+          }
+          if (!isAllowed) {
+            return {
+              errorResponse: createErrorResponse(
+                403,
+                'INSTALLATION_SUPERSEDED',
+                'Another device is currently the active installation for this account. Please request a device transfer to activate this phone.'
+              )
+            };
+          }
+        }
       }
     } catch (err) {
       console.warn('Failed to check device ban status:', err);
@@ -89,6 +120,7 @@ export async function authenticateRequest(
     installationUuid,
     appVersion,
     platform: platform as 'android' | 'windows',
+    deviceModel: deviceModel || platform,
     idempotencyKey
   };
 
@@ -114,8 +146,10 @@ const ROLE_PERMISSIONS: Record<string, Permission[]> = {
 };
 
 export function hasPermission(role: string, permission: Permission): boolean {
-  const permissions = ROLE_PERMISSIONS[role] || [];
-  return permissions.includes(permission) || permissions.includes('FULL_ACCESS');
+  if (!role) return false;
+  const normalizedRole = role.toUpperCase();
+  const permissions = ROLE_PERMISSIONS[normalizedRole] || [];
+  return permissions.includes(permission) || permissions.includes('FULL_ACCESS'); 
 }
 
 /**

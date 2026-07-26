@@ -37,7 +37,9 @@ class PushNotificationService {
       
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         debugPrint('Got a message whilst in the foreground!');
-        if (message.notification != null) {
+        // Accept both notification messages AND data-only messages
+        // (data-only messages are used for silent transfer notifications)
+        if (message.notification != null || message.data.isNotEmpty) {
           _onMessageController.add(message);
         }
       });
@@ -49,6 +51,16 @@ class PushNotificationService {
   Future<void> _updateTokenOnBackend(String token) async {
     try {
       User? user = FirebaseAuth.instance.currentUser;
+      // Re-authenticate if session expired — ensures FCM token always reaches backend
+      if (user == null) {
+        try {
+          final cred = await FirebaseAuth.instance.signInAnonymously();
+          user = cred.user;
+        } catch (e) {
+          debugPrint('FCM token update: anonymous re-auth failed: $e');
+          return;
+        }
+      }
       if (user == null) return;
       final idToken = await user.getIdToken();
       if (idToken == null) return;
@@ -63,6 +75,8 @@ class PushNotificationService {
           'Content-Type': 'application/json',
           'x-installation-uuid': deviceId,
           'x-hardware-id': deviceId,
+          'x-app-version': '1.0.0',
+          'x-platform': 'android',
         },
         body: jsonEncode({'fcmToken': token}),
       );

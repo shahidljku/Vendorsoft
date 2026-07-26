@@ -9,7 +9,7 @@ import { TransferService } from '../services/transferService';
  * Initiates a Peer-to-Peer device transfer claim.
  * See API_SPECIFICATION.md Section 2.5.1 & FIRESTORE_SCHEMA.md Section 3.7.
  */
-export async function handleRequestTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity): Promise<Response> {
+export async function handleRequestTransfer(ctx: RequestContext, request: Request, env: Env, identity: CompositeIdentity, isRateLimited: boolean = false): Promise<Response> {
   try {
     const config = await getDocument(ctx, env, 'system_configs', 'global');
     if (config && (config.allowTransfers === false || config.maintenanceMode === true)) {
@@ -35,8 +35,12 @@ export async function handleRequestTransfer(ctx: RequestContext, request: Reques
 
     const deviceModel = (body.deviceModel || 'Unknown New Device').substring(0, 100);
 
-    const result = await TransferService.requestTransfer(ctx, env, customerId, subscriptionId, mobileNumber, identity, deviceModel);
+    const result = await TransferService.requestTransfer(ctx, env, customerId, subscriptionId, mobileNumber, identity, deviceModel, isRateLimited);
     
+    if (isRateLimited) {
+      return createErrorResponse(429, 'TOO_MANY_REQUESTS', 'Transfer request rate limit exceeded.');
+    }
+
     return new Response(JSON.stringify(result), {
       status: result.data.transferId === 'trn_already_active' ? 200 : 202,
       headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
@@ -63,17 +67,32 @@ export async function handleGetPendingTransfers(ctx: RequestContext, request: Re
       return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Header x-installation-uuid is required.');
     }
 
-    const rawPendingList = await queryCollection(ctx, env, 'device_transfers', [
-      { field: 'oldInstallationId', op: 'EQUAL', value: identity.installationId }
-    ]);
+    let validOldIds = [identity.installationId];
+    if (identity.hardwareId) validOldIds.push(identity.hardwareId);
     
-    const pendingList = rawPendingList.filter((t: any) => t.status === 'PENDING');
-
-    if (identity.hardwareId && identity.hardwareId !== identity.installationId) {
-      const trialRawList = await queryCollection(ctx, env, 'device_transfers', [
-        { field: 'oldInstallationId', op: 'EQUAL', value: identity.hardwareId }
+    try {
+      const instDocs = await queryCollection(ctx, env, 'installations', [{ field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }]);
+      if (instDocs && instDocs.length > 0) {
+        for (const d of instDocs) {
+          if (d.installationId) validOldIds.push(d.installationId);
+          if (d.documentId) validOldIds.push(d.documentId);
+          if (d.id) validOldIds.push(d.id);
+        }
+      }
+    } catch(e) {}
+    
+    validOldIds = [...new Set(validOldIds)].filter(Boolean);
+    
+    const pendingList: any[] = [];
+    for (const id of validOldIds) {
+      const rawPendingList = await queryCollection(ctx, env, 'device_transfers', [
+        { field: 'oldInstallationId', op: 'EQUAL', value: id }
       ]);
-      pendingList.push(...trialRawList.filter((t: any) => t.status === 'PENDING'));
+      for (const t of rawPendingList) {
+        if (t.status === 'PENDING' && !pendingList.find(existing => existing.transferId === t.transferId)) {
+          pendingList.push(t);
+        }
+      }
     }
 
     const now = Date.now();

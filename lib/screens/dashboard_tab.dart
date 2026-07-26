@@ -7,6 +7,7 @@ import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/license_service.dart';
 import '../services/trial_service.dart';
+import '../services/config_service.dart';
 import '../widgets/cooldown_button.dart';
 import '../widgets/subscription_dialog.dart';
 import 'reminders_modal.dart';
@@ -36,12 +37,14 @@ class DashboardTab extends StatefulWidget {
 class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   String? excelFileName;
-  bool _isDemoMode = true;
+  bool _isDemoMode = false;
+  bool _isLoadingPreloadedData = true;
   bool _isTrialActive = false;
   int _trialDaysRemaining = 0;
   bool _isLifetime = false;
   int _licenseDaysRemaining = 0;
   String _lastBackupDateText = 'Checking...';
+  StreamSubscription<String?>? _licenseSubscription;
 
   final TextEditingController _cmSearchController = TextEditingController();
 
@@ -73,10 +76,18 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
     
     _calculateMetrics();
     widget.excelService.addListener(_calculateMetrics);
+    
+    // Listen for license restoration/revocation
+    _licenseSubscription = LicenseService().onLicenseRevoked.listen((event) {
+       if (event == 'RESTORED' || event == 'REVOKED') {
+          _initPreloadedData();
+       }
+    });
   }
 
   @override
   void dispose() {
+    _licenseSubscription?.cancel();
     widget.excelService.removeListener(_calculateMetrics);
     _cmSearchController.dispose();
     _tabController.dispose();
@@ -207,6 +218,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
         _trialDaysRemaining = trialDays;
         _isLifetime = isLifetime;
         _licenseDaysRemaining = licenseDays;
+        _isLoadingPreloadedData = false;
       });
     }
   }
@@ -321,7 +333,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_isDemoMode)
+          if (!_isLoadingPreloadedData && _isDemoMode)
             Container(
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.all(14),
@@ -340,9 +352,9 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Demo Trial Active (Max 50 Customers)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        const Text('Demo Trial Active', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                         const SizedBox(height: 3),
-                        Text('Upgrade to Yearly (₹9,499) or Monthly (₹799)', style: TextStyle(color: Colors.grey.shade300, fontSize: 11)),
+                        Text('Upgrade to Yearly (${ConfigService().yearlyPlanPrice}) or Monthly (${ConfigService().monthlyPlanPrice})', style: TextStyle(color: Colors.grey.shade300, fontSize: 11)),
                       ],
                     ),
                   ),
@@ -361,7 +373,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
               ),
             ),
             
-          if (!_isDemoMode && !_isLifetime && _licenseDaysRemaining <= 7)
+          if (!_isLoadingPreloadedData && !_isDemoMode && !_isLifetime && _licenseDaysRemaining <= 7)
             Container(
               margin: const EdgeInsets.only(bottom: 16),
               padding: const EdgeInsets.all(14),

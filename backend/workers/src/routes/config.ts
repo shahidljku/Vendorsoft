@@ -15,6 +15,10 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfigDocument = {
   allowRegistrations: true,
   allowPayments: true,
   allowTransfers: true,
+  pricing: {
+    monthly: '₹999 / month',
+    yearly: '₹11999 / year (12 + 1 Month FREE)'
+  },
   updatedAtEpochMs: 1752672000000
 };
 
@@ -29,21 +33,22 @@ export async function handleGetSystemConfig(ctx: RequestContext, request: Reques
 
   try {
     const firestoreDoc = await getDocument(ctx, env, 'system_configs', 'global');
-    
+
     // Merge Firestore document with default fallback values to ensure strict interface compliance
     const configData: SystemConfigDocument = firestoreDoc
       ? {
-          minimumSupportedVersion: firestoreDoc.minimumSupportedVersion || DEFAULT_SYSTEM_CONFIG.minimumSupportedVersion,
-          latestVersion: firestoreDoc.latestVersion || DEFAULT_SYSTEM_CONFIG.latestVersion,
-          maintenanceMode: typeof firestoreDoc.maintenanceMode === 'boolean' ? firestoreDoc.maintenanceMode : DEFAULT_SYSTEM_CONFIG.maintenanceMode,
-          maintenanceMessage: firestoreDoc.maintenanceMessage || DEFAULT_SYSTEM_CONFIG.maintenanceMessage,
-          allowRegistrations: typeof firestoreDoc.allowRegistrations === 'boolean' ? firestoreDoc.allowRegistrations : DEFAULT_SYSTEM_CONFIG.allowRegistrations,
-          allowPayments: typeof firestoreDoc.allowPayments === 'boolean' ? firestoreDoc.allowPayments : DEFAULT_SYSTEM_CONFIG.allowPayments,
-          allowTransfers: typeof firestoreDoc.allowTransfers === 'boolean' ? firestoreDoc.allowTransfers : DEFAULT_SYSTEM_CONFIG.allowTransfers,
-          enforceStrictAppVersion: firestoreDoc.enforceStrictAppVersion,
-          apkDownloadUrl: firestoreDoc.apkDownloadUrl,
-          updatedAtEpochMs: firestoreDoc.updatedAtEpochMs || DEFAULT_SYSTEM_CONFIG.updatedAtEpochMs
-        }
+        minimumSupportedVersion: firestoreDoc.minimumSupportedVersion || DEFAULT_SYSTEM_CONFIG.minimumSupportedVersion,
+        latestVersion: firestoreDoc.latestVersion || DEFAULT_SYSTEM_CONFIG.latestVersion,
+        maintenanceMode: typeof firestoreDoc.maintenanceMode === 'boolean' ? firestoreDoc.maintenanceMode : DEFAULT_SYSTEM_CONFIG.maintenanceMode,
+        maintenanceMessage: firestoreDoc.maintenanceMessage || DEFAULT_SYSTEM_CONFIG.maintenanceMessage,
+        allowRegistrations: typeof firestoreDoc.allowRegistrations === 'boolean' ? firestoreDoc.allowRegistrations : DEFAULT_SYSTEM_CONFIG.allowRegistrations,
+        allowPayments: typeof firestoreDoc.allowPayments === 'boolean' ? firestoreDoc.allowPayments : DEFAULT_SYSTEM_CONFIG.allowPayments,
+        allowTransfers: typeof firestoreDoc.allowTransfers === 'boolean' ? firestoreDoc.allowTransfers : DEFAULT_SYSTEM_CONFIG.allowTransfers,
+        enforceStrictAppVersion: firestoreDoc.enforceStrictAppVersion,
+        apkDownloadUrl: firestoreDoc.apkDownloadUrl,
+        pricing: firestoreDoc.pricing || DEFAULT_SYSTEM_CONFIG.pricing,
+        updatedAtEpochMs: firestoreDoc.updatedAtEpochMs || DEFAULT_SYSTEM_CONFIG.updatedAtEpochMs
+      }
       : DEFAULT_SYSTEM_CONFIG;
 
     const responsePayload: ApiResponse<SystemConfigDocument> = {

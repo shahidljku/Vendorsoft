@@ -35,6 +35,7 @@ class RegistrationService {
     
     final token = user != null ? await user.getIdToken() : '';
     final hardwareId = await LicenseService().getDeviceId();
+    final deviceModel = await LicenseService().getDeviceModel();
 
     final nonce = List.generate(16, (_) => Random().nextInt(256).toRadixString(16).padLeft(2, '0')).join();
     final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
@@ -44,6 +45,7 @@ class RegistrationService {
       'Content-Type': 'application/json',
       'x-hardware-id': hardwareId,
       'x-installation-uuid': hardwareId, // Fallback to hardwareId for simplicity
+      'x-device-model': deviceModel,
       'x-app-version': '1.0.0',
       'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'x-registration-nonce': nonce,
@@ -64,6 +66,7 @@ class RegistrationService {
       final url = Uri.parse('$baseUrl/customers/register');
       
       final fcmToken = PushNotificationService().fcmToken;
+      final deviceModel = await LicenseService().getDeviceModel();
 
       final body = jsonEncode({
         'businessName': businessName ?? 'Unknown',
@@ -71,6 +74,7 @@ class RegistrationService {
         'mobileNumber': mobileNumber,
         'city': city ?? 'Unknown',
         'recoverOnly': recoverOnly,
+        'deviceModel': deviceModel,
         if (fcmToken != null) 'fcmToken': fcmToken,
       });
 

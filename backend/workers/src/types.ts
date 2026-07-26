@@ -35,6 +35,7 @@ export interface CompositeIdentity {
   installationUuid: string; // Persistent UUID v4 stored in FlutterSecureStorage
   appVersion: string; // Client semantic build version (e.g., '1.0.0+1')
   platform: 'android' | 'windows'; // Operating system
+  deviceModel?: string; // Hardware device model (e.g. SM-G998B)
   idempotencyKey?: string; // UUID v4 required on state-changing endpoints
 }
 
@@ -66,6 +67,10 @@ export interface SystemConfigDocument {
   allowTransfers: boolean;
   enforceStrictAppVersion?: boolean;
   apkDownloadUrl?: string;
+  pricing?: {
+    monthly: string;
+    yearly: string;
+  };
   updatedAtEpochMs: number;
 }
 

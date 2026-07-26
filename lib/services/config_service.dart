@@ -121,4 +121,12 @@ class ConfigService {
 
     return false;
   }
+
+  String get monthlyPlanPrice {
+    return _systemConfig?['pricing']?['monthly'] ?? '₹799';
+  }
+
+  String get yearlyPlanPrice {
+    return _systemConfig?['pricing']?['yearly'] ?? '₹9,499 (12 + 1 Month FREE)';
+  }
 }

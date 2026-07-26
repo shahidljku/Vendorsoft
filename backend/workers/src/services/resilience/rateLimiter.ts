@@ -39,3 +39,18 @@ export async function checkRateLimit(
     return policy.fallbackMode === 'fail_open';
   }
 }
+
+/**
+ * Resets a rate limit counter (e.g. upon successful approval).
+ */
+export async function resetRateLimit(
+  env: Env,
+  identityKey: string
+): Promise<void> {
+  const rlKey = `ratelimit:${identityKey}`;
+  try {
+    await env.APK_STORE.delete(rlKey);
+  } catch (err) {
+    console.error(`[RateLimiter] Failed to reset KV for key ${rlKey}:`, err);
+  }
+}

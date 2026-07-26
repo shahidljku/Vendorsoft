@@ -137,7 +137,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       }
     });
     ConfigService().startBackgroundPolling();
-    // LicenseService().startBackgroundPolling(); // Disabled in Iteration 2 - Replaced by targeted event-driven verification
+    LicenseService().startBackgroundPolling();
     _loadSettings();
   }
 

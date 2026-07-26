@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../main.dart';
 import '../services/license_service.dart';
+import '../services/registration_service.dart';
+import '../services/settings_service.dart';
 
 class DeviceTransferredScreen extends StatelessWidget {
   const DeviceTransferredScreen({super.key});
@@ -43,15 +47,24 @@ class DeviceTransferredScreen extends StatelessWidget {
               ),
               const SizedBox(height: 32),
               ElevatedButton(
-                onPressed: () {
-                  LicenseService().triggerLoginReset();
+                onPressed: () async {
+                  const storage = FlutterSecureStorage();
+                  await storage.delete(key: 'was_cancelled_on_device');
+                  try {
+                    await RegistrationService().logoutFromServer();
+                  } catch (_) {}
+                  await FirebaseAuth.instance.signOut();
+                  await SettingsService().setHasAcceptedTerms(false);
+                  if (context.mounted) {
+                    runApp(ImageSenderApp(key: UniqueKey()));
+                  }
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF00E676),
                   foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
                 ),
-                child: const Text('Go to Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                child: const Text('Go to Login / Register', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ],
           ),

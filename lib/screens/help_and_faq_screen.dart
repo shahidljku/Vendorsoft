@@ -56,7 +56,7 @@ Upon first launch, VendorSoft automatically begins your 30-day trial and asks fo
       answer: '''
 Your first-install trial gives you 30 full days of access to test VendorSoft's core capabilities:
 
-• Manage up to 50 customer records across your delivery routes.
+• Manage unlimited customer records across your delivery routes.
 • Test automated WhatsApp bill sending, monthly rate calculations, and Collection Man routing.
 • Test Bluetooth thermal receipt printing.
 • No credit card, phone number registration, or internet connection is needed during your trial.

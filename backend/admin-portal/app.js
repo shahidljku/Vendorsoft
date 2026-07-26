@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnGoogleSignIn = document.getElementById('btnGoogleSignIn');
   const btnLogout = document.getElementById('btnLogout');
   const loginScreen = document.getElementById('loginScreen');
+  const initialLoadingScreen = document.getElementById('initialLoadingScreen');
   const mainDashboard = document.getElementById('mainDashboard');
   const authPill = document.getElementById('authPill');
   const adminStatusText = document.getElementById('adminStatusText');
@@ -80,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
           throw new Error('Unauthorized by edge backend.');
         }
 
+        initialLoadingScreen.classList.remove('active');
         loginScreen.classList.remove('active');
         mainDashboard.style.display = 'flex';
         authPill.style.display = 'flex';
@@ -94,10 +96,13 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (err) {
         console.error('Zero Trust Verification Failed:', err);
         await auth.signOut();
+        initialLoadingScreen.classList.remove('active');
+        loginScreen.classList.add('active');
         loginError.textContent = "Access denied. This Google account is not authorized.";
         loginError.style.display = 'block';
       }
     } else {
+      initialLoadingScreen.classList.remove('active');
       loginScreen.classList.add('active');
       mainDashboard.style.display = 'none';
       authPill.style.display = 'none';
@@ -388,18 +393,34 @@ async function loadCustomers() {
             <span class="value" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.city || '—'}</span>
           </div>
           <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); grid-column: 1 / -1;">
-            <div class="label" style="margin-bottom: 8px;">Registered Devices</div>
-            ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => `
+            <div class="label" style="margin-bottom: 8px;">Registered Devices & Trials</div>
+            ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => {
+              const trial = (cust.hardwareTrials || []).find(t => t.hardwareId === (inst.hardwareId || inst.installationId));
+              let trialStatusHtml = '';
+              if (trial) {
+                const now = Date.now();
+                const isTrialActive = trial.expiresAtEpochMs > now;
+                const daysLeft = Math.max(0, Math.ceil((trial.expiresAtEpochMs - now) / 86400000));
+                trialStatusHtml = `<div style="font-size: 10px; color: ${isTrialActive ? '#00E676' : '#ff4444'}; margin-top: 2px;">Hardware Trial: ${isTrialActive ? `${daysLeft} Days Left` : 'Expired'}</div>`;
+              }
+              return `
               <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; margin-bottom: 4px; gap: 8px;">
                 <div style="flex: 1; min-width: 0;">
-                  <div style="font-size: 12px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${inst.hardwareId || inst.installationId}</div>
+                  <div style="font-size: 12px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: #00D1FF;" onclick="copyHardwareId('${inst.hardwareId || inst.installationId}', this)" title="Click to copy: ${inst.hardwareId || inst.installationId}">📋 ${inst.hardwareId || inst.installationId}</div>
                   <div style="font-size: 11px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${(inst.deviceModel || inst.platform || 'ANDROID').toUpperCase()} • <span style="color: ${inst.status === 'BANNED' ? '#ff4444' : '#00E676'}">${inst.status || 'ACTIVE'}</span></div>
+                  ${trialStatusHtml}
                 </div>
-                <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px; white-space: nowrap; flex-shrink: 0;" onclick="toggleDeviceBan('${inst.hardwareId || inst.installationId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
-                  ${inst.status === 'BANNED' ? 'Unblock' : 'Block Device'}
-                </button>
+                <div style="display: flex; gap: 4px; flex-shrink: 0;">
+                  <button class="btn secondary" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;" onclick="copyHardwareId('${inst.hardwareId || inst.installationId}', this)" title="Copy Hardware ID">
+                    Copy ID
+                  </button>
+                  <button class="btn ${inst.status === 'BANNED' ? 'success' : 'danger'}" style="padding: 4px 8px; font-size: 11px; white-space: nowrap;" onclick="toggleDeviceBan('${inst.hardwareId || inst.installationId}', '${inst.status === 'BANNED' ? 'ACTIVE' : 'BANNED'}')">
+                    ${inst.status === 'BANNED' ? 'Unblock' : 'Block Device'}
+                  </button>
+                </div>
               </div>
-            `).join('') : '<div style="font-size: 12px; color: #888;">No hardware bindings</div>'}
+              `;
+            }).join('') : '<div style="font-size: 12px; color: #888;">No hardware bindings</div>'}
           </div>
         </div>
         <div class="card-actions">
@@ -473,6 +494,44 @@ async function toggleDeviceBan(hardwareId, newStatus) {
 }
 
 /**
+ * Copies a hardware ID to clipboard with visual feedback
+ */
+function copyHardwareId(text, el) {
+  const showFeedback = () => {
+    const originalText = el.innerText || el.textContent;
+    el.innerText = 'Copied! ✅';
+    const oldColor = el.style.color;
+    el.style.color = '#00E676';
+    setTimeout(() => {
+      el.innerText = originalText;
+      el.style.color = oldColor;
+    }, 2000);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showFeedback).catch(() => fallbackCopy(text, showFeedback));
+  } else {
+    fallbackCopy(text, showFeedback);
+  }
+}
+
+function fallbackCopy(text, onSuccess) {
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.style.position = "fixed";
+  textArea.style.left = "-99999px";
+  document.body.appendChild(textArea);
+  textArea.select();
+  try {
+    document.execCommand('copy');
+    onSuccess();
+  } catch (e) {
+    alert('Hardware ID: ' + text);
+  }
+  document.body.removeChild(textArea);
+}
+
+/**
  * Loads P2P Transfer Requests (`GET /v1/transfers/pending`)
  */
 async function loadPendingTransfers() {
@@ -506,8 +565,8 @@ async function loadPendingTransfers() {
       row.innerHTML = `
         <td><strong>${tx.transferId}</strong></td>
         <td>${tx.customerId}</td>
-        <td><code>${tx.sourceHardwareId || tx.oldInstallationId || '—'}</code></td>
-        <td><code>${tx.targetHardwareId || tx.newInstallationId || '—'}</code></td>
+        <td><code style="cursor: pointer; color: #00D1FF;" onclick="copyHardwareId('${tx.sourceHardwareId || tx.oldInstallationId || ''}', this)" title="Click to copy">${tx.sourceHardwareId || tx.oldInstallationId || '—'}</code></td>
+        <td><code style="cursor: pointer; color: #00D1FF;" onclick="copyHardwareId('${tx.targetHardwareId || tx.newInstallationId || ''}', this)" title="Click to copy">${tx.targetHardwareId || tx.newInstallationId || '—'}</code></td>
         <td>${new Date(tx.requestedAtEpochMs || Date.now()).toLocaleString()}</td>
         <td>
           <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}')">Approve</button>
@@ -821,7 +880,7 @@ document.getElementById('manageSubForm')?.addEventListener('submit', async (e) =
     });
     const resJson = await resp.json();
     if (resJson.success) {
-      alert(`Success: ${resJson.message}`);
+      alert(`Success: ${resJson.message || resJson.data?.message || 'Operation completed successfully'}`);
       document.getElementById('manageSubModal').classList.remove('active');
       loadCustomers();
       loadAuditLogs();

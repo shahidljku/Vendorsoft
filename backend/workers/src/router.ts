@@ -225,9 +225,10 @@ export async function routeRequest(request: Request, env: Env, execCtx?: Executi
 
   // Phase 2.2: Peer-to-Peer Device Transfers
   if (normalizedPath === '/v1/transfers/request' && request.method === 'POST') {
+    const hardRlAllowed = await checkRateLimit(env, RateLimitPolicies.TRANSFER_REQUEST_HARD, `transfer_hard:${identity.installationId || identity.hardwareId}`);
     const rlAllowed = await checkRateLimit(env, RateLimitPolicies.TRANSFER_REQUEST, `transfer:${identity.installationId || identity.hardwareId}`);
-    if (!rlAllowed) return createErrorResponse(429, 'TOO_MANY_REQUESTS', 'Transfer request rate limit exceeded.');
-    return handleRequestTransfer(ctx, request, env, identity);
+    
+    return handleRequestTransfer(ctx, request, env, identity, (!hardRlAllowed || !rlAllowed));
   }
   if (normalizedPath === '/v1/transfers/pending' && request.method === 'GET') {
     return handleGetPendingTransfers(ctx, request, env, identity);

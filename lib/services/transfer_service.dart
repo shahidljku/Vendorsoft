@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'license_service.dart';
+import 'trial_service.dart';
 
 class TransferService {
   static final TransferService _instance = TransferService._internal();
@@ -30,10 +31,12 @@ class TransferService {
       print('Failed to get Firebase token for TransferService: $e');
     }
 
+    final deviceModel = await LicenseService().getDeviceModel();
     final Map<String, String> headers = {
       'Content-Type': 'application/json',
       'x-installation-uuid': deviceId,
       'x-hardware-id': deviceId,
+      'x-device-model': deviceModel,
       'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
       'x-app-version': '1.0.0'
     };
@@ -116,8 +119,13 @@ class TransferService {
 
       final response = await http.post(url, headers: headers, body: body);
       if (response.statusCode == 200) {
-        // Remove local active license right after successful approval
+        // Remove local active license and trial right after successful approval
+        await TrialService().killTrial();
         await LicenseService().removeLicense();
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        LicenseService().triggerDeviceSuperseded();
         return true;
       } else {
         print('Approve transfer failed (${response.statusCode}): ${response.body}');

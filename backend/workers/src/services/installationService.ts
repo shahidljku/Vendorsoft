@@ -195,6 +195,10 @@ export class InstallationService {
       err.code = 'NOT_FOUND';
       throw err;
     }
+
+    if (instDoc.status !== 'ACTIVE') {
+      return { writes: [], result: undefined };
+    }
     
     const writes = [{
       collectionPath: 'installations',

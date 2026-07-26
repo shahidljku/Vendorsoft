@@ -12,8 +12,8 @@ export class SubscriptionService {
    * Extends the expiration date of the current active subscription or trial.
    */
   static async extendSubscription(ctx: RequestContext, env: Env, customerId: string, daysToAdd: number, auditOp?: AtomicWriteOp): Promise<{ success: boolean; message: string }> {
-    if (typeof daysToAdd !== 'number') {
-      const err: any = new Error('daysToAdd must be a number.');
+    if (typeof daysToAdd !== 'number' || Number.isNaN(daysToAdd)) {
+      const err: any = new Error('daysToAdd must be a valid number.');
       err.code = 'MISSING_DAYS';
       throw err;
     }
@@ -32,7 +32,11 @@ export class SubscriptionService {
         }
       }
 
-      const newExpiresAt = (activeSub?.expiresAtEpochMs || now) + (daysToAdd * 86400 * 1000);
+      let baseTime = now;
+      if (activeSub && activeSub.status !== 'CANCELLED' && activeSub.expiresAtEpochMs && activeSub.expiresAtEpochMs > now) {
+        baseTime = activeSub.expiresAtEpochMs;
+      }
+      const newExpiresAt = baseTime + (daysToAdd * 86400 * 1000);
 
       if (!activeSub) {
         let hwId = null;
@@ -130,7 +134,7 @@ export class SubscriptionService {
         }
         
         let planDays = 30;
-        if (newPlanId.includes('YEAR')) planDays = 365;
+        if (newPlanId.includes('YEAR')) planDays = 395;
         let baseDate = new Date();
         baseDate.setDate(baseDate.getDate() + planDays);
         
@@ -156,6 +160,16 @@ export class SubscriptionService {
         }
       } else {
         activeSub.planId = newPlanId;
+        
+        let planDays = 0;
+        if (newPlanId === 'PRO_MONTHLY') planDays = 30;
+        if (newPlanId === 'PRO_YEARLY') planDays = 395;
+        
+        if (planDays > 0) {
+          const baseTime = (activeSub.status !== 'CANCELLED' && activeSub.expiresAtEpochMs && activeSub.expiresAtEpochMs > now) ? activeSub.expiresAtEpochMs : now;
+          activeSub.expiresAtEpochMs = baseTime + (planDays * 86400000);
+        }
+
         activeSub.updatedAtEpochMs = now;
         batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
       }
@@ -191,12 +205,13 @@ export class SubscriptionService {
     trialId: string | null,
     now: number
   ): DomainMutation<{ hardwareIdToRevoke: string | null }> {
-    const hardwareIdToRevoke = isTrial ? activeSub.hardwareId : activeSub.activeInstallationId;
+    const hardwareIdToRevoke = null;
     const writes: AtomicWriteOp[] = [];
 
     const updatedSub = {
       ...activeSub,
       status: SubscriptionFSM.transition(activeSub, 'CANCEL'),
+      expiresAtEpochMs: 0,
       updatedAtEpochMs: now
     };
 
@@ -243,8 +258,8 @@ export class SubscriptionService {
     }
 
     if (isTrial) {
-      if (targetHardwareTrial) {
-        const err: any = new Error('The receiving device has already used a Free Trial. Transfer aborted.');
+      if (targetHardwareTrial && (targetHardwareTrial.status === 'EXPIRED' || targetHardwareTrial.status === 'CANCELLED' || (targetHardwareTrial.expiresAtEpochMs && targetHardwareTrial.expiresAtEpochMs > 0 && Date.now() > targetHardwareTrial.expiresAtEpochMs))) {
+        const err: any = new Error('The receiving device has an expired Free Trial. Transfer aborted.');
         err.code = 'TRIAL_ALREADY_USED';
         throw err;
       }
@@ -339,8 +354,10 @@ export class SubscriptionService {
       }
     }
 
-    let currentExpiresAt = subDoc && typeof subDoc.expiresAtEpochMs === 'number' ? subDoc.expiresAtEpochMs : now;
-    const baseTime = currentExpiresAt > now ? currentExpiresAt : now;
+    let baseTime = now;
+    if (subDoc && subDoc.status !== 'CANCELLED' && typeof subDoc.expiresAtEpochMs === 'number' && subDoc.expiresAtEpochMs > now) {
+      baseTime = subDoc.expiresAtEpochMs;
+    }
     const newExpiresAt = baseTime + (durationDays * 86400000);
 
     const leasePayload = {
