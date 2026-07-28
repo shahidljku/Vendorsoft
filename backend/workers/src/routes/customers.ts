@@ -201,16 +201,33 @@ export async function handleCustomerRegistration(ctx: RequestContext, request: R
             token = await generateSignedLeaseToken(leasePayload, secretKey);
           }
 
-          if (body.fcmToken) {
-            const existingInst = await getDocument(ctx, env, 'installations', latestSub.activeInstallationId);
-            if (existingInst) {
-              const updatedInst = {
-                ...existingInst,
-                fcmToken: body.fcmToken,
-                lastSeenAtEpochMs: Date.now()
-              };
-              await setDocument(ctx, env, 'installations', latestSub.activeInstallationId, updatedInst);
-            }
+          // ALWAYS ensure the device we are logging in from is registered in the installations collection
+          const currentDeviceInst = await getDocument(ctx, env, 'installations', reqHardwareId);
+          if (currentDeviceInst) {
+            const updatedInst = {
+              ...currentDeviceInst,
+              customerId: oldCust.customerId, // Ensure it's bound to this customer
+              fcmToken: body.fcmToken || currentDeviceInst.fcmToken,
+              lastSeenAtEpochMs: Date.now()
+            };
+            await setDocument(ctx, env, 'installations', reqHardwareId, updatedInst);
+          } else {
+            // Create new installation record if they are logging in on a new device
+            await setDocument(ctx, env, 'installations', reqHardwareId, {
+              installationId: reqHardwareId,
+              customerId: oldCust.customerId,
+              hardwareId: reqHardwareId,
+              installationUuid: identity.installationUuid || reqHardwareId,
+              firebaseUid: identity.uid,
+              platform: identity.platform || 'android',
+              appVersion: request.headers.get('x-app-version') || identity.appVersion || '1.0.0',
+              deviceModel: (body.deviceModel || identity.deviceModel || 'Unknown').trim(),
+              fcmToken: body.fcmToken || null,
+              status: 'ACTIVE',
+              isBanned: false,
+              createdAtEpochMs: Date.now(),
+              lastSeenAtEpochMs: Date.now()
+            });
           }
 
           const cachedData = {
