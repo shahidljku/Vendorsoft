@@ -258,8 +258,13 @@ export class SubscriptionService {
     }
 
     if (isTrial) {
-      if (targetHardwareTrial && (targetHardwareTrial.status === 'EXPIRED' || targetHardwareTrial.status === 'CANCELLED' || (targetHardwareTrial.expiresAtEpochMs && targetHardwareTrial.expiresAtEpochMs > 0 && Date.now() > targetHardwareTrial.expiresAtEpochMs))) {
-        const err: any = new Error('The receiving device has an expired Free Trial. Transfer aborted.');
+      if (targetHardwareTrial && (
+        targetHardwareTrial.trialUsed === true ||
+        targetHardwareTrial.status === 'EXPIRED' ||
+        targetHardwareTrial.status === 'CANCELLED' ||
+        (targetHardwareTrial.expiresAtEpochMs !== undefined && targetHardwareTrial.expiresAtEpochMs !== null && Date.now() > targetHardwareTrial.expiresAtEpochMs)
+      )) {
+        const err: any = new Error('The receiving device has already used a Free Trial. Transfer aborted. Please purchase a paid Pro Plan.');
         err.code = 'TRIAL_ALREADY_USED';
         throw err;
       }

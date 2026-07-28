@@ -230,7 +230,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       if (_trialService.isClockDiscrepancy) {
         _isClockTrustworthy = false;
       }
-    }
+    } 
 
     String? lastUri = await _settingsService.getLastExcelUri();
     String? lastName = await _settingsService.getLastExcelFileName();

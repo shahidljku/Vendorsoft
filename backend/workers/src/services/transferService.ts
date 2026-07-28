@@ -189,13 +189,26 @@ export class TransferService {
     const transferDoc = await getDocument(ctx, env, 'device_transfers', transferId);
     const now = Date.now();
 
-    if (!transferDoc || transferDoc.status !== 'PENDING' || now > transferDoc.expiresAtEpochMs) {
+    if (!transferDoc || (transferDoc.status !== 'PENDING' && transferDoc.status !== 'RATE_LIMITED') || now > transferDoc.expiresAtEpochMs) {
       const err: any = new Error('Transfer request is either expired, already resolved, or invalid.');
       err.code = 'TRANSFER_NOT_PENDING';
       throw err;
     }
 
-    if (transferDoc.oldInstallationId !== identity.installationId && transferDoc.oldInstallationId !== identity.hardwareId) {
+    let isAuthorized = transferDoc.oldInstallationId === identity.installationId || transferDoc.oldInstallationId === identity.hardwareId;
+    if (!isAuthorized) {
+      try {
+        const instDocs = await queryCollection(ctx, env, 'installations', [{ field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }]);
+        for (const d of instDocs) {
+          if (transferDoc.oldInstallationId === d.installationId || transferDoc.oldInstallationId === d.documentId || transferDoc.oldInstallationId === d.id) {
+            isAuthorized = true;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!isAuthorized) {
       const err: any = new Error('Only the current active device (`oldInstallationId`) can approve a transfer.');
       err.code = 'UNAUTHORIZED_APPROVAL';
       throw err;
@@ -222,11 +235,11 @@ export class TransferService {
 
           const ops = [];
           
-          const isTrial = transferDoc.subscriptionId.startsWith('TRIAL_');
-          let subDoc = null;
+          let subDoc = await getDocument(ctx, env, 'subscriptions', transferDoc.subscriptionId);
+          let isTrial = false;
           let targetHardwareTrial = null;
 
-          if (isTrial) {
+          if (!subDoc) {
             const hwId = transferDoc.subscriptionId.replace('TRIAL_', '');
             const trial = await getDocument(ctx, env, 'hardware_trials', hwId);
             if (trial) {
@@ -239,9 +252,11 @@ export class TransferService {
                 expiresAtEpochMs: trial.expiresAtEpochMs
               };
             }
+          }
+
+          if (subDoc && subDoc.planId === 'FREE_TRIAL_30') {
+            isTrial = true;
             targetHardwareTrial = await getDocument(ctx, env, 'hardware_trials', newHardwareId);
-          } else {
-            subDoc = await getDocument(ctx, env, 'subscriptions', transferDoc.subscriptionId);
           }
 
           const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
@@ -299,6 +314,19 @@ export class TransferService {
               completedAtEpochMs: now
             }
           });
+          
+          const allSubsTransfers = await queryCollection(ctx, env, 'device_transfers', [
+            { field: 'subscriptionId', op: 'EQUAL', value: transferDoc.subscriptionId }
+          ]);
+          for (const op of allSubsTransfers) {
+            if (op.transferId !== transferId && (op.status === 'PENDING' || op.status === 'RATE_LIMITED')) {
+              ops.push({
+                collectionPath: 'device_transfers',
+                documentId: op.transferId,
+                data: { ...op, status: 'CANCELLED', resolvedAtEpochMs: now }
+              });
+            }
+          }
           
           const auditLogId = `aud_${generateShortId()}`;
           ops.push({
@@ -370,13 +398,26 @@ export class TransferService {
     const transferDoc = await getDocument(ctx, env, 'device_transfers', transferId);
     const now = Date.now();
 
-    if (!transferDoc || transferDoc.status !== 'PENDING') {
-      const err: any = new Error('Transfer request is not in PENDING state.');
+    if (!transferDoc || (transferDoc.status !== 'PENDING' && transferDoc.status !== 'RATE_LIMITED')) {
+      const err: any = new Error('Transfer request is not in PENDING or RATE_LIMITED state.');
       err.code = 'TRANSFER_NOT_PENDING';
       throw err;
     }
 
-    if (transferDoc.oldInstallationId !== identity.installationId && transferDoc.oldInstallationId !== identity.hardwareId) {
+    let isAuthorized = transferDoc.oldInstallationId === identity.installationId || transferDoc.oldInstallationId === identity.hardwareId;
+    if (!isAuthorized) {
+      try {
+        const instDocs = await queryCollection(ctx, env, 'installations', [{ field: 'hardwareId', op: 'EQUAL', value: identity.hardwareId }]);
+        for (const d of instDocs) {
+          if (transferDoc.oldInstallationId === d.installationId || transferDoc.oldInstallationId === d.documentId || transferDoc.oldInstallationId === d.id) {
+            isAuthorized = true;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!isAuthorized) {
       const err: any = new Error('Only the current active device can reject this transfer.');
       err.code = 'UNAUTHORIZED_REJECTION';
       throw err;
@@ -401,8 +442,22 @@ export class TransferService {
                 rejectedBy: 'PEER_OLD_DEVICE',
                 completedAtEpochMs: now
               }
-            },
-            {
+            }
+          ];
+
+          const allSubsTransfers = await queryCollection(ctx, env, 'device_transfers', [
+            { field: 'subscriptionId', op: 'EQUAL', value: transferDoc.subscriptionId }
+          ]);
+          for (const op of allSubsTransfers) {
+            if (op.transferId !== transferId && (op.status === 'PENDING' || op.status === 'RATE_LIMITED')) {
+              batchWrites.push({
+                collectionPath: 'device_transfers',
+                documentId: op.transferId,
+                data: { ...op, status: 'CANCELLED', resolvedAtEpochMs: now }
+              });
+            }
+          }
+          batchWrites.push({
               collectionPath: 'audit_logs',
               documentId: auditLogId,
               data: {
@@ -415,8 +470,7 @@ export class TransferService {
                 newInstallationId: transferDoc.newInstallationId,
                 timestampEpochMs: now
               }
-            }
-          ];
+            });
 
           const responseData = {
             transferId,

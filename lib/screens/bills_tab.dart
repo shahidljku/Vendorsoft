@@ -275,7 +275,10 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                         );
                       }).toList(),
                       onChanged: (val) {
-                        if (val != null) setState(() => _collectionManFilter = val);
+                        if (val != null) {
+                          setState(() => _collectionManFilter = val);
+                          _calculateData();
+                        }
                       },
                     ),
                   ),
@@ -391,6 +394,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         setState(() {
           _statusFilter = label;
         });
+        _calculateData();
       },
       child: Column(
         mainAxisSize: MainAxisSize.min,

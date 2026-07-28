@@ -564,13 +564,16 @@ async function loadPendingTransfers() {
       const row = document.createElement('tr');
       row.innerHTML = `
         <td><strong>${tx.transferId}</strong></td>
-        <td>${tx.customerId}</td>
+        <td>
+          <div style="font-weight: bold; color: #fff;">${tx.customerName || 'Unknown'}</div>
+          <div style="font-size: 0.85em; color: #aaa; margin-top: 2px;">${tx.customerMobile || tx.customerId}</div>
+        </td>
         <td><code style="cursor: pointer; color: #00D1FF;" onclick="copyHardwareId('${tx.sourceHardwareId || tx.oldInstallationId || ''}', this)" title="Click to copy">${tx.sourceHardwareId || tx.oldInstallationId || '—'}</code></td>
         <td><code style="cursor: pointer; color: #00D1FF;" onclick="copyHardwareId('${tx.targetHardwareId || tx.newInstallationId || ''}', this)" title="Click to copy">${tx.targetHardwareId || tx.newInstallationId || '—'}</code></td>
         <td>${new Date(tx.requestedAtEpochMs || Date.now()).toLocaleString()}</td>
         <td>
-          <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}')">Approve</button>
-          <button class="btn danger" onclick="rejectLostPhoneTransfer('${tx.transferId}')">Reject</button>
+          <button class="btn success" onclick="approveLostPhoneTransfer('${tx.transferId}', this)">Approve</button>
+          <button class="btn danger" onclick="rejectLostPhoneTransfer('${tx.transferId}', this)">Reject</button>
         </td>
       `;
       tableBody.appendChild(row);
@@ -583,9 +586,14 @@ async function loadPendingTransfers() {
 /**
  * Approves a device transfer override (`POST /v1/admin/transfers/:transferId/approve`)
  */
-async function approveLostPhoneTransfer(transferId) {
+async function approveLostPhoneTransfer(transferId, btnElement) {
   if (!confirm(`Confirm Lost/Broken Phone Override for transfer ${transferId}? This will immediately revoke the old hardware ID and bind the subscription to the new phone.`)) {
     return;
+  }
+
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.innerText = 'Approving...';
   }
 
   try {
@@ -602,18 +610,31 @@ async function approveLostPhoneTransfer(transferId) {
       loadAuditLogs();
     } else {
       alert(`Approval Error: ${resJson.error?.message || 'Unknown error'}`);
+      if (btnElement) {
+        btnElement.disabled = false;
+        btnElement.innerText = 'Approve';
+      }
     }
   } catch (err) {
     alert(`Network Error: ${err.message}`);
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.innerText = 'Approve';
+    }
   }
 }
 
 /**
  * Rejects a device transfer override (`POST /v1/admin/transfers/:transferId/reject`)
  */
-async function rejectLostPhoneTransfer(transferId) {
+async function rejectLostPhoneTransfer(transferId, btnElement) {
   if (!confirm(`Are you sure you want to REJECT transfer ${transferId}?`)) {
     return;
+  }
+
+  if (btnElement) {
+    btnElement.disabled = true;
+    btnElement.innerText = 'Rejecting...';
   }
 
   try {
@@ -629,9 +650,17 @@ async function rejectLostPhoneTransfer(transferId) {
       loadAuditLogs();
     } else {
       alert(`Rejection failed: ${resJson.error?.message || 'Unknown error'}`);
+      if (btnElement) {
+        btnElement.disabled = false;
+        btnElement.innerText = 'Reject';
+      }
     }
   } catch (err) {
     alert(`Network Error: ${err.message}`);
+    if (btnElement) {
+      btnElement.disabled = false;
+      btnElement.innerText = 'Reject';
+    }
   }
 }
 

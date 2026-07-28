@@ -283,9 +283,30 @@ export async function handleAdminGetPendingTransfers(ctx: RequestContext, reques
     // Sort by requestedAtEpochMs descending
     combinedList.sort((a: any, b: any) => (b.requestedAtEpochMs || 0) - (a.requestedAtEpochMs || 0));
 
+    // Enrich with customer details
+    const enrichedList = [];
+    for (const t of combinedList) {
+      let mobileNumber = 'Unknown';
+      let shopName = 'Unknown';
+      if (t.customerId) {
+        try {
+          const cust = await getDocument(ctx, env, 'customers', t.customerId);
+          if (cust) {
+            mobileNumber = cust.mobileNumber || 'Unknown';
+            shopName = cust.businessName || cust.ownerName || 'Unknown';
+          }
+        } catch(e) {}
+      }
+      enrichedList.push({
+        ...t,
+        customerMobile: mobileNumber,
+        customerName: shopName
+      });
+    }
+
     const responseWrapper: ApiResponse = {
       success: true,
-      data: { transfers: combinedList }
+      data: { transfers: enrichedList }
     };
 
     return new Response(JSON.stringify(responseWrapper), {

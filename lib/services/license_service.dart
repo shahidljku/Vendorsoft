@@ -13,6 +13,8 @@ import 'dart:io';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:image_sender/services/transfer_service.dart';
 import 'clock_guard_service.dart';
 import 'hardware_fingerprint_service.dart';
 import 'config_service.dart';
@@ -579,30 +581,31 @@ JQIDAQAB
           await removeLicense();
           await FirebaseAuth.instance.signOut();
           _revocationController.add('BANNED');
-        } else if (errorCode == 'INSTALLATION_SUPERSEDED') {
-          print('CRITICAL: This installation was superseded. Removing license.');
-          await TrialService().killTrial();
-          await removeLicense();
-          await FirebaseAuth.instance.signOut();
-          if (hasLic || hasTrial) {
-            _revocationController.add('SUPERSEDED');
+        } else if (errorCode == 'INSTALLATION_SUPERSEDED' || errorCode == 'CUSTOMER_DEACTIVATED' || errorCode == 'TRIAL_EXPIRED' || errorCode == 'SUBSCRIPTION_EXPIRED' || errorCode == 'SUBSCRIPTION_CANCELLED') {
+          try {
+            // Check if there is a pending transfer request targeted at this device
+            // If so, we delay the forced logout so the user can actually see and approve/reject the transfer.
+            final pending = await TransferService().pollPendingTransfers();
+            if (pending.isNotEmpty) {
+              print('CRITICAL ALERT ($errorCode), but skipping forced logout because a transfer request is pending approval.');
+              return;
+            }
+          } catch (e) {
+            print('Error checking pending transfers before logout: $e');
           }
-        } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
-          print('CRITICAL: Customer deactivated by admin. Signing out.');
+
+          print('CRITICAL: License invalid ($errorCode). Removing license.');
           await TrialService().killTrial();
-          await removeLicense();
-          await FirebaseAuth.instance.signOut();
-          if (hasLic || hasTrial) {
-            _revocationController.add('DEACTIVATED');
+          if (errorCode == 'SUBSCRIPTION_EXPIRED' || errorCode == 'SUBSCRIPTION_CANCELLED' || errorCode == 'TRIAL_EXPIRED') {
+            await _storage.write(key: 'was_cancelled_on_device', value: 'true');
           }
-        } else if (errorCode == 'TRIAL_EXPIRED' || errorCode == 'SUBSCRIPTION_EXPIRED' || errorCode == 'SUBSCRIPTION_CANCELLED') {
-          print('CRITICAL: Subscription/Trial expired or cancelled. Removing license.');
-          await TrialService().killTrial();
-          await _storage.write(key: 'was_cancelled_on_device', value: 'true');
           await removeLicense();
           await FirebaseAuth.instance.signOut();
+          
           if (hasLic || hasTrial) {
-            _revocationController.add('TRIAL_EXPIRED');
+            if (errorCode == 'INSTALLATION_SUPERSEDED') _revocationController.add('SUPERSEDED');
+            else if (errorCode == 'CUSTOMER_DEACTIVATED') _revocationController.add('DEACTIVATED');
+            else _revocationController.add('TRIAL_EXPIRED');
           }
         }
       } else if (response.statusCode == 404 || response.statusCode == 400) {

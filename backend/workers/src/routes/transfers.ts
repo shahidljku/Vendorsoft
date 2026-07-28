@@ -89,7 +89,7 @@ export async function handleGetPendingTransfers(ctx: RequestContext, request: Re
         { field: 'oldInstallationId', op: 'EQUAL', value: id }
       ]);
       for (const t of rawPendingList) {
-        if (t.status === 'PENDING' && !pendingList.find(existing => existing.transferId === t.transferId)) {
+        if ((t.status === 'PENDING' || t.status === 'RATE_LIMITED') && !pendingList.find(existing => existing.transferId === t.transferId)) {
           pendingList.push(t);
         }
       }
