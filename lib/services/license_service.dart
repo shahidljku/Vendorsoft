@@ -514,11 +514,11 @@ JQIDAQAB
 
   void startBackgroundPolling() {
     _pollingTimer?.cancel();
-    pollOnlineSubscriptionStatus(force: true); // Fire immediately on boot
+    pollOnlineSubscriptionStatus(force: false); // Fire immediately on boot
     
     // Check every 5 minutes to ensure instant revocation if the admin forces a transfer
     _pollingTimer = Timer.periodic(const Duration(minutes: 5), (timer) {
-      pollOnlineSubscriptionStatus(force: true);
+      pollOnlineSubscriptionStatus(force: false);
     });
   }
 
@@ -600,12 +600,13 @@ JQIDAQAB
             await _storage.write(key: 'was_cancelled_on_device', value: 'true');
           }
           await removeLicense();
-          await FirebaseAuth.instance.signOut();
           
-          if (hasLic || hasTrial) {
-            if (errorCode == 'INSTALLATION_SUPERSEDED') _revocationController.add('SUPERSEDED');
-            else if (errorCode == 'CUSTOMER_DEACTIVATED') _revocationController.add('DEACTIVATED');
-            else _revocationController.add('TRIAL_EXPIRED');
+          if (errorCode == 'INSTALLATION_SUPERSEDED') {
+            _revocationController.add('SUPERSEDED');
+          } else if (errorCode == 'CUSTOMER_DEACTIVATED') {
+            _revocationController.add('DEACTIVATED');
+          } else {
+            _revocationController.add('TRIAL_EXPIRED');
           }
         }
       } else if (response.statusCode == 404 || response.statusCode == 400) {

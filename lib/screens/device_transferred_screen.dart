@@ -50,6 +50,7 @@ class DeviceTransferredScreen extends StatelessWidget {
                 onPressed: () async {
                   const storage = FlutterSecureStorage();
                   await storage.delete(key: 'was_cancelled_on_device');
+                  await LicenseService().removeLicense();
                   try {
                     await RegistrationService().logoutFromServer();
                   } catch (_) {}

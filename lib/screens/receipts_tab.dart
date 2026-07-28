@@ -89,6 +89,30 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     }).toList();
   }
 
+  /// Generates a professional sequential receipt number in YYYY-MM-NNN format.
+  /// The sequence counter is derived from existing customers who already have
+  /// a receipt number with the same year-month prefix, ensuring continuity.
+  String _generateReceiptNo() {
+    final now = DateTime.now();
+    final prefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+
+    // Count how many customers already have a receipt number with this month's prefix
+    int maxSeq = 0;
+    for (final c in widget.excelService.allCustomers) {
+      final rn = c.receiptNo;
+      if (rn.startsWith(prefix) && rn.length > prefix.length + 1) {
+        final seqPart = rn.substring(prefix.length + 1); // after "YYYY-MM-"
+        final parsed = int.tryParse(seqPart);
+        if (parsed != null && parsed > maxSeq) {
+          maxSeq = parsed;
+        }
+      }
+    }
+
+    final nextSeq = (maxSeq + 1).toString().padLeft(3, '0');
+    return '$prefix-$nextSeq';
+  }
+
   void _checkAccessibility() async {
     bool enabled = await AccessibilityService.isEnabled();
     if (mounted) {
@@ -165,6 +189,11 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   }
 
   Widget _buildReceiptWidget(Customer customer, String businessName) {
+    // Ensure every customer gets a receipt number before the widget is rendered
+    // (covers auto-send and share paths that skip the edit dialog)
+    if (customer.receiptNo.isEmpty) {
+      customer.receiptNo = _generateReceiptNo();
+    }
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Material(
@@ -201,7 +230,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                 _buildReceiptRow(Icons.calendar_month, Colors.green, 'Date', customer.paymentDate.isNotEmpty ? customer.paymentDate : _getCurrentDateFormatted()),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.receipt, Colors.teal, 'Receipt No.', customer.receiptNo.isNotEmpty ? customer.receiptNo : (customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'N/A')),
+                _buildReceiptRow(Icons.receipt, Colors.teal, 'Receipt No.', customer.receiptNo.isNotEmpty ? customer.receiptNo : 'N/A'),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                 _buildReceiptRow(Icons.receipt_long, Colors.orange, 'Bill No.', customer.billNo.isNotEmpty ? customer.billNo : 'N/A'),
                 const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
@@ -599,7 +628,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     TextEditingController amountCtrl = TextEditingController(text: customer.amountPaid.isNotEmpty ? customer.amountPaid : customer.billAmount);
     TextEditingController txCtrl = TextEditingController(text: customer.transactionId);
     if (customer.receiptNo.isEmpty) {
-      customer.receiptNo = customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'REC-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+      customer.receiptNo = _generateReceiptNo();
     }
     TextEditingController receiptNoCtrl = TextEditingController(text: customer.receiptNo);
     String paymentMethod = customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online';

@@ -162,14 +162,14 @@ export class SubscriptionService {
         activeSub.planId = newPlanId;
         
         let planDays = 0;
-        if (newPlanId === 'PRO_MONTHLY') planDays = 30;
+        if (newPlanId === 'PRO_MONTHLY' || newPlanId === 'FREE_TRIAL_30') planDays = 30;
         if (newPlanId === 'PRO_YEARLY') planDays = 395;
         
         if (planDays > 0) {
-          const baseTime = (activeSub.status !== 'CANCELLED' && activeSub.expiresAtEpochMs && activeSub.expiresAtEpochMs > now) ? activeSub.expiresAtEpochMs : now;
-          activeSub.expiresAtEpochMs = baseTime + (planDays * 86400000);
+          activeSub.expiresAtEpochMs = now + (planDays * 86400000);
         }
 
+        activeSub.status = SubscriptionFSM.transition(activeSub, 'ACTIVATE');
         activeSub.updatedAtEpochMs = now;
         batchWrites.push({ collectionPath: 'subscriptions', documentId: activeSub.subscriptionId, data: activeSub });
       }

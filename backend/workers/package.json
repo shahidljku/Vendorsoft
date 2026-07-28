@@ -11,7 +11,8 @@
     "test:smoke": "vitest run test/smoke"
   },
   "dependencies": {
-    "google-auth-library": "^10.9.0"
+    "google-auth-library": "^10.9.0",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240712.0",

@@ -386,6 +386,19 @@ class _ImageSenderAppState extends State<ImageSenderApp>
             else if (_isMaintenanceMode)
               Positioned.fill(
                 child: MaintenanceScreen(message: _maintenanceMessage),
+              )
+            else if (_hasAcceptedTerms && !_isLicensed && !_isTrialActive)
+              Positioned.fill(
+                child: ActivationScreen(
+                  licenseService: _licenseService,
+                  onActivated: () {
+                    setState(() {
+                      _isLicensed = true;
+                      _isExpired = _licenseService.isLicenseExpired();
+                      _isTrialActive = false;
+                    });
+                  },
+                ),
               ),
           ],
         );
@@ -457,16 +470,7 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                   },
                 )
           : (!_isLicensed && !_isTrialActive)
-              ? ActivationScreen(
-                  licenseService: _licenseService,
-                  onActivated: () {
-                    setState(() {
-                      _isLicensed = true;
-                      _isExpired = _licenseService.isLicenseExpired();
-                      _isTrialActive = false;
-                    });
-                  },
-                )
+              ? const Scaffold(backgroundColor: Color(0xFF0B1014))
               : (_isLicensed && _isExpired)
                       ? _buildLicenseExpiredScreen()
                   : _isLocked

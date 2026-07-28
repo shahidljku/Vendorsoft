@@ -531,7 +531,7 @@ class PrintService {
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
                         pw.Text('Receipt No:', style: const pw.TextStyle(fontSize: 8)),
-                        pw.Text(customer.receiptNo.isNotEmpty ? customer.receiptNo : (customer.billNo.isNotEmpty ? 'REC-${customer.billNo}' : 'N/A'), style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                        pw.Text(customer.receiptNo.isNotEmpty ? customer.receiptNo : 'N/A', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                       ],
                     ),
                     pw.Row(

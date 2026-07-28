@@ -180,26 +180,22 @@ export async function handleCustomerRegistration(ctx: RequestContext, request: R
         }
 
         if (isSameDevice) {
-          let token = latestSub.signedLeaseToken;
-          
-          // If this is a trial recovery or synthetic, the token wasn't saved in DB, so generate it on the fly
-          if (!token && latestSub.planId === 'FREE_TRIAL_30') {
-            const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
-            const leasePayload = {
-              subscriptionId: latestSub.subscriptionId,
-              customerId: oldCust.customerId,
-              activeInstallationId: reqHardwareId || identity.installationId || latestSub.activeInstallationId,
-              planId: latestSub.planId,
-              planName: '30-Day Pro Trial',
-              startsAtEpochMs: latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000),
-              expiresAtEpochMs: latestSub.expiresAtEpochMs,
-              maxCustomers: 10000,
-              allowWhatsAppAutoSend: true,
-              allowThermalPrinting: true,
-              issuedAt: Date.now()
-            };
-            token = await generateSignedLeaseToken(leasePayload, secretKey);
-          }
+          // ALWAYS generate a fresh token on login so the app never sees stale dates
+          const secretKey = env.RSA_PRIVATE_KEY || 'MISSING_RSA_PRIVATE_KEY';
+          const leasePayload = {
+            subscriptionId: latestSub.subscriptionId,
+            customerId: oldCust.customerId,
+            activeInstallationId: reqHardwareId || identity.installationId || latestSub.activeInstallationId,
+            planId: latestSub.planId,
+            planName: latestSub.planId === 'PRO_YEARLY' ? 'Pro Annual License' : latestSub.planId === 'FREE_TRIAL_30' ? '30-Day Pro Trial' : 'Pro Monthly License',
+            startsAtEpochMs: latestSub.startsAtEpochMs || (latestSub.expiresAtEpochMs ? latestSub.expiresAtEpochMs - (30 * 24 * 60 * 60 * 1000) : Date.now()),
+            expiresAtEpochMs: latestSub.status === 'CANCELLED' ? 0 : latestSub.expiresAtEpochMs,
+            maxCustomers: 10000,
+            allowWhatsAppAutoSend: true,
+            allowThermalPrinting: true,
+            issuedAt: Date.now()
+          };
+          const token = await generateSignedLeaseToken(leasePayload, secretKey);
 
           // ALWAYS ensure the device we are logging in from is registered in the installations collection
           const currentDeviceInst = await getDocument(ctx, env, 'installations', reqHardwareId);
@@ -208,6 +204,9 @@ export async function handleCustomerRegistration(ctx: RequestContext, request: R
               ...currentDeviceInst,
               customerId: oldCust.customerId, // Ensure it's bound to this customer
               fcmToken: body.fcmToken || currentDeviceInst.fcmToken,
+              status: 'ACTIVE',
+              revokedAtEpochMs: null,
+              revokedReason: null,
               lastSeenAtEpochMs: Date.now()
             };
             await setDocument(ctx, env, 'installations', reqHardwareId, updatedInst);

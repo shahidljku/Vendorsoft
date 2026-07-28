@@ -638,7 +638,7 @@ class _RemindersModalState extends State<RemindersModal> {
                                             style: TextStyle(
                                               color: !isChecked
                                                   ? Colors.grey
-                                                  : (isStopped ? Colors.redAccent : Colors.white),
+                                                  : (isStopped ? Colors.white : Colors.white),
                                               fontWeight: FontWeight.bold,
                                               fontSize: 15,
                                               decoration: !isChecked ? TextDecoration.lineThrough : null,
@@ -666,7 +666,7 @@ class _RemindersModalState extends State<RemindersModal> {
                                         const Spacer(),
                                         Text(
                                           days != null ? '$days days ago' : '15+ days ago',
-                                          style: TextStyle(color: isChecked ? Colors.redAccent : Colors.grey, fontSize: 12, fontWeight: FontWeight.w500),
+                                          style: TextStyle(color: isChecked ? Colors.orangeAccent : Colors.grey, fontSize: 12, fontWeight: FontWeight.w500),
                                         ),
                                       ],
                                     ),
