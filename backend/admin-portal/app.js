@@ -392,7 +392,7 @@ async function loadCustomers() {
             <span class="label">Location</span>
             <span class="value" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${cust.city || '—'}</span>
           </div>
-          <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); grid-column: 1 / -1;">
+          <div class="devices-section" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); grid-column: 1 / -1; max-height: 220px; overflow-y: auto; padding-right: 4px;">
             <div class="label" style="margin-bottom: 8px;">Registered Devices & Trials</div>
             ${cust.installations && cust.installations.length > 0 ? cust.installations.map(inst => {
               const trial = (cust.hardwareTrials || []).find(t => t.hardwareId === (inst.hardwareId || inst.installationId));
