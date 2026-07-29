@@ -380,9 +380,7 @@ class SettingsService extends ChangeNotifier {
 
   static const _keyReminderTemplate = 'reminderTemplate';
 
-  static const String defaultGujaratiReminderTemplate = '''🙏 સાદર પ્રણામ / નમસ્તે 🙏
-
-પ્રિય ગ્રાહક: *{custName}*
+  static const String defaultGujaratiReminderTemplate = '''પ્રિય ગ્રાહક: *{custName}*
 આપના ન્યૂઝપેપર / બિલની ચૂકવણી અંગેની આ એક નમ્ર યાદી (Gentle Reminder) છે.
 
 📄 *બિલ વિગતો:*

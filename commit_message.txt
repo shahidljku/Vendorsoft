@@ -1,0 +1,10 @@
+chore(release): prepare v1.0.0 for production
+
+This commit includes final polish, bug fixes, and feature completions for the v1.0.0 stable release:
+- UI/UX: Refined payment reminder colors and standardized styling across modals.
+- Admin Features: Introduced proper loading states for administrative actions to improve user feedback during async operations.
+- Backend Workers: Added and updated essential scripts for handling subscriptions, device transfers, and installations.
+- Versioning: Cleaned up cloud storage versioning logic to ensure safe deployments and prevent legacy version conflicts.
+- Core: Minor bug fixes and improvements in license management and print services.
+
+This marks the official 1.0.0 release candidate, ready for production deployment.
