@@ -3,9 +3,9 @@ import 'package:flutter/services.dart';
 
 class SupportConfig {
   // Distributor helpline contact numbers (configure before release)
-  static const String supportWhatsAppNumber = '';
-  static const String supportPhoneNumber = '';
-  static const String supportEmail = 'support@vendorsoft.com';
+  static const String supportWhatsAppNumber = '+919427698665';
+  static const String supportPhoneNumber = '+919427698665';
+  static const String supportEmail = 'vendorproapk@gmail.com';
 
   static Future<void> openWhatsAppSupport(BuildContext context, String deviceId, {String? customSubject, bool useBusinessApp = false}) async {
     if (supportWhatsAppNumber.isEmpty) {

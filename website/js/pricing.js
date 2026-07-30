@@ -63,6 +63,29 @@
       var description = plan.description || '';
       var features = plan.features || [];
 
+      // Default features if API doesn't return them
+      if (features.length === 0) {
+        var isYearly = (plan.durationDays === 365 || plan.durationDays === 395 || (plan.planId && plan.planId.indexOf('YEARLY') !== -1));
+        if (isYearly) {
+          features = [
+            'All features included',
+            'Unlimited customers',
+            'WhatsApp bill dispatch',
+            'Bluetooth thermal printing',
+            'Reports and payment tracking',
+            'Priority support'
+          ];
+        } else {
+          features = [
+            'All features included',
+            'Unlimited customers',
+            'WhatsApp bill dispatch',
+            'Bluetooth thermal printing',
+            'Reports and payment tracking'
+          ];
+        }
+      }
+
       var card = document.createElement('div');
       card.className = 'pricing-card' + (isRecommended ? ' pricing-card--recommended' : '');
       card.setAttribute('role', 'listitem');
@@ -70,7 +93,7 @@
       var html = '';
 
       if (isRecommended) {
-        html += '<div class="pricing-card__badge">Recommended</div>';
+        html += '<div class="pricing-card__badge">Best Value</div>';
       }
 
       html += '<h3 class="pricing-card__name">' + escapeHtml(name) + '</h3>';
@@ -88,9 +111,26 @@
         html += '</ul>';
       }
 
-      html += '<a href="#" class="btn ' + (isRecommended ? 'btn--accent' : 'btn--primary') + '" onclick="return false;">Download App</a>';
+      var btnText = isRecommended ? 'Get Started' : 'Choose Plan';
+      html += '<a href="#" class="btn ' + (isRecommended ? 'btn--accent' : 'btn--primary') + ' pricing-card__btn">' + btnText + '</a>';
 
       card.innerHTML = html;
+
+      // Make the button scroll to hero download area
+      var cardBtn = card.querySelector('.pricing-card__btn');
+      if (cardBtn) {
+        cardBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          var heroBtn = document.getElementById('heroDownloadBtn');
+          if (heroBtn) {
+            heroBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Brief highlight effect
+            heroBtn.style.transform = 'scale(1.05)';
+            setTimeout(function() { heroBtn.style.transform = ''; }, 600);
+          }
+        });
+      }
+
       gridEl.appendChild(card);
     }
   }

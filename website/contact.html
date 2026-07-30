@@ -9,7 +9,7 @@
   <meta property="og:description" content="Contact VendorPro for support or inquiries.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="/images/app-icon.png">
-  <link rel="canonical" href="https://vendorpro-website.pages.dev/contact.html">
+  <link rel="canonical" href="https://vendorpro.pages.dev/contact.html">
   <link rel="icon" type="image/png" href="/images/app-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,16 +56,32 @@
             <h2 style="border-top: none; margin-top: 0; padding-top: 0; font-size: var(--text-2xl); margin-bottom: var(--space-8);">Get in Touch</h2>
 
             <div class="contact-info__item">
-              <div class="contact-info__icon" aria-hidden="true">✉️</div>
+              <div class="contact-info__icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg></div>
               <div>
                 <p class="contact-info__label">Email Support</p>
-                <p class="contact-info__value" style="color: var(--color-accent);">support@vendorpro.app</p>
+                <p class="contact-info__value" style="color: var(--color-accent);">vendorproapk@gmail.com</p>
                 <p style="font-size: var(--text-sm); color: var(--color-text-muted); margin-top: var(--space-1);">We typically respond within 24-48 hours during business days.</p>
               </div>
             </div>
 
             <div class="contact-info__item">
-              <div class="contact-info__icon" aria-hidden="true">📱</div>
+              <div class="contact-info__icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></div>
+              <div>
+                <p class="contact-info__label">Phone Support</p>
+                <p class="contact-info__value">+91 94276 98665</p>
+              </div>
+            </div>
+
+            <div class="contact-info__item">
+              <div class="contact-info__icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg></div>
+              <div>
+                <p class="contact-info__label">Address</p>
+                <p class="contact-info__value">GF Shop 32, Seventh Heaven, 100 Feet Road, Makarba, Ahmedabad 380055, Gujarat, India</p>
+              </div>
+            </div>
+
+            <div class="contact-info__item">
+              <div class="contact-info__icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg></div>
               <div>
                 <p class="contact-info__label">In-App Support</p>
                 <p class="contact-info__value">Help &amp; FAQ Section</p>
@@ -74,7 +90,7 @@
             </div>
 
             <div class="contact-info__item">
-              <div class="contact-info__icon" aria-hidden="true">🕐</div>
+              <div class="contact-info__icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
               <div>
                 <p class="contact-info__label">Support Availability</p>
                 <p class="contact-info__value">Monday - Friday, 9AM - 6PM</p>
@@ -87,7 +103,9 @@
 
           <!-- Contact Form -->
           <div>
-            <form class="contact-form" id="contactForm" novalidate>
+            <form class="contact-form" id="contactForm" action="https://api.web3forms.com/submit" method="POST" novalidate>
+              <input type="hidden" name="access_key" value="5a593bd8-34a8-4e3d-8a9d-ae49aad508fa">
+              <input type="hidden" name="from_name" value="VendorPro Website">
               <h3 style="margin-bottom: var(--space-6);">Send Us a Message</h3>
 
               <div class="form-group">
@@ -189,6 +207,6 @@
   </footer>
 
   <script src="/js/main.js"></script>
-  <script src="/js/contact-form.js"></script>
+  <script src="/js/contact-form.js?v=4"></script>
 </body>
 </html>

@@ -41,11 +41,34 @@ class SettingsAuxiliaryModals {
             ListTile(
               leading: const Icon(Icons.phone, color: Colors.blueAccent),
               title: const Text('Phone Support', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-              subtitle: const Text('Call our assistance helpline', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              subtitle: const Text('+91 94276 98665', style: TextStyle(color: Colors.grey, fontSize: 12)),
               onTap: () {
                 Navigator.pop(ctx);
                 SupportConfig.openPhoneSupport(context);
               },
+            ),
+            ListTile(
+              leading: const Icon(Icons.email, color: Colors.orange),
+              title: const Text('Email Support', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              subtitle: const Text('vendorproapk@gmail.com', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              onTap: () {
+                // Email is just for display, or could launch email intent
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.language, color: Colors.cyanAccent),
+              title: const Text('Website', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              subtitle: const Text('https://vendorpro.pages.dev', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              onTap: () {
+                // Displays the website URL
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.location_on, color: Colors.redAccent),
+              title: const Text('Business Address', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              subtitle: const Text('GF Shop 32, Seventh Heaven, 100 Feet Road, Makarba, Ahmedabad 380055, Gujarat, India', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              isThreeLine: true,
+              onTap: () {},
             ),
             ListTile(
               leading: const Icon(Icons.copy, color: Colors.orangeAccent),

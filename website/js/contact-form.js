@@ -47,12 +47,54 @@
     }
 
     if (isValid) {
-      // Show success state (no backend form handler configured)
-      var successMsg = document.getElementById('contactSuccess');
-      if (successMsg) {
-        form.style.display = 'none';
-        successMsg.style.display = 'block';
+      var submitBtn = form.querySelector('button[type="submit"]');
+      var originalBtnText = submitBtn ? submitBtn.textContent : 'Send Message';
+      if (submitBtn) {
+        submitBtn.textContent = 'Sending...';
+        submitBtn.disabled = true;
       }
+
+      var formData = new FormData(form);
+      var object = {};
+      formData.forEach(function(value, key){
+          object[key] = value;
+      });
+      var json = JSON.stringify(object);
+
+      fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: json
+      })
+      .then(function(response) {
+        return response.json();
+      })
+      .then(function(json) {
+        if (json.success) {
+          var successMsg = document.getElementById('contactSuccess');
+          if (successMsg) {
+            form.style.display = 'none';
+            successMsg.style.display = 'block';
+          }
+        } else {
+          alert('Something went wrong. Please try again.');
+          if (submitBtn) {
+            submitBtn.textContent = originalBtnText;
+            submitBtn.disabled = false;
+          }
+        }
+      })
+      .catch(function(error) {
+        console.error('Error submitting form:', error);
+        alert('A network error occurred. Please try again.');
+        if (submitBtn) {
+          submitBtn.textContent = originalBtnText;
+          submitBtn.disabled = false;
+        }
+      });
     }
   });
 
