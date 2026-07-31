@@ -1,0 +1,10 @@
+﻿/* TEAM */
+  Developer: VendorPro Team
+  Contact: vendorproapk@gmail.com
+  Twitter: @VendorPro
+
+/* SITE */
+  Last update: 2026
+  Language: English
+  Doctype: HTML5
+  IDE: VSCode, Android Studio

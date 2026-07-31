@@ -1,0 +1,22 @@
+﻿{
+    "name": "VendorPro",
+    "short_name": "VendorPro",
+    "description": "Billing & Route Management Software for Newspaper Vendors",
+    "icons": [
+        {
+            "src": "/images/app-icon.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/images/app-icon.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ],
+    "theme_color": "#0D1117",
+    "background_color": "#0D1117",
+    "display": "standalone",
+    "start_url": "/",
+    "lang": "en-IN"
+}

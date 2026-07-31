@@ -52,7 +52,8 @@ class SettingsAuxiliaryModals {
               title: const Text('Email Support', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
               subtitle: const Text('vendorproapk@gmail.com', style: TextStyle(color: Colors.grey, fontSize: 12)),
               onTap: () {
-                // Email is just for display, or could launch email intent
+                Navigator.pop(ctx);
+                SupportConfig.openEmailSupport(context, deviceId);
               },
             ),
             ListTile(
@@ -60,7 +61,8 @@ class SettingsAuxiliaryModals {
               title: const Text('Website', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
               subtitle: const Text('https://vendorpro.pages.dev', style: TextStyle(color: Colors.grey, fontSize: 12)),
               onTap: () {
-                // Displays the website URL
+                Navigator.pop(ctx);
+                SupportConfig.openWebsite(context);
               },
             ),
             ListTile(
@@ -68,7 +70,10 @@ class SettingsAuxiliaryModals {
               title: const Text('Business Address', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
               subtitle: const Text('GF Shop 32, Seventh Heaven, 100 Feet Road, Makarba, Ahmedabad 380055, Gujarat, India', style: TextStyle(color: Colors.grey, fontSize: 12)),
               isThreeLine: true,
-              onTap: () {},
+              onTap: () {
+                Navigator.pop(ctx);
+                SupportConfig.openAddressMap(context);
+              },
             ),
             ListTile(
               leading: const Icon(Icons.copy, color: Colors.orangeAccent),

@@ -38,24 +38,74 @@
 
   <!-- Structured Data -->
   <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "VendorPro",
-    "applicationCategory": "BusinessApplication",
-    "operatingSystem": "Android",
-    "description": "Offline-first billing, WhatsApp bill dispatch, and Bluetooth thermal printing software for Indian newspaper vendors and distribution agencies.",
-    "offers": {
-      "@type": "AggregateOffer",
-      "priceCurrency": "INR",
-      "availability": "https://schema.org/InStock"
+  [
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "VendorPro",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Android",
+      "description": "Offline-first billing, WhatsApp bill dispatch, and Bluetooth thermal printing software for Indian newspaper vendors and distribution agencies.",
+      "url": "https://vendorpro.pages.dev",
+      "offers": {
+        "@type": "AggregateOffer",
+        "priceCurrency": "INR",
+        "availability": "https://schema.org/InStock"
+      },
+      "creator": {
+        "@id": "https://vendorpro.pages.dev/#organization"
+      }
     },
-    "creator": {
+    {
+      "@context": "https://schema.org",
       "@type": "Organization",
-      "name": "VendorPro"
+      "@id": "https://vendorpro.pages.dev/#organization",
+      "name": "VendorPro",
+      "url": "https://vendorpro.pages.dev",
+      "logo": "https://vendorpro.pages.dev/images/app-icon.png",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "telephone": "+91-9427698665",
+        "contactType": "customer service",
+        "email": "vendorproapk@gmail.com",
+        "availableLanguage": ["English", "Hindi", "Gujarati"]
+      }
     }
-  }
+  ]
   </script>
+
+  <link rel="canonical" href="https://vendorpro.pages.dev/">
+  <meta property="og:url" content="https://vendorpro.pages.dev/">
+  <meta property="og:title" content="VendorPro — Billing &amp; Route Management Software for Newspaper Vendors">
+  <meta property="og:description" content="VendorPro is offline-first billing, WhatsApp bill dispatch, and Bluetooth thermal printing software built for Indian newspaper vendors and distribution agencies.">
+  <meta name="twitter:title" content="VendorPro — Billing &amp; Route Management Software for Newspaper Vendors">
+  <meta name="twitter:description" content="VendorPro is offline-first billing, WhatsApp bill dispatch, and Bluetooth thermal printing software built for Indian newspaper vendors and distribution agencies.">
+
+  <!-- Standard SEO Metadata -->
+  <meta name="theme-color" content="#0D1117">
+  <meta name="color-scheme" content="dark">
+  <meta name="application-name" content="VendorPro">
+  
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://vendorpro.pages.dev/images/app-icon.png">
+  <meta property="og:site_name" content="VendorPro">
+  <meta property="og:locale" content="en_IN">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:image" content="https://vendorpro.pages.dev/images/app-icon.png">
+  <meta name="twitter:creator" content="@VendorPro">
+  <meta name="twitter:site" content="@VendorPro">
+
+  <!-- Favicons and Web App Manifest -->
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/app-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/app-icon.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/app-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="msapplication-TileColor" content="#00E676">
+  <meta name="msapplication-config" content="/browserconfig.xml">
+  <meta name="apple-mobile-web-app-title" content="VendorPro">
 </head>
 <body>
 

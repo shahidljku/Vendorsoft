@@ -1,0 +1,18 @@
+﻿# VendorPro
+
+VendorPro is an offline-first Android application designed specifically for Indian newspaper vendors and distribution agencies. It operates locally without requiring a continuous cloud connection, ensuring high privacy and data ownership for the vendor.
+
+## Key Features
+- **Offline Data Storage**: All customer data and bill records are saved in a local Excel file (customers.xlsx). No data is sent to a central server.
+- **WhatsApp Bill Dispatch**: The app integrates with WhatsApp using accessibility services to automate the sending of monthly bills and payment receipts, utilizing batches of 30 messages with a cooldown period to prevent account bans.
+- **Bluetooth Thermal Printing**: The app supports direct ESC/POS printing over Bluetooth for generating instant paper receipts.
+- **Automated Bill Calculations**: Supports dynamically reading rates from the Excel sheet and applying absences to calculate the final monthly amount due.
+
+## Security & Architecture
+- Local-first architecture (SQLite / Excel).
+- RSA cryptographic license validation against a unique Device ID.
+- No remote telemetry on user financial data.
+
+## Support Contact
+- **Email**: vendorproapk@gmail.com
+- **Phone / WhatsApp**: +919427698665
