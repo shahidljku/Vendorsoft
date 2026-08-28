@@ -58,7 +58,7 @@ describe('Phase 3 Integration: AUD-003 (Payment Settlement TOCTOU)', () => {
     });
     mockFirestore._db.set(`payments/${razorpayOrderId}`, {
       paymentId: razorpayOrderId, razorpayOrderId, installationId: 'inst1',
-      customerId, planId: 'PRO_YEARLY', status: 'INITIATED', createdAtEpochMs: TestClock.now()
+      customerId, planId: 'PRO_YEARLY', durationDays: 395, status: 'INITIATED', createdAtEpochMs: TestClock.now()
     });
 
     const webhookPayload = { event: 'payment.captured', payload: { payment: { entity: { id: 'pay1', order_id: razorpayOrderId } } } };
@@ -86,8 +86,8 @@ describe('Phase 3 Integration: AUD-003 (Payment Settlement TOCTOU)', () => {
     
     // Both mutations should apply to the same canonical subscription
     const finalSub = mockFirestore._db.get(`subscriptions/${subId}`);
-    // Original was TestClock.now(). Admin adds 30 days. Webhook adds 365 days. Total 395 days.
-    const expectedTime = TestClock.now() + (395 * 86400 * 1000);
+    // Original was TestClock.now(). Admin adds 30 days. Webhook adds 395 days (12 months + 1 month bonus). Total 425 days.
+    const expectedTime = TestClock.now() + (425 * 86400 * 1000);
     expect(finalSub.expiresAtEpochMs).toBe(expectedTime);
   });
 });

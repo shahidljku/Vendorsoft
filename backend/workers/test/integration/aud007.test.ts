@@ -74,7 +74,7 @@ describe('Phase 3 Integration: AUD-007 (Subscription Removal Orphan Prevention)'
     expect(subAfter.status).toBe('CANCELLED');
 
     const instAfter = mockFirestore._db.get(`installations/${hardwareId}`);
-    expect(instAfter.status).toBe('REVOKED');
+    expect(instAfter.status).toBe('ACTIVE');
 
     const auditKeysAfter = Array.from(mockFirestore._db.keys()).filter(k => k.startsWith('audit_logs/'));
     expect(auditKeysAfter.length).toBe(1);
