@@ -3,4 +3,8 @@ node_modules/
 dist/
 *.log
 .env
+.env.*
 .env.local
+.dev.vars
+.dev.vars.*
+scratch/

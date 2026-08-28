@@ -11,6 +11,8 @@ import '../services/whatsapp_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
 import '../services/print_service.dart';
+import '../services/receipt_service.dart';
+import '../services/license_service.dart';
 import '../widgets/cooldown_fab.dart';
 
 class BillsTab extends StatefulWidget {
@@ -39,6 +41,13 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   final TextEditingController _searchCtrl = TextEditingController();
   bool _isAccessibilityEnabled = false;
 
+  static const int _manualSendTimeoutSeconds = 15;
+
+  bool _isSingleSending = false;
+  Customer? _singleSendingCustomer;
+  StreamSubscription<bool>? _singleSendSubscription;
+  Timer? _singleSendTimeout;
+
   Timer? _debounce;
   
   // Caches
@@ -60,9 +69,25 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     widget.excelService.addListener(_calculateData);
   }
 
+  void _cleanupSingleSend() {
+    _singleSendTimeout?.cancel();
+    _singleSendTimeout = null;
+    _singleSendSubscription?.cancel();
+    _singleSendSubscription = null;
+    if (AccessibilityService.activeSendingMode == 'receipt') {
+      AccessibilityService.activeSendingMode = 'none';
+    }
+    if (mounted && _isSingleSending) {
+      setState(() { 
+        _isSingleSending = false; 
+      });
+    }
+  }
+
   @override
   void dispose() {
     widget.excelService.removeListener(_calculateData);
+    _cleanupSingleSend();
     _debounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _searchCtrl.dispose();
@@ -73,6 +98,51 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _checkAccessibility();
+      if (_isSingleSending && _singleSendingCustomer != null) {
+        final targetCustomer = _singleSendingCustomer!;
+        Future.delayed(const Duration(milliseconds: 1000), () {
+          if (mounted && _isSingleSending) {
+            _cleanupSingleSend();
+            _showReceiptSentConfirmation(targetCustomer);
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _showReceiptSentConfirmation(Customer customer) async {
+    if (!mounted || customer.receiptStatus == 'Sent') return;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor,
+        title: const Text('Receipt Status', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Did you send the receipt for ${customer.custName.isNotEmpty ? customer.custName : customer.mobile} in WhatsApp?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No / Cancelled', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            child: const Text('Yes, Sent', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      setState(() {
+        customer.receiptStatus = 'Sent';
+        customer.sentTime = DateTime.now().toIso8601String();
+      });
+      await widget.excelService.saveCustomers();
+      _calculateData();
     }
   }
 
@@ -374,7 +444,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           ],
         ),
         content: Text(
-          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.\n\nTime remaining: ${CooldownService.formatDuration(remaining)}',
+          'To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 15 messages.\n\nTime remaining: ${CooldownService.formatDuration(remaining)}',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -744,6 +814,15 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
   }
 
   void _sendSingleBillToWhatsApp(BuildContext context, Customer customer) async {
+    if (_isSingleSending) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A bill is already being sent. Please wait.')),
+        );
+      }
+      return;
+    }
+
     // Validate phone number
     if (customer.mobile.isEmpty || customer.mobile.length < 10) {
       if (context.mounted) {
@@ -772,6 +851,24 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
       return;
     }
 
+    // Prepare state and listener
+    _cleanupSingleSend();
+    setState(() { _isSingleSending = true; });
+
+    _singleSendSubscription = AccessibilityService.onMessageSent.listen((_) async {
+      if (!_isSingleSending) return;
+      _cleanupSingleSend();
+      
+      if (mounted) {
+        setState(() {
+          customer.status = "Sent";
+          customer.sentTime = DateTime.now().toIso8601String();
+        });
+        await widget.excelService.saveCustomers();
+        _calculateData(); // Refresh counts and caches
+      }
+    });
+
     // Capture messenger before async gap to satisfy lint
     final messenger = ScaffoldMessenger.of(context);
 
@@ -784,18 +881,28 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         imagePath: imagePath,
         useBusinessApp: useBusinessApp,
       );
+      
+      // Intent launched successfully, start the timeout
+      _singleSendTimeout = Timer(const Duration(seconds: _manualSendTimeoutSeconds), () {
+        _cleanupSingleSend();
+      });
+
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(content: Text('Bill sent to WhatsApp for ${customer.custName.isNotEmpty ? customer.custName : customer.mobile}')),
         );
       }
     } on WhatsAppException catch (e) {
+      _cleanupSingleSend();
+      
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(content: Text('WhatsApp error: ${e.message}')),
         );
       }
     } catch (e) {
+      _cleanupSingleSend();
+      
       if (mounted) {
         messenger.showSnackBar(
           SnackBar(content: Text('Failed to send: $e')),
@@ -904,8 +1011,10 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
                 ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.white30),
+                  ),
                   onPressed: () async {
                     setState(() {
                       customer.paymentStatus = PaymentStatusHelper.successful;
@@ -913,11 +1022,31 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                       customer.transactionId = txCtrl.text;
                       customer.paymentMethod = paymentMethod;
                       customer.paymentDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
+                      if (customer.receiptNo.isEmpty) {
+                        customer.receiptNo = ReceiptService.generateReceiptNo(widget.excelService.allCustomers);
+                      }
                     });
                     await widget.excelService.saveCustomers();
                     if (context.mounted) Navigator.pop(context);
                   },
-                  child: const Text('Save', style: TextStyle(color: Colors.black)),
+                  child: const Text('Save', style: TextStyle(color: Colors.white)),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E676),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                  icon: const Icon(Icons.send_rounded, color: Colors.black, size: 18),
+                  onPressed: () async {
+                    final amount = amountCtrl.text.trim();
+                    final txId = txCtrl.text.trim();
+                    final method = paymentMethod;
+                    final date = paymentDate;
+
+                    Navigator.pop(context);
+                    await _handleSaveAndSendReceipt(customer, amount, txId, method, date);
+                  },
+                  label: const Text('Save & Send', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -925,6 +1054,104 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         );
       }
     );
+  }
+
+  Future<void> _handleSaveAndSendReceipt(
+    Customer customer,
+    String amount,
+    String txId,
+    String paymentMethod,
+    DateTime paymentDate,
+  ) async {
+    // 1. Update customer payment fields immediately
+    final formattedDate = "${paymentDate.day.toString().padLeft(2, '0')}/${paymentDate.month.toString().padLeft(2, '0')}/${paymentDate.year}";
+    setState(() {
+      customer.paymentStatus = PaymentStatusHelper.successful;
+      customer.amountPaid = amount.isNotEmpty ? amount : customer.billAmount;
+      customer.transactionId = txId;
+      customer.paymentMethod = paymentMethod;
+      customer.paymentDate = formattedDate;
+      if (customer.receiptNo.isEmpty) {
+        customer.receiptNo = ReceiptService.generateReceiptNo(widget.excelService.allCustomers);
+      }
+    });
+
+    await widget.excelService.saveCustomers();
+    _calculateData();
+
+    // 2. Validate phone number
+    String cleanMobile = customer.mobile.replaceAll(RegExp(r'[^0-9]'), '');
+    if (cleanMobile.length < 10) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Payment saved, but customer has no valid 10-digit mobile to send receipt.')),
+        );
+      }
+      return;
+    }
+
+    // 3. Show progress notice
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Generating receipt for ${customer.custName.isNotEmpty ? customer.custName : customer.mobile}...'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+
+    try {
+      // 4. Generate Receipt Image
+      final businessName = LicenseService().getBusinessName();
+      final receiptPath = await ReceiptService.generateReceiptImageFile(customer, businessName);
+
+      // 5. Setup single send state & WhatsApp launcher
+      _cleanupSingleSend();
+      _singleSendingCustomer = customer;
+      setState(() {
+        _isSingleSending = true;
+      });
+
+      AccessibilityService.activeSendingMode = 'receipt';
+      if (_isAccessibilityEnabled) {
+        await AccessibilityService.setAutoSendMode(true);
+      }
+
+      _singleSendSubscription = AccessibilityService.onMessageSent.listen((_) async {
+        if (AccessibilityService.activeSendingMode == 'receipt') {
+          _cleanupSingleSend();
+          if (mounted) {
+            setState(() {
+              customer.receiptStatus = 'Sent';
+              customer.sentTime = DateTime.now().toIso8601String();
+            });
+            await widget.excelService.saveCustomers();
+            _calculateData();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Receipt sent to ${customer.custName.isNotEmpty ? customer.custName : customer.mobile}')),
+            );
+          }
+        }
+      });
+
+      bool useBusiness = await widget.settingsService.getUseWhatsAppBusiness();
+      await WhatsAppService.sendImage(
+        mobile: customer.mobile,
+        imagePath: receiptPath,
+        useBusinessApp: useBusiness,
+      );
+
+      _singleSendTimeout = Timer(const Duration(seconds: _manualSendTimeoutSeconds), () {
+        _cleanupSingleSend();
+      });
+    } catch (e) {
+      _cleanupSingleSend();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to generate or send receipt: $e')),
+        );
+      }
+    }
   }
 
   void _runPreflightChecks(BuildContext context) async {

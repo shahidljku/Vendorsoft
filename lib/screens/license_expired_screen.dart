@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../widgets/subscription_dialog.dart';
+import '../services/config_service.dart';
+import '../services/payment_service.dart';
+import '../services/license_service.dart';
 
-class LicenseExpiredScreen extends StatelessWidget {
+class LicenseExpiredScreen extends StatefulWidget {
   final String deviceId;
   final String customerName;
   final String licenseNumber;
@@ -19,11 +22,48 @@ class LicenseExpiredScreen extends StatelessWidget {
   });
 
   @override
+  State<LicenseExpiredScreen> createState() => _LicenseExpiredScreenState();
+}
+
+class _LicenseExpiredScreenState extends State<LicenseExpiredScreen> {
+  String? _checkingOutPlanId;
+
+  @override
+  void initState() {
+    super.initState();
+    // Ensure latest dynamic plans are fetched
+    ConfigService().fetchPlans().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final plans = ConfigService().plans.isNotEmpty
+        ? ConfigService().plans
+        : [
+            {
+              'planId': 'PRO_YEARLY',
+              'planName': 'Pro Annual License',
+              'amountPaise': 1199900,
+              'durationDays': 395,
+              'description': '12 + 1 Month FREE (395 Days)',
+              'isActive': true,
+            },
+            {
+              'planId': 'PRO_MONTHLY',
+              'planName': 'Pro Monthly License',
+              'amountPaise': 99900,
+              'durationDays': 30,
+              'description': 'Full feature access for 30 days.',
+              'isActive': true,
+            },
+          ];
+
     return Scaffold(
       backgroundColor: const Color(0xFF0B1014),
       appBar: AppBar(
-        title: const Text('Demo / License Expired', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('License Expired', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         backgroundColor: const Color(0xFF161B22),
         elevation: 0,
@@ -86,7 +126,11 @@ class LicenseExpiredScreen extends StatelessWidget {
                               children: [
                                 const Text('Your Device ID:', style: TextStyle(color: Colors.grey, fontSize: 11)),
                                 const SizedBox(height: 2),
-                                Text(deviceId, style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 15, fontFamily: 'monospace')),
+                                Text(
+                                  widget.deviceId,
+                                  style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 14, fontFamily: 'monospace'),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ],
                             ),
                           ),
@@ -94,7 +138,7 @@ class LicenseExpiredScreen extends StatelessWidget {
                             icon: const Icon(Icons.copy, color: Color(0xFF00E676)),
                             tooltip: 'Copy Device ID',
                             onPressed: () {
-                              Clipboard.setData(ClipboardData(text: deviceId));
+                              Clipboard.setData(ClipboardData(text: widget.deviceId));
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text('Device ID copied to clipboard')),
                               );
@@ -115,45 +159,21 @@ class LicenseExpiredScreen extends StatelessWidget {
               ),
               const SizedBox(height: 14),
 
-              // Monthly Card
-              _buildPlanCard(
-                context: context,
-                title: 'Monthly Plan',
-                price: '₹799',
-                duration: 'Per Month',
-                features: const [
-                  'Unlimited Customers & Batch Bills',
-                  'Thermal Roll Printing (58mm/80mm)',
-                  'Direct WhatsApp Automation',
-                ],
-                isPopular: false,
-                planName: 'Monthly Subscription (₹799)',
-                amount: '799',
-              ),
-              const SizedBox(height: 16),
+              // Dynamic Plan Cards
+              for (final plan in plans) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16.0),
+                  child: _buildDynamicPlanCard(plan),
+                ),
+              ],
 
-              // Yearly Card
-              _buildPlanCard(
-                context: context,
-                title: 'Yearly Value Plan',
-                price: '₹9,499',
-                duration: 'Per Year (12 + 1 Month FREE)',
-                features: const [
-                  '13 Months Total Access (1 Month Free)',
-                  'Unlimited Customers & Batch Bills',
-                  'Priority WhatsApp Support & Updates',
-                ],
-                isPopular: true,
-                planName: 'Yearly Value Plan (₹9,499 - 13 Months)',
-                amount: '9499',
-              ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 12),
 
               // Activation Button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: onActivateLicense,
+                  onPressed: widget.onActivateLicense,
                   icon: const Icon(Icons.key, color: Colors.black),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -186,16 +206,39 @@ class LicenseExpiredScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildPlanCard({
-    required BuildContext context,
-    required String title,
-    required String price,
-    required String duration,
-    required List<String> features,
-    required bool isPopular,
-    required String planName,
-    required String amount,
-  }) {
+  Widget _buildDynamicPlanCard(Map<String, dynamic> plan) {
+    final planId = plan['planId']?.toString() ?? 'PRO_MONTHLY';
+    final isPopular = planId == 'PRO_YEARLY' || planId == 'PRO_YEARLY_SOFT';
+    final title = plan['planName'] ?? (isPopular ? 'Pro Annual License' : 'Pro Monthly License');
+    
+    int amountInr = 0;
+    if (plan['amountPaise'] != null && plan['amountPaise'] is num) {
+      amountInr = (plan['amountPaise'] / 100).toInt();
+    } else if (plan['priceINR'] != null && plan['priceINR'] is num) {
+      amountInr = (plan['priceINR'] as num).toInt();
+    } else {
+      amountInr = isPopular ? 11999 : 999;
+    }
+
+    final duration = plan['description'] ?? (isPopular ? '12 + 1 Month FREE (395 Days)' : 'Per Month (30 Days)');
+    final isCheckingOut = _checkingOutPlanId == planId;
+
+    final features = isPopular
+        ? const [
+            '13 Months Total Access (1 Month Free)',
+            'Unlimited Customers & Batch Bills',
+            'Thermal Roll Printing (58mm/80mm)',
+            'Direct WhatsApp Message Automation',
+            'Full Offline Billing & Excel Sync',
+          ]
+        : const [
+            '30 Days Full Access',
+            'Unlimited Customers & Batch Bills',
+            'Thermal Roll Printing (58mm/80mm)',
+            'Direct WhatsApp Message Automation',
+            'Full Offline Billing & Excel Sync',
+          ];
+
     return Container(
       decoration: BoxDecoration(
         color: isPopular ? const Color(0xFF00E676).withValues(alpha: 0.08) : const Color(0xFF161B22),
@@ -212,7 +255,9 @@ class LicenseExpiredScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Expanded(
+                child: Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              ),
               if (isPopular)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -229,7 +274,7 @@ class LicenseExpiredScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Text(price, style: const TextStyle(color: Color(0xFF00E676), fontSize: 26, fontWeight: FontWeight.bold)),
+              Text('₹$amountInr', style: const TextStyle(color: Color(0xFF00E676), fontSize: 28, fontWeight: FontWeight.bold)),
               const SizedBox(width: 6),
               Expanded(child: Text(duration, style: const TextStyle(color: Colors.white70, fontSize: 13))),
             ],
@@ -251,17 +296,51 @@ class LicenseExpiredScreen extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              icon: const Icon(Icons.qr_code_2),
-              label: const Text('Show QR Code to Pay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              icon: isCheckingOut
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                    )
+                  : const Icon(Icons.payment),
+              label: Text(
+                isCheckingOut ? 'Opening Gateway...' : 'Pay with Razorpay (₹$amountInr)',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: isPopular ? const Color(0xFF00E676) : Colors.blueAccent,
                 foregroundColor: isPopular ? Colors.black : Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () {
-                SubscriptionDialog.showPaymentQr(context, planName, amount, deviceId: deviceId);
-              },
+              onPressed: isCheckingOut
+                  ? null
+                  : () {
+                      setState(() => _checkingOutPlanId = planId);
+                      PaymentService().initiateCheckout(
+                        context,
+                        planId: planId,
+                        onResult: (success, message) {
+                          if (mounted) {
+                            setState(() => _checkingOutPlanId = null);
+                          }
+                          if (success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(message ?? 'Activation successful!'),
+                                backgroundColor: const Color(0xFF00E676),
+                              ),
+                            );
+                            LicenseService().pollOnlineSubscriptionStatus(force: true);
+                            widget.onActivateLicense();
+                          } else if (message != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+                            );
+                          }
+                        },
+                      );
+                    },
             ),
           ),
         ],

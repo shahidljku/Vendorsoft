@@ -272,7 +272,7 @@ JQIDAQAB
           'x-app-version': '1.0.0',
         },
         body: jsonEncode({'legacyLicenseKey': savedKey}),
-      );
+      ).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final resJson = jsonDecode(response.body);
@@ -571,7 +571,7 @@ JQIDAQAB
         'x-hardware-id': deviceId,
         'x-app-version': '1.0.0',
         'x-platform': kIsWeb ? 'web' : Platform.operatingSystem,
-      });
+      }).timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 403) {
         final data = jsonDecode(response.body);

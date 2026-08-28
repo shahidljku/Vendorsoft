@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buy Pro License - VendSoft</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; background: #0B1014; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: #161B22; border-radius: 16px; padding: 32px; width: 100%; max-width: 400px; text-align: center; border: 1px solid #00E676; box-shadow: 0 8px 32px rgba(0, 230, 118, 0.1); }
+        h1 { margin-top: 0; color: #00E676; }
+        p { color: #8b949e; margin-bottom: 24px; line-height: 1.5; }
+        .price { font-size: 36px; font-weight: bold; margin-bottom: 24px; }
+        button { background: #00E676; color: black; border: none; padding: 16px 24px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        button:disabled { background: #2ea043; opacity: 0.5; cursor: not-allowed; }
+        #message { margin-top: 16px; font-size: 14px; min-height: 20px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Pro License</h1>
+        <div class="price">₹1499 <span style="font-size: 16px; color: #8b949e; font-weight: normal;">/ year</span></div>
+        <p>Unlock unlimited customers, premium thermal printing, and WhatsApp automation.</p>
+        <button id="payButton" onclick="startCheckout()">Pay with Razorpay</button>
+        <div id="message"></div>
+    </div>
+
+    <!-- Razorpay Web Checkout SDK -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script>
+        // The production API has not been updated yet, so we use localhost to test your test keys safely:
+        // const API_BASE = 'https://vendsoft-api-worker.vendorproapk.workers.dev/api';
+        
+        // Pointing to your local `npm run dev` server
+        const API_BASE = 'http://localhost:8787/api';
+
+        async function startCheckout() {
+            const btn = document.getElementById('payButton');
+            const msg = document.getElementById('message');
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
+            msg.textContent = 'Initializing secure checkout...';
+            msg.style.color = '#8b949e';
+
+            try {
+                // STEP 1: Call Backend to Create Order
+                const createRes = await fetch(`${API_BASE}/v1/public/web-checkout/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: 149900, currency: 'INR' }) // Amount in paise
+                });
+                
+                const data = await createRes.json();
+                if (!createRes.ok || !data.success) {
+                    throw new Error(data.error?.message || 'Failed to create order');
+                }
+
+                const order = data.data;
+                msg.textContent = '';
+
+                // STEP 2: Open Razorpay Checkout Modal
+                const options = {
+                    key: order.key_id, // Sent safely from backend
+                    amount: order.amount,
+                    currency: order.currency,
+                    name: "VendSoft",
+                    description: "Pro Annual License",
+                    order_id: order.order_id,
+                    handler: async function (response) {
+                        msg.textContent = 'Verifying payment...';
+                        msg.style.color = '#8b949e';
+                        
+                        // STEP 3: Verify Signature on Backend
+                        try {
+                            const verifyRes = await fetch(`${API_BASE}/v1/public/web-checkout/verify`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    razorpay_payment_id: response.razorpay_payment_id,
+                                    razorpay_order_id: response.razorpay_order_id,
+                                    razorpay_signature: response.razorpay_signature
+                                })
+                            });
+                            
+                            const verifyData = await verifyRes.json();
+                            if (verifyData.success) {
+                                msg.textContent = 'Payment successful! Welcome to Pro.';
+                                msg.style.color = '#00E676';
+                                btn.textContent = 'Purchased';
+                            } else {
+                                throw new Error(verifyData.error?.message || 'Verification failed');
+                            }
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.style.color = '#ff5252';
+                            btn.disabled = false;
+                            btn.textContent = 'Try Again';
+                        }
+                    },
+                    prefill: {
+                        name: "Test User",
+                        email: "test@example.com",
+                        contact: "9999999999"
+                    },
+                    theme: {
+                        color: "#00E676"
+                    }
+                };
+                
+                const rzp = new Razorpay(options);
+                
+                rzp.on('payment.failed', function (response){
+                    msg.textContent = 'Payment failed: ' + response.error.description;
+                    msg.style.color = '#ff5252';
+                    btn.disabled = false;
+                    btn.textContent = 'Try Again';
+                });
+                
+                rzp.open();
+                
+                // Handle modal close
+                btn.disabled = false;
+                btn.textContent = 'Pay with Razorpay';
+
+            } catch (err) {
+                msg.textContent = err.message;
+                msg.style.color = '#ff5252';
+                btn.disabled = false;
+                btn.textContent = 'Pay with Razorpay';
+            }
+        }
+    </script>
+</body>
+</html>

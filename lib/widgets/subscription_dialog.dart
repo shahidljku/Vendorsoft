@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../services/license_service.dart';
 import '../services/whatsapp_service.dart';
 import '../services/payment_service.dart';
+import '../services/config_service.dart';
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -14,67 +15,96 @@ class SubscriptionDialog {
     final resolvedDeviceId = deviceId ?? await LicenseService().getDeviceId();
 
     if (!context.mounted) return;
-    showDialog(
+    await showDialog(
       context: context,
       builder: (context) {
-        bool isLoading = true;
-        List<dynamic> plans = [];
+        // Initialize with cached plans if already loaded in ConfigService
+        List<Map<String, dynamic>> plans = List<Map<String, dynamic>>.from(ConfigService().plans);
+        bool isLoading = plans.isEmpty;
         String? errorMessage;
+        String? checkingOutPlanId;
 
         return StatefulBuilder(
           builder: (context, setState) {
-            if (isLoading && plans.isEmpty) {
-              // Fetch plans
-              http.get(Uri.parse('https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1/plans'))
-                  .timeout(const Duration(seconds: 10))
-                  .then((response) {
+            void loadPlansFromServer() {
+              final url = Uri.parse('${ConfigService().baseUrl}/plans');
+              http.get(url).timeout(const Duration(seconds: 10)).then((response) {
                 if (response.statusCode == 200) {
                   final data = jsonDecode(response.body);
-                  if (data['success'] == true) {
-                    setState(() {
-                      plans = data['data'] ?? [];
-                      isLoading = false;
-                    });
+                  if (data['success'] == true && data['data'] is List) {
+                    final List<dynamic> rawList = data['data'];
+                    final fetchedPlans = rawList
+                        .where((p) => p is Map && p['isActive'] != false)
+                        .map((p) => Map<String, dynamic>.from(p as Map))
+                        .toList();
+
+                    if (context.mounted) {
+                      setState(() {
+                        if (fetchedPlans.isNotEmpty) {
+                          plans = fetchedPlans;
+                        }
+                        isLoading = false;
+                        errorMessage = null;
+                      });
+                    }
                   } else {
+                    if (context.mounted) {
+                      setState(() {
+                        if (plans.isEmpty) {
+                          plans = _getFallbackPlans();
+                        }
+                        isLoading = false;
+                      });
+                    }
+                  }
+                } else {
+                  if (context.mounted) {
                     setState(() {
-                      errorMessage = 'Failed to load plans.';
+                      if (plans.isEmpty) {
+                        plans = _getFallbackPlans();
+                      }
                       isLoading = false;
                     });
                   }
-                } else {
+                }
+              }).catchError((e) {
+                if (context.mounted) {
                   setState(() {
-                    errorMessage = 'Server error.';
+                    if (plans.isEmpty) {
+                      plans = _getFallbackPlans();
+                    }
                     isLoading = false;
                   });
                 }
-              }).catchError((e) {
-                setState(() {
-                  errorMessage = 'Network error: $e';
-                  isLoading = false;
-                });
               });
             }
 
+            if (isLoading && plans.isEmpty) {
+              loadPlansFromServer();
+            }
+
             if (isLoading) {
-              return const Dialog(
-                backgroundColor: Color(0xFF161B22),
-                child: Padding(
+              return Dialog(
+                backgroundColor: const Color(0xFF161B22),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                child: const Padding(
                   padding: EdgeInsets.all(32.0),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       CircularProgressIndicator(color: Color(0xFF00E676)),
                       SizedBox(height: 16),
-                      Text('Loading Plans...', style: TextStyle(color: Colors.white)),
+                      Text('Loading Plans...', style: TextStyle(color: Colors.white, fontSize: 15)),
                     ],
                   ),
                 ),
               );
             }
 
-            if (errorMessage != null) {
+            if (errorMessage != null && plans.isEmpty) {
               return Dialog(
                 backgroundColor: const Color(0xFF161B22),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 child: Padding(
                   padding: const EdgeInsets.all(24.0),
                   child: Column(
@@ -82,11 +112,28 @@ class SubscriptionDialog {
                     children: [
                       const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
                       const SizedBox(height: 16),
-                      Text(errorMessage!, style: const TextStyle(color: Colors.white)),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Close'),
+                      Text(errorMessage!, style: const TextStyle(color: Colors.white), textAlign: TextAlign.center),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Close'),
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676), foregroundColor: Colors.black),
+                            onPressed: () {
+                              setState(() {
+                                isLoading = true;
+                                errorMessage = null;
+                              });
+                              loadPlansFromServer();
+                            },
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       )
                     ],
                   ),
@@ -100,103 +147,128 @@ class SubscriptionDialog {
                 borderRadius: BorderRadius.circular(24),
                 side: BorderSide(color: const Color(0xFF00E676).withValues(alpha: 0.3)),
               ),
-              insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF00E676).withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Icon(Icons.workspace_premium, color: Color(0xFF00E676), size: 28),
-                            ),
-                            const SizedBox(width: 12),
-                            const Text(
-                              'Upgrade Plan',
-                              style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close, color: Colors.grey),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Unlock unlimited customers, premium thermal printing, and WhatsApp automation without limits.',
-                      style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-                    ),
-                    const SizedBox(height: 20),
-
-                    ...plans.map((plan) {
-                      final title = plan['planName'] ?? plan['name'] ?? 'Plan';
-                      final price = plan['amountPaise'] != null ? '₹${(plan['amountPaise'] / 100).toInt()}' : '₹${plan['priceINR'] ?? 0}';
-                      final duration = plan['description'] ?? plan['duration'] ?? 'Subscription';
-                      final features = List<String>.from(plan['features'] ?? []);
-                      final planId = plan['planId'] ?? '';
-                      final isPopular = planId == 'PRO_YEARLY';
-                      
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: _buildPlanCard(
-                          context: context,
-                          title: title,
-                          price: price,
-                          duration: duration,
-                          features: features,
-                          isPopular: isPopular,
-                          deviceId: resolvedDeviceId,
-                          planName: title,
-                          amount: plan['priceINR']?.toString() ?? '0',
-                          planId: planId,
-                        ),
-                      );
-                    }),
-
-                    // Device ID info block
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Row(
+              insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Header
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Icon(Icons.phone_android, color: Colors.grey, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Your Device ID: $resolvedDeviceId',
-                              style: const TextStyle(color: Colors.white70, fontSize: 12, fontFamily: 'monospace'),
-                            ),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.workspace_premium, color: Color(0xFF00E676), size: 28),
+                              ),
+                              const SizedBox(width: 12),
+                              const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Upgrade Plan',
+                                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    'Instant online activation',
+                                    style: TextStyle(color: Color(0xFF00E676), fontSize: 11, fontWeight: FontWeight.w500),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                           IconButton(
-                            icon: const Icon(Icons.copy, color: Color(0xFF00E676), size: 18),
-                            tooltip: 'Copy Device ID',
-                            constraints: const BoxConstraints(),
-                            padding: EdgeInsets.zero,
-                            onPressed: () {
-                              Clipboard.setData(ClipboardData(text: resolvedDeviceId));
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device ID copied to clipboard')));
-                            },
+                            icon: const Icon(Icons.close, color: Colors.grey),
+                            onPressed: () => Navigator.pop(context),
                           ),
                         ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Unlock unlimited customers, premium thermal receipt printing, and WhatsApp automation without limits.',
+                        style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Plan Cards
+                      for (final plan in plans) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 14.0),
+                          child: _buildPlanCard(
+                            context: context,
+                            plan: plan,
+                            resolvedDeviceId: resolvedDeviceId,
+                            isCheckingOut: checkingOutPlanId == plan['planId'],
+                            onStartCheckout: (planId) {
+                              setState(() => checkingOutPlanId = planId);
+                            },
+                            onFinishCheckout: () {
+                              if (context.mounted) {
+                                setState(() => checkingOutPlanId = null);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 4),
+
+                      // Device ID info block
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.phone_android, color: Colors.grey, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Your Device ID', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                                  const SizedBox(height: 1),
+                                  Text(
+                                    resolvedDeviceId,
+                                    style: const TextStyle(color: Colors.white, fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.w600),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy, color: Color(0xFF00E676), size: 18),
+                              tooltip: 'Copy Device ID',
+                              constraints: const BoxConstraints(),
+                              padding: EdgeInsets.zero,
+                              onPressed: () {
+                                Clipboard.setData(ClipboardData(text: resolvedDeviceId));
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Device ID copied to clipboard'),
+                                    backgroundColor: Color(0xFF161B22),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -206,18 +278,83 @@ class SubscriptionDialog {
     );
   }
 
+  static List<Map<String, dynamic>> _getFallbackPlans() {
+    return [
+      {
+        'planId': 'PRO_YEARLY',
+        'planName': 'Pro Annual License',
+        'amountPaise': 1199900,
+        'durationDays': 395,
+        'description': '12 + 1 Month FREE (395 Days)',
+        'isActive': true,
+      },
+      {
+        'planId': 'PRO_MONTHLY',
+        'planName': 'Pro Monthly License',
+        'amountPaise': 99900,
+        'durationDays': 30,
+        'description': 'Full feature access for 30 days.',
+        'isActive': true,
+      },
+    ];
+  }
+
+  static List<String> _getDefaultFeaturesForPlan(String planId) {
+    final isYearly = planId == 'PRO_YEARLY' || planId == 'PRO_YEARLY_SOFT';
+    if (isYearly) {
+      return [
+        '13 Months Total Access (1 Month Free)',
+        'Unlimited Customers & Batch Bills',
+        'Thermal Roll Printing (58mm/80mm)',
+        'Direct WhatsApp Message Automation',
+        'Full Offline Billing & Excel Sync',
+        'Priority Updates & Customer Support',
+      ];
+    } else {
+      return [
+        '30 Days Full Access',
+        'Unlimited Customers & Batch Bills',
+        'Thermal Roll Printing (58mm/80mm)',
+        'Direct WhatsApp Message Automation',
+        'Full Offline Billing & Excel Sync',
+      ];
+    }
+  }
+
   static Widget _buildPlanCard({
     required BuildContext context,
-    required String title,
-    required String price,
-    required String duration,
-    required List<String> features,
-    required bool isPopular,
-    required String deviceId,
-    required String planName,
-    required String amount,
-    required String planId,
+    required Map<String, dynamic> plan,
+    required String resolvedDeviceId,
+    required bool isCheckingOut,
+    required Function(String planId) onStartCheckout,
+    required VoidCallback onFinishCheckout,
   }) {
+    final planId = plan['planId']?.toString() ?? 'PRO_MONTHLY';
+    final title = plan['planName'] ?? plan['name'] ?? (planId.contains('YEARLY') ? 'Pro Annual License' : 'Pro Monthly License');
+    
+    int amountInr = 0;
+    if (plan['amountPaise'] != null && plan['amountPaise'] is num) {
+      amountInr = (plan['amountPaise'] / 100).toInt();
+    } else if (plan['priceINR'] != null && plan['priceINR'] is num) {
+      amountInr = (plan['priceINR'] as num).toInt();
+    } else if (plan['priceInr'] != null && plan['priceInr'] is num) {
+      amountInr = (plan['priceInr'] as num).toInt();
+    } else {
+      amountInr = planId.contains('YEARLY') ? 11999 : 999;
+    }
+
+    final priceFormatted = '₹$amountInr';
+    final duration = plan['description'] ?? (planId.contains('YEARLY') ? '12 + 1 Month FREE (395 Days)' : 'Per Month (30 Days)');
+    
+    List<String> features = [];
+    if (plan['features'] != null && plan['features'] is List && (plan['features'] as List).isNotEmpty) {
+      features = List<String>.from(plan['features']);
+    } else {
+      features = _getDefaultFeaturesForPlan(planId);
+    }
+
+    final isPopular = planId == 'PRO_YEARLY' || planId == 'PRO_YEARLY_SOFT';
+
     return Container(
       decoration: BoxDecoration(
         color: isPopular ? const Color(0xFF00E676).withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.03),
@@ -227,215 +364,125 @@ class SubscriptionDialog {
           width: isPopular ? 2 : 1,
         ),
       ),
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+              ),
               if (isPopular)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: const Color(0xFF00E676),
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  child: const Text('RECOMMENDED', style: TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold)),
+                  child: const Text('RECOMMENDED', style: TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
                 ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Text(price, style: const TextStyle(color: Color(0xFF00E676), fontSize: 28, fontWeight: FontWeight.bold)),
-              const SizedBox(width: 6),
-              Expanded(child: Text(duration, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+              Text(priceFormatted, style: const TextStyle(color: Color(0xFF00E676), fontSize: 26, fontWeight: FontWeight.bold)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  duration,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           const Divider(color: Colors.white12, height: 1),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+
+          // Features
           for (final f in features) ...[
-            Row(
-              children: [
-                Icon(Icons.check_circle_outline, color: isPopular ? const Color(0xFF00E676) : Colors.blueAccent, size: 16),
-                const SizedBox(width: 8),
-                Expanded(child: Text(f, style: const TextStyle(color: Colors.white, fontSize: 13))),
-              ],
+            Padding(
+              padding: const EdgeInsets.only(bottom: 5.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.check_circle, color: isPopular ? const Color(0xFF00E676) : Colors.blueAccent, size: 15),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(f, style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.3))),
+                ],
+              ),
             ),
-            const SizedBox(height: 6),
           ],
-          const SizedBox(height: 14),
+
+          const SizedBox(height: 12),
+
+          // Action Button: Pay with Razorpay
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              icon: const Icon(Icons.qr_code_2),
-              label: const Text('Pay with Razorpay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              icon: isCheckingOut
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                    )
+                  : const Icon(Icons.payment, size: 18),
+              label: Text(
+                isCheckingOut ? 'Opening Gateway...' : 'Pay with Razorpay ($priceFormatted)',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: isPopular ? const Color(0xFF00E676) : Colors.blueAccent,
                 foregroundColor: isPopular ? Colors.black : Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                padding: const EdgeInsets.symmetric(vertical: 13),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () {
-                PaymentService().initiateCheckout(
-                  context,
-                  planId: planId,
-                  onResult: (success, message) {
-                    if (success) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(message ?? 'Activation successful!'), backgroundColor: const Color(0xFF00E676)),
+              onPressed: isCheckingOut
+                  ? null
+                  : () {
+                      onStartCheckout(planId);
+                      PaymentService().initiateCheckout(
+                        context,
+                        planId: planId,
+                        onResult: (success, message) {
+                          onFinishCheckout();
+                          if (success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(message ?? 'Activation successful!'),
+                                backgroundColor: const Color(0xFF00E676),
+                                duration: const Duration(seconds: 4),
+                              ),
+                            );
+                            if (Navigator.of(context, rootNavigator: true).canPop()) {
+                              Navigator.of(context, rootNavigator: true).pop();
+                            }
+                            LicenseService().pollOnlineSubscriptionStatus(force: true);
+                          } else if (message != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(message),
+                                backgroundColor: Colors.redAccent,
+                                duration: const Duration(seconds: 4),
+                              ),
+                            );
+                          }
+                        },
                       );
-                      // Close dialogs and reload
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                      LicenseService().pollOnlineSubscriptionStatus(force: true);
-                    } else if (message != null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
-                      );
-                    }
-                  }
-                );
-              },
+                    },
             ),
           ),
         ],
       ),
-    );
-  }
-
-  /// Show QR Code Payment dialog with developer UPI ID & instructions
-  static Future<void> showPaymentQr(BuildContext context, String planName, String amount, {String? deviceId}) async {
-    final resolvedDeviceId = deviceId ?? await LicenseService().getDeviceId();
-    final upiId = LicenseService().getDeveloperUpiId();
-
-    if (!context.mounted) return;
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: const Color(0xFF161B22),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Scan & Pay via UPI', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                    IconButton(icon: const Icon(Icons.close, color: Colors.grey), onPressed: () => Navigator.pop(context)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.05),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(planName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                      Text('₹$amount', style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 18)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // QR Code Display Box
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(color: const Color(0xFF00E676).withValues(alpha: 0.2), blurRadius: 16, spreadRadius: 2),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.qr_code_scanner, color: Colors.black, size: 140),
-                      const SizedBox(height: 8),
-                      Text('UPI ID: $upiId', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14)),
-                      const SizedBox(height: 4),
-                      Text('Scan with GPay, PhonePe, or Paytm', style: TextStyle(color: Colors.grey.shade700, fontSize: 11)),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Note: UPI ID is currently set to "$upiId".\n(Developer check reminder before final release)',
-                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 11, fontStyle: FontStyle.italic),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 20),
-
-                // Steps to activate
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.blueAccent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Activation Instructions:', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13)),
-                      const SizedBox(height: 6),
-                      Text(
-                        '1. Scan the QR above or transfer ₹$amount via UPI.\n2. Tap below to copy your Device ID ($resolvedDeviceId) and send your payment screenshot to the developer via WhatsApp.',
-                        style: const TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // Action Button: Copy Device ID & WhatsApp
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.message, color: Colors.white),
-                    label: const Text('Send Screenshot via WhatsApp', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF25D366), // WhatsApp Green
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onPressed: () async {
-                      Clipboard.setData(ClipboardData(text: resolvedDeviceId));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Device ID copied to clipboard! Opening WhatsApp...')),
-                      );
-                      final msg = 'Hello Developer,\nI have paid ₹$amount for $planName.\nMy Device ID is: $resolvedDeviceId\nPlease activate my VendSoft license.';
-                      try {
-                        await WhatsAppService.sendWhatsAppMessage(
-                          mobile: '+919427698665',
-                          message: msg,
-                          useBusinessApp: false,
-                        );
-                      } catch (e) {
-                        print('Error opening WhatsApp: $e');
-                      }
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 }

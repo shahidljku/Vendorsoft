@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../services/settings_service.dart';
 import '../services/security_service.dart';
 import '../services/license_service.dart';
-import '../services/transfer_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/excel_service.dart';
 import '../services/backup_service.dart';
@@ -120,9 +119,9 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       final info = LicenseService().getLicenseInfo();
       _daysLeft = LicenseService().getDaysRemaining();
       final pId = info?['planId'];
-      if (pId == 'PRO_YEARLY') {
+      if (pId == 'PRO_YEARLY' || pId == 'PRO_YEARLY_SOFT') {
         _currentPlanName = 'Pro Annual';
-      } else if (pId == 'PRO_MONTHLY') {
+      } else if (pId == 'PRO_MONTHLY' || pId == 'PRO_MONTHLY_SOFT') {
         _currentPlanName = 'Pro Monthly';
       } else if (info?['customerType'] == 'Lifetime') {
         _currentPlanName = 'Lifetime Pro';
@@ -193,7 +192,12 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                         foregroundColor: const Color(0xFF00E676),
                         elevation: 0,
                       ),
-                      onPressed: () => SubscriptionDialog.showPlans(context),
+                      onPressed: () async {
+                        await SubscriptionDialog.showPlans(context);
+                        if (mounted) {
+                          _loadSettings();
+                        }
+                      },
                       child: const Text('Upgrade'),
                     )
                   ],

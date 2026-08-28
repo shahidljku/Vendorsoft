@@ -1,7 +1,7 @@
 import { RequestContext } from '../services/logger';
 import { Env, ApiResponse } from '../types';
 import { authenticateRequest, createErrorResponse } from '../authGuard';
-import { getDocument } from '../services/firestore';
+import { getDocument, queryCollection } from '../services/firestore';
 import { PaymentService } from '../services/paymentService';
 import { IdempotencyService } from '../services/idempotencyService';
 
@@ -22,11 +22,28 @@ export async function handleCreateOrder(ctx: RequestContext, request: Request, e
     return createErrorResponse(400, 'MISSING_INSTALLATION_ID', 'Missing installation UUID.');
   }
 
-  let instDoc: any = null;
-  // Look up customerId from installation if not passed in header
-  if (!customerId) {
-    instDoc = await getDocument(ctx, env, 'installations', installationId);
-    if (instDoc && instDoc.customerId) {
+  let instDoc: any = await getDocument(ctx, env, 'installations', installationId);
+
+  // If customerId is not a 'cus_...' ID, resolve it to canonical customerId
+  if (customerId && !customerId.startsWith('cus_')) {
+    try {
+      const cleanMobile = customerId.replace(/\D/g, '');
+      if (cleanMobile.length === 10) {
+        const custs = await queryCollection(ctx, env, 'customers', [
+          { field: 'mobileNumber', op: 'EQUAL', value: cleanMobile }
+        ]);
+        if (custs && custs.length > 0 && custs[0].customerId) {
+          customerId = custs[0].customerId;
+        }
+      }
+    } catch (e) {
+      console.warn('Customer resolution by mobile warning:', e);
+    }
+  }
+
+  // Fallback to installation's registered customerId if still missing or not a cus_ ID
+  if (!customerId || !customerId.startsWith('cus_')) {
+    if (instDoc && instDoc.customerId && instDoc.customerId.startsWith('cus_')) {
       customerId = instDoc.customerId;
     }
   }
@@ -54,8 +71,11 @@ export async function handleCreateOrder(ctx: RequestContext, request: Request, e
 
   // 5. Look up plan pricing (`plans/{planId}`) or fall back to standard defaults if not in Firestore yet
   let priceInr = planId === 'PRO_MONTHLY' ? 149 : 1499;
-  let durationDays = planId === 'PRO_MONTHLY' ? 30 : (planId === 'PRO_YEARLY' ? 395 : 365);
-  let planName = planId === 'PRO_MONTHLY' ? 'Pro Monthly License' : 'Pro Annual License';
+  if (planId === 'PRO_MONTHLY_SOFT') priceInr = 799;
+  if (planId === 'PRO_YEARLY_SOFT') priceInr = 9599;
+
+  let durationDays = (planId === 'PRO_MONTHLY' || planId === 'PRO_MONTHLY_SOFT') ? 30 : (planId === 'PRO_YEARLY_SOFT' ? 395 : (planId === 'PRO_YEARLY' ? 395 : 365));
+  let planName = (planId === 'PRO_MONTHLY' || planId === 'PRO_MONTHLY_SOFT') ? 'Pro Monthly License' : 'Pro Annual License';
 
   const planDoc = await getDocument(ctx, env, 'plans', planId);
   if (planDoc) {
@@ -73,7 +93,7 @@ export async function handleCreateOrder(ctx: RequestContext, request: Request, e
       planName = planDoc.planName;
     }
   } else {
-    if (planId !== 'PRO_MONTHLY' && planId !== 'PRO_YEARLY' && planId !== 'DEMO_FREE') {
+    if (planId !== 'PRO_MONTHLY' && planId !== 'PRO_YEARLY' && planId !== 'DEMO_FREE' && planId !== 'PRO_MONTHLY_SOFT' && planId !== 'PRO_YEARLY_SOFT') {
       return createErrorResponse(400, 'INVALID_PLAN_ID', `Unsupported planId: ${planId}`);
     }
   }

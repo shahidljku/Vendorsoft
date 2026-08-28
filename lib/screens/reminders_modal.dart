@@ -349,7 +349,7 @@ class _RemindersModalState extends State<RemindersModal> {
               ],
             ),
             content: Text(
-              'Batch limit reached (30 messages in the last hour).\n\nTo protect your free WhatsApp account from being banned, automatic sending is paused. Please wait $mins minutes before sending the next batch.',
+              'Batch limit reached (15 messages in the last 40 minutes).\n\nTo protect your free WhatsApp account from being banned, automatic sending is paused. Please wait $mins minutes before sending the next batch.',
               style: const TextStyle(color: Colors.white70),
             ),
             actions: [
@@ -454,12 +454,12 @@ class _RemindersModalState extends State<RemindersModal> {
             });
           }
 
-          // 3. Stop immediately if batch limit of 30 messages has been hit
+          // 3. Stop immediately if batch limit of 15 messages has been hit
           if (await CooldownService().isCooldownActive()) {
             await _checkCooldownTicker();
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Batch limit of 30 reached! Pausing automatically for 1 hour rest to prevent WhatsApp ban.'),
+                content: Text('Batch limit of 15 reached! Pausing automatically to prevent WhatsApp ban.'),
                 backgroundColor: Colors.orange,
                 duration: Duration(seconds: 5),
               ));

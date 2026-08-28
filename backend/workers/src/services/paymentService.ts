@@ -58,15 +58,34 @@ export class PaymentService {
     }
     
     if (instDoc) {
-      if (instDoc.isBanned === true) {
+      if (instDoc.isBanned === true || instDoc.status === 'BANNED') {
         const err: any = new Error('This hardware installation has been banned.');
         err.code = 'INSTALLATION_BANNED';
         throw err;
       }
       if (instDoc.customerId && instDoc.customerId !== customerId) {
-        const err: any = new Error('This device is registered to another customer.');
-        err.code = 'DEVICE_CONFLICT';
-        throw err;
+        // Check if the other customer actually has an active paid subscription on THIS specific device
+        const { sub: otherSub, isTrial } = await findSubscription(ctx, env, instDoc.customerId, DiscoveryStrategy.PAYMENT);
+        const otherActiveId = isTrial ? otherSub?.hardwareId : otherSub?.activeInstallationId;
+
+        if (
+          otherSub &&
+          otherSub.status === 'ACTIVE' &&
+          otherSub.expiresAtEpochMs > now &&
+          otherSub.planId !== 'FREE_TRIAL_30' &&
+          (otherActiveId === installationId || otherActiveId === identity.hardwareId)
+        ) {
+          const err: any = new Error('This device is registered to another active subscriber.');
+          err.code = 'DEVICE_CONFLICT';
+          throw err;
+        }
+        // Device is being upgraded or used by current customer, update installation customer binding
+        instDoc.customerId = customerId;
+        await setDocument(ctx, env, 'installations', installationId, {
+          ...instDoc,
+          customerId: customerId,
+          lastSeenAtEpochMs: Date.now()
+        });
       }
     }
 

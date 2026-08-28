@@ -4,14 +4,27 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Service for managing WhatsApp anti-bot rolling quota (max 30 sends in 1h10m)
-/// and full cooldown locks (1h to 1h10m) across Bills and Receipts.
+/// Service for managing WhatsApp anti-bot rolling quota and cooldown locks.
+///
+/// Designed to make sending patterns indistinguishable from a human vendor
+/// manually sending bills to customers one at a time.
+///
+/// Batch: 15 messages per window → 25–40 min cooldown → repeat.
+/// Inter-message: 18–35s (with occasional extra pauses) to simulate human pace.
+/// Daily throughput: ~200–280 messages/day (enough for 500–700 over 2–3 days).
 class CooldownService {
   static const _channel = MethodChannel('com.example.image_sender/cooldown');
   static const _keyCooldownEndTime = 'cooldownEndTime';
   static const _keySentTimestamps = 'sentTimestamps';
-  static const int _maxQuota = 30;
-  static const int _windowDurationSeconds = 4200; // 1 hour 10 minutes
+
+  /// Max messages per batch before cooldown triggers.
+  /// 15 is conservative enough to avoid WhatsApp's burst detection,
+  /// while still being practical for month-end billing.
+  static const int _maxQuota = 15;
+
+  /// Rolling window duration (seconds). Timestamps older than this are pruned.
+  /// Set to 40 minutes (2400s) to match the max cooldown duration.
+  static const int _windowDurationSeconds = 2400;
 
   SharedPreferences? _prefs;
 
@@ -48,7 +61,7 @@ class CooldownService {
     return diff;
   }
 
-  /// Returns the number of messages sent (out of 30) in the current 1h10m window.
+  /// Returns the number of messages sent (out of 15) in the current window.
   Future<int> getUsedQuota() async {
     if (await isCooldownActive()) return _maxQuota;
     await _pruneOldTimestamps();
@@ -56,7 +69,7 @@ class CooldownService {
     return timestamps.length > _maxQuota ? _maxQuota : timestamps.length;
   }
 
-  /// Returns the remaining available quota (out of 30) in the current 1h10m window.
+  /// Returns the remaining available quota (out of 15) in the current window.
   Future<int> getRemainingQuota() async {
     if (await isCooldownActive()) return 0;
     await _pruneOldTimestamps();
@@ -66,7 +79,7 @@ class CooldownService {
   }
 
   /// Records a successfully sent message timestamp.
-  /// If total count in window hits 30, automatically triggers a full cooldown lock.
+  /// If total count in window hits 15, automatically triggers a full cooldown lock.
   Future<void> recordMessageSent() async {
     await _init();
     await _pruneOldTimestamps();
@@ -79,12 +92,13 @@ class CooldownService {
     }
   }
 
-  /// Triggers a full cooldown lock for a randomized jitter of 1h to 1h10m (3600 to 4200s).
-  /// Also schedules an Android system notification for when the cooldown expires.
+  /// Triggers a full cooldown lock for a randomized duration of 25–40 minutes.
+  /// Shorter cooldowns (vs old 1h+) compensate for the smaller batch size,
+  /// maintaining similar throughput while spreading messages more evenly over time.
   Future<void> startCooldown({int? testDurationSeconds}) async {
     await _init();
-    // Jitter: 3600 to 4200 seconds (1 hour to 1 hour 10 minutes)
-    final durationSeconds = testDurationSeconds ?? (3600 + Random().nextInt(601));
+    // Jitter: 1500 to 2400 seconds (25 to 40 minutes)
+    final durationSeconds = testDurationSeconds ?? (1500 + Random().nextInt(901));
     final endTime = DateTime.now().add(Duration(seconds: durationSeconds));
     await _prefs!.setInt(_keyCooldownEndTime, endTime.millisecondsSinceEpoch);
 
@@ -114,7 +128,7 @@ class CooldownService {
     }
   }
 
-  /// Removes any sent timestamp older than 1 hour 10 minutes (4200 seconds).
+  /// Removes any sent timestamp older than the rolling window.
   Future<void> _pruneOldTimestamps() async {
     await _init();
     final timestamps = _getTimestamps();
@@ -152,8 +166,20 @@ class CooldownService {
     }
   }
 
-  /// Generates a randomized inter-message jitter delay between 5 and 10 seconds (in milliseconds).
+  /// Generates a humanized inter-message delay (in milliseconds).
+  ///
+  /// Base delay: 18–33 seconds (simulates human opening WhatsApp, previewing, sending, switching back).
+  /// Spike delay: 15% chance of an additional 5–15 second pause (simulates human briefly
+  /// checking a notification, scrolling back, or adjusting something between sends).
+  ///
+  /// Average: ~25 seconds. Range: 18–48 seconds.
+  /// This pacing makes 15 messages take ~6–8 minutes, which matches a real person's speed.
   static int getJitterDelayMilliseconds() {
-    return 5000 + Random().nextInt(5001); // 5000 to 10000 ms
+    final rng = Random();
+    int base = 18000 + rng.nextInt(15001); // 18,000–33,000 ms (18–33 seconds)
+    // 15% chance of an additional "human distraction" pause
+    int spike = rng.nextDouble() < 0.15 ? (5000 + rng.nextInt(10001)) : 0; // 0 or 5,000–15,000 ms
+    return base + spike;
   }
 }
+

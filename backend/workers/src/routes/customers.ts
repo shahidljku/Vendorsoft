@@ -478,6 +478,7 @@ export async function handleCustomerLogout(ctx: RequestContext, request: Request
     const inst = await getDocument(ctx, env, 'installations', installationId);
     if (inst) {
       inst.fcmToken = null;
+      inst.customerId = null;
       inst.updatedAtEpochMs = Date.now();
       await setDocument(ctx, env, 'installations', installationId, inst);
     }

@@ -34,6 +34,7 @@ const isTransientRazorpayError = (err: any) => {
 export class RazorpayProvider implements PaymentGateway {
   async createOrder(ctx: RequestContext, env: Env, amountPaise: number, notes: Record<string, string>): Promise<string> {
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+      if (env.ENVIRONMENT === 'production') throw new Error('Missing Razorpay keys in production');
       // Return dummy order ID for local dev
       return `order_${generateShortId()}`;
     }
@@ -76,12 +77,13 @@ export class RazorpayProvider implements PaymentGateway {
   }
 
   async verifyPaymentSignature(ctx: RequestContext, env: Env, orderId: string, paymentId: string, signature: string): Promise<boolean> {
-    if (!env.RAZORPAY_WEBHOOK_SECRET) {
+    if (!env.RAZORPAY_KEY_SECRET) {
+      if (env.ENVIRONMENT === 'production') return false;
       return true; // Local dev simulation
     }
     
     try {
-      const cryptoSecret = env.RAZORPAY_WEBHOOK_SECRET;
+      const cryptoSecret = env.RAZORPAY_KEY_SECRET;
       const msg = `${orderId}|${paymentId}`;
       const enc = new TextEncoder();
       const key = await crypto.subtle.importKey('raw', enc.encode(cryptoSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -96,6 +98,7 @@ export class RazorpayProvider implements PaymentGateway {
 
   async verifyWebhookSignature(ctx: RequestContext, env: Env, rawBody: string, signature: string): Promise<boolean> {
     if (!env.RAZORPAY_WEBHOOK_SECRET) {
+      if (env.ENVIRONMENT === 'production') return false;
       return true; // Local dev simulation
     }
 
@@ -114,6 +117,7 @@ export class RazorpayProvider implements PaymentGateway {
 
   async verifyPaymentFallback(ctx: RequestContext, env: Env, orderId: string): Promise<string | null> {
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+      if (env.ENVIRONMENT === 'production') return null;
       return `pay_${generateShortId()}`; // Local dev simulation
     }
 
@@ -152,6 +156,7 @@ export class RazorpayProvider implements PaymentGateway {
 
   async refundPayment(ctx: RequestContext, env: Env, paymentId: string): Promise<boolean> {
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
+      if (env.ENVIRONMENT === 'production') return false;
       return true; // Local dev simulation
     }
 

@@ -16,6 +16,7 @@ import '../services/license_service.dart';
 import '../services/log_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/print_service.dart';
+import '../services/receipt_service.dart';
 import '../widgets/cooldown_fab.dart';
 
 class ReceiptsTab extends StatefulWidget {
@@ -90,27 +91,8 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   }
 
   /// Generates a professional sequential receipt number in YYYY-MM-NNN format.
-  /// The sequence counter is derived from existing customers who already have
-  /// a receipt number with the same year-month prefix, ensuring continuity.
   String _generateReceiptNo() {
-    final now = DateTime.now();
-    final prefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
-
-    // Count how many customers already have a receipt number with this month's prefix
-    int maxSeq = 0;
-    for (final c in widget.excelService.allCustomers) {
-      final rn = c.receiptNo;
-      if (rn.startsWith(prefix) && rn.length > prefix.length + 1) {
-        final seqPart = rn.substring(prefix.length + 1); // after "YYYY-MM-"
-        final parsed = int.tryParse(seqPart);
-        if (parsed != null && parsed > maxSeq) {
-          maxSeq = parsed;
-        }
-      }
-    }
-
-    final nextSeq = (maxSeq + 1).toString().padLeft(3, '0');
-    return '$prefix-$nextSeq';
+    return ReceiptService.generateReceiptNo(widget.excelService.allCustomers);
   }
 
   void _checkAccessibility() async {
@@ -189,177 +171,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   }
 
   Widget _buildReceiptWidget(Customer customer, String businessName) {
-    // Ensure every customer gets a receipt number before the widget is rendered
-    // (covers auto-send and share paths that skip the edit dialog)
     if (customer.receiptNo.isEmpty) {
       customer.receiptNo = _generateReceiptNo();
     }
-    return Directionality(
-      textDirection: TextDirection.ltr,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: 450,
-          color: Colors.white,
-          child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Top dark blue bar
-          Container(height: 16, color: const Color(0xFF02295B)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Column(
-              children: [
-                const SizedBox(height: 8),
-                _buildDashedLine(),
-                const SizedBox(height: 16),
-                const Text(
-                  'PAYMENT RECEIPT',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF02295B),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                _buildDashedLine(),
-                const SizedBox(height: 16),
-                
-                // Rows
-                _buildReceiptRow(Icons.business, Colors.blue, 'Party Name', customer.custName.isNotEmpty ? customer.custName : customer.mobile),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.calendar_month, Colors.green, 'Date', customer.paymentDate.isNotEmpty ? customer.paymentDate : _getCurrentDateFormatted()),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.receipt, Colors.teal, 'Receipt No.', customer.receiptNo.isNotEmpty ? customer.receiptNo : 'N/A'),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.receipt_long, Colors.orange, 'Bill No.', customer.billNo.isNotEmpty ? customer.billNo : 'N/A'),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.currency_rupee, Colors.blueAccent, 'Payment', '₹${customer.amountPaid}'),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.account_balance_wallet, Colors.purpleAccent, 'Mode', customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online'),
-                const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                _buildReceiptRow(Icons.assignment_ind, Colors.pinkAccent, 'Transaction', customer.transactionId.isNotEmpty ? customer.transactionId : 'N/A'),
-                
-                const SizedBox(height: 20),
-                
-                // Payment Status Box
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE9F5EB),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.verified_user, color: Color(0xFF1B9347), size: 40),
-                      const SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text('PAYMENT STATUS', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1B9347))),
-                          Text('SUCCESSFUL', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1B9347))),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                
-                const SizedBox(height: 16),
-                const Text(
-                  'Thank you for your payment.',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Icon(Icons.spa, color: Colors.green.shade700, size: 24),
-                    ),
-                    Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
-                  ],
-                ),
-                
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.receipt, color: Color(0xFF02295B), size: 36),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          businessName.isNotEmpty ? businessName : 'Vendor Software',
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 20),
-                _buildDashedLine(),
-                const SizedBox(height: 12),
-                const Text(
-                  'Developed by Imtiyaz Khanusia',
-                  style: TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
-          // Bottom dark blue bar
-          Container(height: 16, color: const Color(0xFF02295B)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReceiptRow(IconData icon, Color iconColor, String label, String value) {
-    return Row(
-      children: [
-        Icon(icon, color: iconColor, size: 28),
-        const SizedBox(width: 16),
-        SizedBox(
-          width: 120,
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-          ),
-        ),
-        const Text(
-          ':',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDashedLine() {
-    return Row(
-      children: List.generate(
-        40,
-        (index) => Expanded(
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 2),
-            color: const Color(0xFF02295B),
-            height: 2,
-          ),
-        ),
-      ),
+    return ReceiptCardWidget(
+      customer: customer,
+      businessName: businessName,
     );
   }
 
@@ -576,7 +393,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 _isSending = false;
               });
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cooldown limit reached (30 messages). Pausing sending.')),
+                const SnackBar(content: Text('Cooldown limit reached (15 messages). Pausing sending.')),
               );
             }
             break;
@@ -1101,7 +918,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
           ],
         ),
         content: Text(
-          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 15 messages.
 
 Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),

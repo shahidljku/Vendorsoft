@@ -156,9 +156,9 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
         final info = LicenseService().getLicenseInfo();
         _daysLeft = LicenseService().getDaysRemaining();
         final pId = info?['planId'];
-        if (pId == 'PRO_YEARLY') {
+        if (pId == 'PRO_YEARLY' || pId == 'PRO_YEARLY_SOFT') {
           _currentPlanName = 'Pro Annual';
-        } else if (pId == 'PRO_MONTHLY') {
+        } else if (pId == 'PRO_MONTHLY' || pId == 'PRO_MONTHLY_SOFT') {
           _currentPlanName = 'Pro Monthly';
         } else if (info?['customerType'] == 'Lifetime') {
           _currentPlanName = 'Lifetime Access';

@@ -34,7 +34,6 @@ class PaymentService {
   }
 
   Future<Map<String, String>> _buildHeaders() async {
-    final deviceId = await LicenseService().getDeviceId();
     String? idToken;
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -45,11 +44,30 @@ class PaymentService {
       print('Failed to get Firebase token for PaymentService: $e');
     }
 
+    String customerId = '';
+    try {
+      final info = LicenseService().getLicenseInfo();
+      if (info != null && info['customerId'] != null && info['customerId'].toString().isNotEmpty) {
+        customerId = info['customerId'].toString();
+      }
+    } catch (_) {}
+
+    if (customerId.isEmpty) {
+      try {
+        const storage = FlutterSecureStorage();
+        customerId = await storage.read(key: 'user_mobile_number') ?? '';
+      } catch (_) {}
+    }
+    if (customerId.isEmpty) {
+      customerId = FirebaseAuth.instance.currentUser?.phoneNumber ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    }
+
     final hardwareId = await LicenseService().getDeviceId();
     final deviceModel = await LicenseService().getDeviceModel();
     return {
       'Content-Type': 'application/json',
       if (idToken != null) 'Authorization': 'Bearer $idToken',
+      if (customerId.isNotEmpty) 'x-customer-id': customerId,
       'x-installation-uuid': hardwareId,
       'x-installation-id': hardwareId,
       'x-hardware-id': hardwareId,
@@ -112,8 +130,9 @@ class PaymentService {
         if (data['success'] == true && data['data'] != null) {
           final leaseToken = data['data']['signedLeaseToken'];
           if (leaseToken != null && leaseToken.toString().isNotEmpty) {
-            await LicenseService().verifySignedLeaseToken(leaseToken);
+            await LicenseService().verifySignedLeaseToken(leaseToken, saveToStorage: true);
           }
+          await LicenseService().pollOnlineSubscriptionStatus(force: true);
           return {'success': true, 'data': data['data']};
         }
       }
@@ -183,14 +202,14 @@ class PaymentService {
       'key': keyId,
       'amount': amountPaise,
       'name': 'VendSoft',
-      'description': orderData['planId'] == 'PRO_YEARLY' ? 'Pro Annual License' : 'Pro Monthly License',
+      'description': orderData['planName'] ?? ((orderData['planId'] == 'PRO_YEARLY' || orderData['planId'] == 'PRO_YEARLY_SOFT') ? 'Pro Annual License' : 'Pro Monthly License'),
       'order_id': razorpayOrderId,
       'prefill': {
         'contact': cachedMobile,
         'email': ''
       },
       'theme': {
-        'color': '#00D1FF'
+        'color': '#00E676'
       }
     };
 

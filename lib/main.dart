@@ -27,12 +27,15 @@ import 'services/push_notification_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'screens/update_required_screen.dart';
 
+import 'services/accessibility_service.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
   PushNotificationService().initialize();
+  AccessibilityService.initialize();
   runApp(const ImageSenderApp());
 }
 
@@ -232,6 +235,17 @@ class _ImageSenderAppState extends State<ImageSenderApp>
       }
     } 
 
+    // If still unlicensed & no local trial, do a fast synchronous server poll before showing Activation Screen
+    if (!isLifecycleReload && !_isLicensed && !_isTrialActive) {
+      try {
+        await _licenseService.pollOnlineSubscriptionStatus(force: true);
+        _isLicensed = await _licenseService.isLicensed();
+        if (_isLicensed) {
+          _isExpired = _licenseService.isLicenseExpired();
+        }
+      } catch (_) {}
+    } 
+
     String? lastUri = await _settingsService.getLastExcelUri();
     String? lastName = await _settingsService.getLastExcelFileName();
     if (lastUri != null && lastUri.isNotEmpty && lastName != null) {
@@ -329,7 +343,21 @@ class _ImageSenderAppState extends State<ImageSenderApp>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Image.asset('assets/icon/app_icon.png', width: 160, height: 160),
+                    Image.asset(
+                      'assets/icon/app_icon.png',
+                      width: 140,
+                      height: 140,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00E676).withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: const Color(0xFF00E676), width: 2),
+                        ),
+                        child: const Icon(Icons.inventory_2, size: 64, color: Color(0xFF00E676)),
+                      ),
+                    ),
                     const SizedBox(height: 24),
                     const Text(
                       'Vendor\nSoftware',

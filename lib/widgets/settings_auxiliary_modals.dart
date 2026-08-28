@@ -169,11 +169,11 @@ Required to prevent Android's background battery saver from terminating long bil
       content: '''
 To ensure reliable operation and maintain healthy messaging practices when distributing hundreds of monthly bills, VendorSoft incorporates an automated pacing mechanism:
 
-1. 30-Message Batch Sending
-When sending bills or payment reminders to your delivery routes, VendorSoft processes messages in steady batches of 30 customers at a time.
+1. 15-Message Batch Sending
+When sending bills or payment reminders to your delivery routes, VendorSoft processes messages in steady batches of 15 customers at a time.
 
 2. Automatic Cooldown Timer
-After a batch of 30 messages completes, VendorSoft automatically pauses sending and enters a temporary cooldown timer (configured in your sending options).
+After a batch of 15 messages completes, VendorSoft automatically pauses sending and enters a temporary cooldown timer (configured in your sending options).
 
 3. Why This Safety Lock Exists
 This pacing protects your WhatsApp account from being flagged for rapid automated activity and ensures that your phone's memory and clipboard remain responsive while processing high-volume billing images.

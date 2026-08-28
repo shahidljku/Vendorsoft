@@ -62,10 +62,9 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
   Map<String, _CmStat> _cmStatsMap = {};
   int _totalAssignedAll = 0;
   double _totalCollectedAll = 0.0;
-  double _totalBillAll = 0.0;
   double _totalPendingAll = 0.0;
   double _overallRecovery = 0.0;
-
+  StreamSubscription? _configSubscription;
 
   @override
   void initState() {
@@ -83,11 +82,19 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           _initPreloadedData();
        }
     });
+
+    // Listen for dynamic price updates from admin panel
+    _configSubscription = ConfigService().onConfigUpdated.listen((_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   @override
   void dispose() {
     _licenseSubscription?.cancel();
+    _configSubscription?.cancel();
     widget.excelService.removeListener(_calculateMetrics);
     _cmSearchController.dispose();
     _tabController.dispose();
@@ -184,7 +191,6 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
         _cmStatsMap = statsMap;
         _totalAssignedAll = tAssigned;
         _totalCollectedAll = tCollected;
-        _totalBillAll = tBill;
         _totalPendingAll = tPending;
         _overallRecovery = overallRec;
       });
@@ -360,7 +366,12 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: () => SubscriptionDialog.showPlans(context),
+                    onPressed: () async {
+                      await SubscriptionDialog.showPlans(context);
+                      if (mounted) {
+                        _initPreloadedData();
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF00E676),
                       foregroundColor: Colors.black,
@@ -415,7 +426,12 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: () => SubscriptionDialog.showPlans(context),
+                    onPressed: () async {
+                      await SubscriptionDialog.showPlans(context);
+                      if (mounted) {
+                        _initPreloadedData();
+                      }
+                    },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF00E676),
                       foregroundColor: Colors.black,
@@ -774,7 +790,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           ],
         ),
         content: Text(
-          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 30 messages.
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 15 messages.
 
 Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),

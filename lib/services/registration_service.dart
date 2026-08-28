@@ -133,6 +133,10 @@ class RegistrationService {
 
   Future<void> logoutFromServer() async {
     try {
+      try {
+        const storage = FlutterSecureStorage();
+        await storage.delete(key: 'user_mobile_number');
+      } catch (_) {}
       final headers = await _buildHeaders();
       final url = Uri.parse('$baseUrl/customers/logout');
       final response = await http.post(url, headers: headers);

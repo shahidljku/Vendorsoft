@@ -23,6 +23,7 @@ import android.app.PendingIntent
 
 class MainActivity : FlutterActivity() {
 
+    private var messageSentReceiver: BroadcastReceiver? = null
     private val FILE_CHANNEL = "com.example.image_sender/file_access"
     private val WHATSAPP_CHANNEL = "com.example.image_sender/whatsapp"
     private val ACCESSIBILITY_CHANNEL = "com.example.image_sender/accessibility"
@@ -48,7 +49,7 @@ class MainActivity : FlutterActivity() {
         }
 
         // ── Accessibility Message Sent Receiver ──
-        val receiver = object : BroadcastReceiver() {
+        messageSentReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == "com.vendorsoft.app.MESSAGE_SENT") {
                     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
@@ -58,9 +59,9 @@ class MainActivity : FlutterActivity() {
         }
         val filter = IntentFilter("com.vendorsoft.app.MESSAGE_SENT")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(messageSentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
-            registerReceiver(receiver, filter)
+            registerReceiver(messageSentReceiver, filter)
         }
 
         // ── File Access Channel (SAF) ──
@@ -171,7 +172,11 @@ class MainActivity : FlutterActivity() {
                     }
                     "setAutoSendMode" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
-                        ImageSenderAccessibilityService.autoSendEnabled = enabled
+                        if (enabled) {
+                            ImageSenderAccessibilityService.autoSendEnabled = true
+                        } else {
+                            ImageSenderAccessibilityService.abortExternal()
+                        }
                         result.success(true)
                     }
                     else -> result.notImplemented()
@@ -226,6 +231,14 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        super.cleanUpFlutterEngine(flutterEngine)
+        messageSentReceiver?.let {
+            unregisterReceiver(it)
+            messageSentReceiver = null
+        }
     }
 
     // ══════════════════════════════════════════
@@ -408,6 +421,7 @@ class MainActivity : FlutterActivity() {
                 // The "jid" extra opens the specific contact's chat
                 putExtra("jid", "$cleanNumber@s.whatsapp.net")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
 
             startActivity(intent)

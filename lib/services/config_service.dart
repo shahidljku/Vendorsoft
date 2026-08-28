@@ -12,6 +12,9 @@ class ConfigService {
   Map<String, dynamic>? _systemConfig;
   Map<String, dynamic>? get systemConfig => _systemConfig;
 
+  List<Map<String, dynamic>> _plans = [];
+  List<Map<String, dynamic>> get plans => _plans;
+
   final StreamController<void> _configUpdatedController = StreamController<void>.broadcast();
   Stream<void> get onConfigUpdated => _configUpdatedController.stream;
 
@@ -20,8 +23,10 @@ class ConfigService {
   void startBackgroundPolling() {
     _pollingTimer?.cancel();
     fetchSystemConfig(); // Fire immediately on boot
+    fetchPlans();
     _pollingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       fetchSystemConfig();
+      fetchPlans();
     });
   }
 
@@ -33,7 +38,7 @@ class ConfigService {
   Future<void> fetchSystemConfig() async {
     try {
       final url = Uri.parse('$baseUrl/config/system');
-      final response = await http.get(url);
+      final response = await http.get(url).timeout(const Duration(seconds: 8));
       
       if (response.statusCode == 200) {
         final resJson = jsonDecode(response.body);
@@ -46,8 +51,34 @@ class ConfigService {
         }
       }
     } catch (e) {
-      print('Failed to fetch system config: $e');
+      // Background poll failure is normal during offline states
     }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPlans() async {
+    try {
+      final url = Uri.parse('$baseUrl/plans');
+      final response = await http.get(url).timeout(const Duration(seconds: 8));
+      
+      if (response.statusCode == 200) {
+        final resJson = jsonDecode(response.body);
+        if (resJson['success'] == true && resJson['data'] is List) {
+          final List<dynamic> rawList = resJson['data'];
+          final List<Map<String, dynamic>> newPlans = rawList
+              .where((item) => item is Map && item['isActive'] != false)
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          
+          if (newPlans.isNotEmpty && jsonEncode(_plans) != jsonEncode(newPlans)) {
+            _plans = newPlans;
+            _configUpdatedController.add(null);
+          }
+        }
+      }
+    } catch (e) {
+      // Fallback handled gracefully
+    }
+    return _plans;
   }
 
   bool get isMaintenanceMode {
@@ -85,9 +116,7 @@ class ConfigService {
   bool isUpdateRequired(String currentAppVersion) {
     if (!enforceStrictAppVersion) return false;
     
-    // Simple semver comparison (assuming format like "1.0.0+1" or "1.0.0")
-    // If the string exactly matches the minimum or latest, we can consider it.
-    // To make it robust: compare the versions.
+    // Simple semver comparison
     List<int> parseVersion(String v) {
       final parts = v.split('+');
       final numbers = parts[0].split('.').map((e) => int.tryParse(e) ?? 0).toList();
@@ -103,16 +132,12 @@ class ConfigService {
     final minimum = parseVersion(minimumSupportedVersion);
     final latest = parseVersion(latestVersion);
 
-    // If current is less than minimum, definitely require update
     for (int i = 0; i < minimum.length; i++) {
-      if (i >= current.length) return true; // Current is shorter, e.g. 1.0 vs 1.0.1
+      if (i >= current.length) return true;
       if (current[i] < minimum[i]) return true;
-      if (current[i] > minimum[i]) return false; // Current is strictly greater
+      if (current[i] > minimum[i]) return false;
     }
     
-    // If we reach here, current >= minimum. 
-    // Wait, the prompt says "enforceStrictAppVersion" forces users to update to latest if they are outdated.
-    // If enforceStrictAppVersion is true, they MUST be on the latest version.
     for (int i = 0; i < latest.length; i++) {
       if (i >= current.length) return true;
       if (current[i] < latest[i]) return true;
@@ -123,10 +148,26 @@ class ConfigService {
   }
 
   String get monthlyPlanPrice {
-    return _systemConfig?['pricing']?['monthly'] ?? '₹799';
+    final monthlyPlan = _plans.firstWhere(
+      (p) => p['planId'] == 'PRO_MONTHLY' || p['planId'] == 'PRO_MONTHLY_SOFT',
+      orElse: () => <String, dynamic>{},
+    );
+    if (monthlyPlan.isNotEmpty && monthlyPlan['amountPaise'] != null) {
+      final inr = (monthlyPlan['amountPaise'] / 100).toInt();
+      return '₹$inr';
+    }
+    return _systemConfig?['pricing']?['monthly'] ?? '₹999';
   }
 
   String get yearlyPlanPrice {
-    return _systemConfig?['pricing']?['yearly'] ?? '₹9,499 (12 + 1 Month FREE)';
+    final yearlyPlan = _plans.firstWhere(
+      (p) => p['planId'] == 'PRO_YEARLY' || p['planId'] == 'PRO_YEARLY_SOFT',
+      orElse: () => <String, dynamic>{},
+    );
+    if (yearlyPlan.isNotEmpty && yearlyPlan['amountPaise'] != null) {
+      final inr = (yearlyPlan['amountPaise'] / 100).toInt();
+      return '₹$inr (12 + 1 Month FREE)';
+    }
+    return _systemConfig?['pricing']?['yearly'] ?? '₹11,999 (12 + 1 Month FREE)';
   }
 }

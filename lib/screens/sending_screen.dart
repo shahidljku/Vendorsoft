@@ -273,7 +273,7 @@ class _SendingScreenState
               });
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cooldown limit reached (30 messages). Pausing sending.')),
+                const SnackBar(content: Text('Cooldown limit reached (15 messages). Pausing sending.')),
               );
             }
             WakelockPlus.disable();

@@ -7,11 +7,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_sender/services/license_service.dart';
 import '../services/payment_service.dart';
-import '../services/transfer_service.dart';
+import '../services/config_service.dart';
 import '../services/registration_service.dart';
 import '../services/settings_service.dart';
 import '../main.dart';
-import 'transfer_pending_screen.dart';
 
 class ActivationScreen extends StatefulWidget {
   final LicenseService licenseService;
@@ -91,19 +90,34 @@ class _ActivationScreenState extends State<ActivationScreen> {
   }
 
   Future<void> _loadPlans() async {
+    if (ConfigService().plans.isNotEmpty) {
+      setState(() {
+        _plans = ConfigService().plans;
+        _isLoading = false;
+      });
+    }
+
     try {
-      final url = Uri.parse('https://vendsoft-api-worker.vendorproapk.workers.dev/api/v1/plans');
+      final url = Uri.parse('${ConfigService().baseUrl}/plans');
       final response = await http.get(url).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true && mounted) {
+          final fetchedPlans = data['data'] ?? [];
+          final activePlans = fetchedPlans.where((p) => p is Map && p['isActive'] != false).toList();
           setState(() {
-            _plans = data['data'] ?? [];
+            if (activePlans.isNotEmpty) {
+              _plans = activePlans;
+            }
+            _isLoading = false;
           });
         }
       }
     } catch (e) {
       debugPrint('Failed to load dynamic plans: $e');
+      if (mounted && _plans.isEmpty) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -211,7 +225,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                 )
               else
                 ..._plans.map((plan) {
-                  final isRecommended = plan['planId'] == 'PRO_YEARLY';
+                  final isRecommended = plan['planId'] == 'PRO_YEARLY' || plan['planId'] == 'PRO_YEARLY_SOFT';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12.0),
                     child: Card(
@@ -252,7 +266,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                               textBaseline: TextBaseline.alphabetic,
                               children: [
                                 Text('₹${((plan['amountPaise'] ?? 0) / 100).toStringAsFixed(0)}', style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-                                Text(' / ${plan['planId'] == 'PRO_YEARLY' ? 'year' : 'month'}', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                                Text(' / ${(plan['planId'] == 'PRO_YEARLY' || plan['planId'] == 'PRO_YEARLY_SOFT') ? 'year' : 'month'}', style: const TextStyle(color: Colors.grey, fontSize: 14)),
                               ],
                             ),
                             if (plan['description'] != null)
@@ -261,8 +275,24 @@ class _ActivationScreenState extends State<ActivationScreen> {
                                 child: Text(plan['description'], style: const TextStyle(color: Colors.white54, fontSize: 12, fontStyle: FontStyle.italic)),
                               ),
                             const SizedBox(height: 12),
-                            if (plan['features'] != null)
-                              ...List<String>.from(plan['features']).map((f) => _buildFeatureRow(f)),
+                            ...((plan['features'] != null && (plan['features'] as List).isNotEmpty)
+                                ? List<String>.from(plan['features'])
+                                : (isRecommended
+                                    ? [
+                                        '13 Months Total Access (1 Month Free)',
+                                        'Unlimited Customers & Fast Billing',
+                                        'Thermal Roll Printing (58mm/80mm)',
+                                        'WhatsApp Automation & Direct Send',
+                                        'Full Offline Mode & Backup Support',
+                                      ]
+                                    : [
+                                        '30 Days Full Access',
+                                        'Unlimited Customers & Fast Billing',
+                                        'Thermal Roll Printing (58mm/80mm)',
+                                        'WhatsApp Automation & Direct Send',
+                                        'Full Offline Mode',
+                                      ]))
+                                .map((f) => _buildFeatureRow(f)),
                             const SizedBox(height: 16),
                             SizedBox(
                               width: double.infinity,

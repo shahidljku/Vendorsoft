@@ -73,7 +73,15 @@ export async function routeRequest(request: Request, env: Env, execCtx?: Executi
       return await handlePublicDownloadApk(ctx, request, env);
     }
 
+    if (normalizedPath === '/v1/public/web-checkout/create' && request.method === 'POST') {
+      const { handleWebCheckoutCreateOrder } = await import('./routes/webCheckout');
+      return await handleWebCheckoutCreateOrder(ctx, request, env);
+    }
 
+    if (normalizedPath === '/v1/public/web-checkout/verify' && request.method === 'POST') {
+      const { handleWebCheckoutVerifyOrder } = await import('./routes/webCheckout');
+      return await handleWebCheckoutVerifyOrder(ctx, request, env);
+    }
 
   // Phase 3: Razorpay Webhook Receiver (`POST /v1/webhooks/razorpay`)
   if (normalizedPath === '/v1/webhooks/razorpay' && request.method === 'POST') {
