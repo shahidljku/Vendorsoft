@@ -122,20 +122,27 @@ class ImageSenderAccessibilityService : AccessibilityService() {
     private val retryHandler = Handler(Looper.getMainLooper())
 
     private val returnRunnable = Runnable {
-        Log.d(TAG, "Safety timeout triggered. Executing return.")
-        executeReturn()
+        Log.d(TAG, "Return timeout reached after click. Executing return.")
+        executeReturn(success = true)
     }
 
-    private fun executeReturn() {
+    private fun executeReturn(success: Boolean = true) {
         if (currentState != State.WAITING_FOR_EXIT) return
         currentState = State.IDLE
         returnHandler.removeCallbacks(returnRunnable)
         retryHandler.removeCallbacksAndMessages(null)
         
-        Log.d(TAG, "Broadcasting MESSAGE_SENT and returning to VendorPro.")
-        val broadcastIntent = Intent("com.vendorsoft.app.MESSAGE_SENT")
-        broadcastIntent.setPackage(applicationContext.packageName)
-        sendBroadcast(broadcastIntent)
+        if (success) {
+            Log.d(TAG, "Broadcasting MESSAGE_SENT and returning to VendorPro.")
+            val broadcastIntent = Intent("com.vendorsoft.app.MESSAGE_SENT")
+            broadcastIntent.setPackage(applicationContext.packageName)
+            sendBroadcast(broadcastIntent)
+        } else {
+            Log.d(TAG, "Send unverified. Broadcasting MESSAGE_FAILED and returning.")
+            val broadcastIntent = Intent("com.vendorsoft.app.MESSAGE_FAILED")
+            broadcastIntent.setPackage(applicationContext.packageName)
+            sendBroadcast(broadcastIntent)
+        }
         returnToImageSender()
     }
 
@@ -155,8 +162,8 @@ class ImageSenderAccessibilityService : AccessibilityService() {
             if (currentState == State.WAITING_FOR_EXIT) {
                 if (className.startsWith("com.whatsapp") && !className.contains("widget") && !className.contains("Dialog")) {
                     if (className != previewActivityClassName) {
-                        Log.d(TAG, "Exited preview ($previewActivityClassName) into ($className). Executing return.")
-                        executeReturn()
+                        Log.d(TAG, "Exited preview ($previewActivityClassName) into ($className). Verified send.")
+                        executeReturn(success = true)
                     }
                 }
             } else {
@@ -256,21 +263,44 @@ class ImageSenderAccessibilityService : AccessibilityService() {
 
         Log.d(TAG, "executeClick: Found send button. clickable=${sendButton.isClickable}, visible=${sendButton.isVisibleToUser}, class=${sendButton.className}")
 
+        // Strategy 1 (Primary): Semantic ACTION_CLICK — most reliable.
+        // Targets the accessibility node directly, immune to coordinate misalignment.
+        if (sendButton.isClickable) {
+            Log.d(TAG, "Using ACTION_CLICK (primary strategy).")
+            sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            sendButton.recycle()
+            rootNode.recycle()
+            transitionToWaitingForExit()
+            return
+        }
+
+        // Strategy 2: ACTION_CLICK on clickable parent
+        val clickableParent = findClickableParent(sendButton)
+        if (clickableParent != null) {
+            Log.d(TAG, "Using ACTION_CLICK on clickable parent.")
+            clickableParent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            clickableParent.recycle()
+            sendButton.recycle()
+            rootNode.recycle()
+            transitionToWaitingForExit()
+            return
+        }
+
+        // Strategy 3 (Fallback): Coordinate gesture for non-clickable nodes (e.g. Jetpack Compose).
+        // Taps within the inner 40% of button bounds to maximize hit probability
+        // on circular FABs where corners of the bounding rect are outside the touch target.
         val rect = Rect()
         sendButton.getBoundsInScreen(rect)
 
-        // Strategy 1: Humanized gesture dispatch (generates real MotionEvents)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !rect.isEmpty && rect.width() > 0 && rect.height() > 0) {
-            // Coordinate jitter: tap within inner 60% of the button to avoid edges
-            val marginX = (rect.width() * 0.20f).coerceAtLeast(2f)
-            val marginY = (rect.height() * 0.20f).coerceAtLeast(2f)
+            val marginX = (rect.width() * 0.30f).coerceAtLeast(2f)
+            val marginY = (rect.height() * 0.30f).coerceAtLeast(2f)
             val tapX = rect.left + marginX + random.nextFloat() * ((rect.width() - 2 * marginX).coerceAtLeast(1f))
             val tapY = rect.top + marginY + random.nextFloat() * ((rect.height() - 2 * marginY).coerceAtLeast(1f))
 
-            // Random tap hold duration (80–150ms)
             val tapDuration = TAP_DURATION_MIN_MS + (random.nextFloat() * (TAP_DURATION_MAX_MS - TAP_DURATION_MIN_MS)).toLong()
 
-            Log.d(TAG, "Dispatching humanized gesture at (${tapX.toInt()}, ${tapY.toInt()}) for ${tapDuration}ms [bounds=$rect].")
+            Log.d(TAG, "Dispatching gesture at (${tapX.toInt()}, ${tapY.toInt()}) for ${tapDuration}ms [bounds=$rect].")
             val path = Path()
             path.moveTo(tapX, tapY)
             val gesture = GestureDescription.Builder()
@@ -284,8 +314,8 @@ class ImageSenderAccessibilityService : AccessibilityService() {
                 }
 
                 override fun onCancelled(gestureDescription: GestureDescription?) {
-                    Log.d(TAG, "Gesture cancelled. Falling back to ACTION_CLICK.")
-                    performActionClickFallback()
+                    Log.d(TAG, "Gesture cancelled. Resetting to IDLE.")
+                    currentState = State.IDLE
                 }
             }, null)
 
@@ -293,31 +323,9 @@ class ImageSenderAccessibilityService : AccessibilityService() {
             rootNode.recycle()
             
             if (!dispatched) {
-                Log.d(TAG, "dispatchGesture returned false. Falling back to ACTION_CLICK.")
-                performActionClickFallback()
+                Log.d(TAG, "dispatchGesture returned false. Resetting to IDLE.")
+                currentState = State.IDLE
             }
-            return
-        }
-
-        // Strategy 2: ACTION_CLICK fallback
-        if (sendButton.isClickable) {
-            Log.d(TAG, "Using ACTION_CLICK fallback.")
-            sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            sendButton.recycle()
-            rootNode.recycle()
-            transitionToWaitingForExit()
-            return
-        }
-
-        // Strategy 3: Try clickable parent
-        val clickableParent = findClickableParent(sendButton)
-        if (clickableParent != null) {
-            Log.d(TAG, "Using ACTION_CLICK on clickable parent.")
-            clickableParent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            clickableParent.recycle()
-            sendButton.recycle()
-            rootNode.recycle()
-            transitionToWaitingForExit()
             return
         }
 

@@ -47,6 +47,7 @@ class _SendingScreenState
   bool _waitingForWhatsApp = false;
   Completer<bool>? _whatsAppCompleter;
   StreamSubscription<bool>? _messageSentSubscription;
+  StreamSubscription<bool>? _messageFailedSubscription;
 
   bool _accessibilityEnabled = false;
   int _countdownSeconds = 0;
@@ -70,6 +71,12 @@ class _SendingScreenState
         _whatsAppCompleter!.complete(true);
       }
     });
+    _messageFailedSubscription = AccessibilityService.onMessageFailed.listen((_) {
+      if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+        _waitingForWhatsApp = false;
+        _whatsAppCompleter!.complete(false);
+      }
+    });
     
     requestPermission();
     _checkAccessibility();
@@ -86,6 +93,7 @@ class _SendingScreenState
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messageSentSubscription?.cancel();
+    _messageFailedSubscription?.cancel();
     if (_accessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
@@ -299,7 +307,7 @@ class _SendingScreenState
 
       // Always save to Excel after processing the customer, whether success or failure
       bool saved = await widget.excelService.saveCustomers(
-        notify: false,
+        notify: true,
       );
 
       if (!isSending || _sendingSessionId != sessionId || !mounted) break;

@@ -55,6 +55,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   bool _waitingForWhatsApp = false;
   Completer<bool>? _whatsAppCompleter;
   StreamSubscription<bool>? _messageSentSubscription;
+  StreamSubscription<bool>? _messageFailedSubscription;
   bool _isAccessibilityEnabled = false;
 
 
@@ -67,6 +68,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       if (AccessibilityService.activeSendingMode == 'receipt' && _isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
         _whatsAppCompleter!.complete(true);
+      }
+    });
+    _messageFailedSubscription = AccessibilityService.onMessageFailed.listen((_) {
+      if (AccessibilityService.activeSendingMode == 'receipt' && _isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+        _waitingForWhatsApp = false;
+        _whatsAppCompleter!.complete(false);
       }
     });
     _tabController = TabController(
@@ -116,6 +123,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messageSentSubscription?.cancel();
+    _messageFailedSubscription?.cancel();
     if (_isAccessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
@@ -361,6 +369,12 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
             currentCompleter.complete(true);
           }
         });
+        StreamSubscription? failSub;
+        failSub = AccessibilityService.onMessageFailed.listen((_) {
+          if (AccessibilityService.activeSendingMode == 'receipt' && !currentCompleter.isCompleted) {
+            currentCompleter.complete(false);
+          }
+        });
 
         bool whatsAppOpened = await WhatsAppService.sendImage(
           mobile: customer.mobile,
@@ -380,6 +394,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
         bool sent = await currentCompleter.future;
         timeoutTimer.cancel();
         await sub.cancel();
+        await failSub.cancel();
         _waitingForWhatsApp = false;
 
         if (sent) {

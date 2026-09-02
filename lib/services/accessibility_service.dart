@@ -14,10 +14,15 @@ class AccessibilityService {
   static final _messageSentController = StreamController<bool>.broadcast();
   static Stream<bool> get onMessageSent => _messageSentController.stream;
 
+  static final _messageFailedController = StreamController<bool>.broadcast();
+  static Stream<bool> get onMessageFailed => _messageFailedController.stream;
+
   static void initialize() {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'messageSent') {
         _messageSentController.add(true);
+      } else if (call.method == 'messageFailed') {
+        _messageFailedController.add(true);
       }
     });
   }

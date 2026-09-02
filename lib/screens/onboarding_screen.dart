@@ -115,7 +115,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             content: Text(e.message, style: const TextStyle(color: Colors.white70)),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(ctx),
+                onPressed: () async {
+                  Navigator.pop(ctx);
+                  await widget.settingsService.setHasAcceptedTerms(true);
+                  widget.onCompleted();
+                },
                 child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
               ),
               ElevatedButton(

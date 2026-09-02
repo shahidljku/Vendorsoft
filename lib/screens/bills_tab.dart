@@ -45,6 +45,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
   bool _isSingleSending = false;
   Customer? _singleSendingCustomer;
+  String _singleSendMode = 'none'; // 'none', 'bill', or 'receipt'
   StreamSubscription<bool>? _singleSendSubscription;
   Timer? _singleSendTimeout;
 
@@ -74,7 +75,9 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
     _singleSendTimeout = null;
     _singleSendSubscription?.cancel();
     _singleSendSubscription = null;
-    if (AccessibilityService.activeSendingMode == 'receipt') {
+    _singleSendingCustomer = null;
+    _singleSendMode = 'none';
+    if (AccessibilityService.activeSendingMode == 'receipt' || AccessibilityService.activeSendingMode == 'bill') {
       AccessibilityService.activeSendingMode = 'none';
     }
     if (mounted && _isSingleSending) {
@@ -100,13 +103,55 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
       _checkAccessibility();
       if (_isSingleSending && _singleSendingCustomer != null) {
         final targetCustomer = _singleSendingCustomer!;
+        final sendMode = _singleSendMode;
         Future.delayed(const Duration(milliseconds: 1000), () {
           if (mounted && _isSingleSending) {
             _cleanupSingleSend();
-            _showReceiptSentConfirmation(targetCustomer);
+            if (sendMode == 'bill') {
+              _showBillSentConfirmation(targetCustomer);
+            } else {
+              _showReceiptSentConfirmation(targetCustomer);
+            }
           }
         });
       }
+    }
+  }
+
+  Future<void> _showBillSentConfirmation(Customer customer) async {
+    if (!mounted || customer.status == 'Sent' || customer.status == 'Message Sent') return;
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).cardColor,
+        title: const Text('Bill Status', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Did you send the bill for ${customer.custName.isNotEmpty ? customer.custName : customer.mobile} in WhatsApp?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No / Cancelled', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
+            child: const Text('Yes, Sent', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true && mounted) {
+      setState(() {
+        customer.status = 'Sent';
+        customer.sentTime = DateTime.now().toIso8601String();
+      });
+      await widget.excelService.saveCustomers();
+      await CooldownService().recordMessageSent();
+      _calculateData();
     }
   }
 
@@ -784,27 +829,6 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
                   label: const Text('Send to WhatsApp', style: TextStyle(color: Color(0xFF25D366), fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
-              if (customer.status == 'Failed') ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () async {
-                      setState(() {
-                        customer.status = 'Pending';
-                        customer.lastError = '';
-                      });
-                      await widget.excelService.saveCustomers();
-                      if (context.mounted) Navigator.pop(context);
-                    },
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.orange),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child: const Text('Retry Sending Bill', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 16)),
-                  ),
-                ),
-              ],
               const SizedBox(height: 24),
             ],
           ),
@@ -853,6 +877,8 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
     // Prepare state and listener
     _cleanupSingleSend();
+    _singleSendingCustomer = customer;
+    _singleSendMode = 'bill';
     setState(() { _isSingleSending = true; });
 
     _singleSendSubscription = AccessibilityService.onMessageSent.listen((_) async {
@@ -865,6 +891,7 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
           customer.sentTime = DateTime.now().toIso8601String();
         });
         await widget.excelService.saveCustomers();
+        await CooldownService().recordMessageSent();
         _calculateData(); // Refresh counts and caches
       }
     });
@@ -1156,7 +1183,11 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
   void _runPreflightChecks(BuildContext context) async {
     List<Customer> pendingQueue = _cachedFilteredCustomers
-        .where((c) => c.status.toLowerCase() == 'pending' || c.status == 'waiting')
+        .where((c) {
+          String st = c.status.toLowerCase();
+          if (_statusFilter == 'Failed Bills') return st == 'failed';
+          return st == 'pending' || st == 'waiting';
+        })
         .toList();
 
     if (pendingQueue.isEmpty) {
@@ -1171,7 +1202,12 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
               Text('Nothing to Send', style: TextStyle(color: Colors.white)),
             ],
           ),
-          content: const Text('There are no pending bills in the current filter list.', style: TextStyle(color: Colors.white70)),
+          content: Text(
+            _statusFilter == 'Failed Bills'
+                ? 'There are no failed bills in the current filter list.'
+                : 'There are no pending bills in the current filter list.',
+            style: const TextStyle(color: Colors.white70),
+          ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK', style: TextStyle(color: Color(0xFF00E676)))),
           ],
@@ -1371,14 +1407,20 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    // Use customers that are pending AND match the current Collection Man filter
+    // Use customers that are pending (or failed, if in Failed Bills tab) AND match the current Collection Man filter
     List<Customer> pendingQueue = _cachedFilteredCustomers
-        .where((c) => c.status.toLowerCase() == 'pending' || c.status == 'waiting')
+        .where((c) {
+          String st = c.status.toLowerCase();
+          if (_statusFilter == 'Failed Bills') return st == 'failed';
+          return st == 'pending' || st == 'waiting';
+        })
         .toList();
 
     if (limit != null && limit > 0 && pendingQueue.length > limit) {
       pendingQueue = pendingQueue.take(limit).toList();
     }
+
+    if (!mounted) return;
 
     Navigator.push(
       context,
@@ -1390,7 +1432,9 @@ class _BillsTabState extends State<BillsTab> with WidgetsBindingObserver {
         ),
       ),
     ).then((_) {
-      if (mounted) setState(() {});
+      if (mounted) {
+        _calculateData();
+      }
     });
   }
 }

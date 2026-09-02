@@ -48,16 +48,25 @@ class MainActivity : FlutterActivity() {
             notificationManager.createNotificationChannel(channel)
         }
 
-        // ── Accessibility Message Sent Receiver ──
+        // ── Accessibility Message Sent/Failed Receiver ──
         messageSentReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == "com.vendorsoft.app.MESSAGE_SENT") {
-                    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
-                        .invokeMethod("messageSent", null)
+                when (intent?.action) {
+                    "com.vendorsoft.app.MESSAGE_SENT" -> {
+                        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
+                            .invokeMethod("messageSent", null)
+                    }
+                    "com.vendorsoft.app.MESSAGE_FAILED" -> {
+                        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
+                            .invokeMethod("messageFailed", null)
+                    }
                 }
             }
         }
-        val filter = IntentFilter("com.vendorsoft.app.MESSAGE_SENT")
+        val filter = IntentFilter().apply {
+            addAction("com.vendorsoft.app.MESSAGE_SENT")
+            addAction("com.vendorsoft.app.MESSAGE_FAILED")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(messageSentReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
