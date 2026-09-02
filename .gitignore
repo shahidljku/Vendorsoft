@@ -77,3 +77,10 @@ license_generator_source.txt
 node_modules/
 dist/
 backend/workers/scratch/
+
+# Test artifacts & recordings
+*.png
+*.mp4
+*.xml
+*.dump
+test_screen*.png
