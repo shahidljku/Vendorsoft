@@ -22,8 +22,79 @@ class ReceiptCardWidget extends StatelessWidget {
     return '$day/$month/$year';
   }
 
+  static String _formatWholeOrDecimal(String amt) {
+    String cleaned = amt.replaceAll('₹', '').replaceAll(',', '').trim();
+    if (cleaned.isEmpty) return '0';
+    final val = double.tryParse(cleaned);
+    if (val == null) return cleaned;
+    if (val == val.roundToDouble()) {
+      return val.toInt().toString();
+    }
+    return val.toStringAsFixed(2);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final double billAmt = double.tryParse(
+      customer.billAmount.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+    final double paidAmt = double.tryParse(
+      customer.amountPaid.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+    final double clBal = double.tryParse(
+      customer.clBalance.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+
+    String balanceLabel = 'બાકી';
+    String balanceValue = '₹0.00';
+    Color balanceColor = const Color(0xFF16A34A); // Green if clear
+    IconData balanceIcon = Icons.arrow_downward;
+
+    if (billAmt > 0) {
+      if (paidAmt > billAmt) {
+        // Surplus (જમા) - Green
+        balanceLabel = 'જમા';
+        balanceValue = '₹${(paidAmt - billAmt).toStringAsFixed(2)}';
+        balanceColor = const Color(0xFF16A34A);
+        balanceIcon = Icons.arrow_upward;
+      } else if (paidAmt < billAmt) {
+        // Due (બાકી) - Red
+        balanceLabel = 'બાકી';
+        balanceValue = '₹${(billAmt - paidAmt).toStringAsFixed(2)}';
+        balanceColor = const Color(0xFFDC2626);
+        balanceIcon = Icons.arrow_downward;
+      } else {
+        // Fully paid
+        balanceLabel = 'બાકી';
+        balanceValue = '₹0.00';
+        balanceColor = const Color(0xFF16A34A);
+        balanceIcon = Icons.arrow_downward;
+      }
+    } else if (clBal != 0.0) {
+      if (clBal > 0) {
+        // Due (બાકી) - Red
+        balanceLabel = 'બાકી';
+        balanceValue = '₹${clBal.toStringAsFixed(2)}';
+        balanceColor = const Color(0xFFDC2626);
+        balanceIcon = Icons.arrow_downward;
+      } else {
+        // Surplus (જમા) - Green
+        balanceLabel = 'જમા';
+        balanceValue = '₹${clBal.abs().toStringAsFixed(2)}';
+        balanceColor = const Color(0xFF16A34A);
+        balanceIcon = Icons.arrow_upward;
+      }
+    } else if (paidAmt > 0) {
+      balanceLabel = 'જમા';
+      balanceValue = '₹${paidAmt.toStringAsFixed(2)}';
+      balanceColor = const Color(0xFF16A34A);
+      balanceIcon = Icons.arrow_upward;
+    }
+
+    final String displayBillAmount = customer.billAmount.isNotEmpty
+        ? _formatWholeOrDecimal(customer.billAmount)
+        : (customer.amountPaid.isNotEmpty ? _formatWholeOrDecimal(customer.amountPaid) : '0');
+    final String displayPaidAmount = customer.amountPaid.isNotEmpty
+        ? _formatWholeOrDecimal(customer.amountPaid)
+        : '0';
+
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Material(
@@ -31,167 +102,270 @@ class ReceiptCardWidget extends StatelessWidget {
         child: Container(
           width: 450,
           color: Colors.white,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Top dark blue bar
-              Container(height: 16, color: const Color(0xFF02295B)),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 8),
-                    _buildDashedLine(),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'PAYMENT RECEIPT',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF02295B),
-                      ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildDashedLine(),
+                const SizedBox(height: 16),
+                const Text(
+                  'PAYMENT RECEIPT',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF02295B),
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _buildDashedLine(),
+                const SizedBox(height: 16),
+
+                // Top Rows (Party Name, Date, Receipt No.)
+                _buildReceiptRow(
+                  Icons.apartment,
+                  const Color(0xFF0091EA),
+                  'Party Name',
+                  customer.custName.isNotEmpty ? customer.custName : customer.mobile,
+                ),
+                const Divider(height: 16, thickness: 0.8, color: Color(0xFFEEEEEE)),
+                _buildReceiptRow(
+                  Icons.calendar_month,
+                  const Color(0xFF4CAF50),
+                  'Date',
+                  customer.paymentDate.isNotEmpty ? customer.paymentDate : _getCurrentDateFormatted(),
+                ),
+                const Divider(height: 16, thickness: 0.8, color: Color(0xFFEEEEEE)),
+                _buildReceiptRow(
+                  Icons.receipt,
+                  const Color(0xFF009688),
+                  'Receipt No.',
+                  customer.receiptNo.isNotEmpty ? customer.receiptNo : 'N/A',
+                ),
+                const SizedBox(height: 12),
+
+                // Highlighted Golden/Cream Box for Financial Details
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFDF2),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: const Color(0xFFF6C944),
+                      width: 1.5,
                     ),
-                    const SizedBox(height: 16),
-                    _buildDashedLine(),
-                    const SizedBox(height: 16),
-
-                    // Rows
-                    _buildReceiptRow(Icons.business, Colors.blue, 'Party Name', customer.custName.isNotEmpty ? customer.custName : customer.mobile),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    _buildReceiptRow(Icons.calendar_month, Colors.green, 'Date', customer.paymentDate.isNotEmpty ? customer.paymentDate : _getCurrentDateFormatted()),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    _buildReceiptRow(Icons.receipt, Colors.teal, 'Receipt No.', customer.receiptNo.isNotEmpty ? customer.receiptNo : 'N/A'),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    _buildReceiptRow(Icons.receipt_long, Colors.orange, 'Bill No.', customer.billNo.isNotEmpty ? customer.billNo : 'N/A'),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    _buildReceiptRow(Icons.currency_rupee, Colors.blueAccent, 'Payment', '₹${customer.amountPaid}'),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    if (customer.billAmount.isNotEmpty)
-                      _buildReceiptRow(Icons.monetization_on, Colors.deepOrange, 'Bill Amount', '₹${customer.billAmount}'),
-                    if (customer.billAmount.isNotEmpty)
-                      const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    // Surplus/Due indicator
-                    ...() {
-                      final double billAmt = double.tryParse(
-                        customer.billAmount.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
-                      final double paidAmt = double.tryParse(
-                        customer.amountPaid.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
-                      final List<Widget> rows = [];
-                      if (billAmt > 0 && paidAmt > 0 && paidAmt > billAmt) {
-                        rows.add(_buildReceiptRow(Icons.arrow_upward, Colors.green, 'Surplus', '₹${(paidAmt - billAmt).toStringAsFixed(2)}'));
-                        rows.add(const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)));
-                      } else if (billAmt > 0 && paidAmt > 0 && paidAmt < billAmt) {
-                        rows.add(_buildReceiptRow(Icons.arrow_downward, Colors.red, 'Due', '₹${(billAmt - paidAmt).toStringAsFixed(2)}'));
-                        rows.add(const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)));
-                      }
-                      return rows;
-                    }(),
-                    _buildReceiptRow(Icons.account_balance_wallet, Colors.purpleAccent, 'Mode', customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online'),
-                    const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
-                    _buildReceiptRow(Icons.assignment_ind, Colors.pinkAccent, 'Transaction', customer.transactionId.isNotEmpty ? customer.transactionId : 'N/A'),
-
-                    const SizedBox(height: 20),
-
-                    // Payment Status Box
-                    Container(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE9F5EB),
-                        borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildReceiptRow(
+                        Icons.receipt_long,
+                        const Color(0xFFF59E0B),
+                        'Bill No.',
+                        customer.billNo.isNotEmpty ? customer.billNo : 'N/A',
                       ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.verified_user, color: Color(0xFF1B9347), size: 40),
-                          const SizedBox(width: 16),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: const [
-                              Text('PAYMENT STATUS', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1B9347))),
-                              Text('SUCCESSFUL', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF1B9347))),
-                            ],
+                      const Divider(height: 16, thickness: 0.8, color: Color(0xFFF3E8C8)),
+                      _buildReceiptRow(
+                        Icons.monetization_on,
+                        const Color(0xFFF97316),
+                        'Bill Amount',
+                        '₹$displayBillAmount',
+                      ),
+                      const Divider(height: 16, thickness: 0.8, color: Color(0xFFF3E8C8)),
+                      _buildReceiptRow(
+                        Icons.currency_rupee,
+                        const Color(0xFF0EA5E9),
+                        'Payment',
+                        '₹$displayPaidAmount',
+                      ),
+                      const Divider(height: 16, thickness: 0.8, color: Color(0xFFF3E8C8)),
+                      _buildReceiptRow(
+                        balanceIcon,
+                        balanceColor,
+                        balanceLabel,
+                        balanceValue,
+                        labelColor: balanceColor,
+                        valueColor: balanceColor,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Bottom Rows (Mode, Transaction)
+                _buildReceiptRow(
+                  Icons.account_balance_wallet,
+                  const Color(0xFFA855F7),
+                  'Mode',
+                  customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online',
+                ),
+                const Divider(height: 16, thickness: 0.8, color: Color(0xFFEEEEEE)),
+                _buildReceiptRow(
+                  Icons.assignment_ind,
+                  const Color(0xFFEC4899),
+                  'Transaction',
+                  customer.transactionId.isNotEmpty ? customer.transactionId : 'N/A',
+                ),
+                const SizedBox(height: 20),
+
+                // Payment Status Box
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE9F5EB),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.verified_user, color: Color(0xFF1B9347), size: 40),
+                      const SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: const [
+                          Text(
+                            'PAYMENT STATUS',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1B9347),
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          Text(
+                            'SUCCESSFUL',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1B9347),
+                              letterSpacing: 0.5,
+                            ),
                           ),
                         ],
                       ),
-                    ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
 
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Thank you for your payment.',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Icon(Icons.spa, color: Colors.green.shade700, size: 24),
-                        ),
-                        Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
-                      ],
-                    ),
+                // Thank you message
+                const Text(
+                  'Thank you for your payment.',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF02295B),
+                  ),
+                ),
+                const SizedBox(height: 10),
 
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.receipt, color: Color(0xFF02295B), size: 36),
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              businessName.isNotEmpty ? businessName : 'Vendor Software',
-                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
-                            ),
-                          ),
-                        ),
-                      ],
+                // Leaf divider
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Icon(Icons.spa, color: Colors.green.shade700, size: 24),
                     ),
-
-                    const SizedBox(height: 20),
-                    _buildDashedLine(),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Developed by Imtiyaz Khanusia',
-                      style: TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic),
-                    ),
-                    const SizedBox(height: 8),
+                    Expanded(child: Divider(color: Colors.green.shade300, thickness: 1.5)),
                   ],
                 ),
-              ),
-              // Bottom dark blue bar
-              Container(height: 16, color: const Color(0xFF02295B)),
-            ],
+                const SizedBox(height: 22),
+
+                // Business Name
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.receipt, color: Color(0xFF02295B), size: 36),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          businessName.isNotEmpty ? businessName : 'ShahidAgency',
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF02295B),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _buildDashedLine(),
+                const SizedBox(height: 12),
+                const Text(
+                  'Developed by Imtiyaz Khanusia',
+                  style: TextStyle(fontSize: 14, color: Colors.grey, fontStyle: FontStyle.italic),
+                ),
+                const SizedBox(height: 4),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildReceiptRow(IconData icon, Color iconColor, String label, String value) {
+  Widget _buildReceiptRow(
+    IconData icon,
+    Color iconColor,
+    String label,
+    String value, {
+    Color? labelColor,
+    Color? valueColor,
+  }) {
+    final Color defaultColor = const Color(0xFF02295B);
+    final Color effectiveLabelColor = labelColor ?? defaultColor;
+    final Color effectiveValueColor = valueColor ?? defaultColor;
+
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(icon, color: iconColor, size: 28),
         const SizedBox(width: 16),
         SizedBox(
-          width: 120,
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
+          width: 125,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: effectiveLabelColor,
+                fontFamilyFallback: const ['Noto Sans Gujarati', 'sans-serif'],
+              ),
+            ),
           ),
         ),
-        const Text(
-          ':',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            ':',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: effectiveLabelColor,
+            ),
+          ),
         ),
         const SizedBox(width: 16),
         Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF02295B)),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: effectiveValueColor,
+                fontFamilyFallback: const ['Noto Sans Gujarati', 'sans-serif'],
+              ),
+            ),
           ),
         ),
       ],
@@ -201,7 +375,7 @@ class ReceiptCardWidget extends StatelessWidget {
   Widget _buildDashedLine() {
     return Row(
       children: List.generate(
-        40,
+        42,
         (index) => Expanded(
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 2),
