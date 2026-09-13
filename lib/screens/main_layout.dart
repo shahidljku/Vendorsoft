@@ -46,6 +46,17 @@ class MainLayout extends StatefulWidget {
 }
 
 class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
+  // ── CUSTOMERS TAB VISIBILITY TOGGLE ──
+  // To restore the Customers tab in the bottom bar and drawer, simply set this to true.
+  static const bool enableCustomersTab = false;
+
+  int get _dashboardIndex => 0;
+  int get _customersIndex => 1;
+  int get _billsIndex => enableCustomersTab ? 2 : 1;
+  int get _receiptsIndex => enableCustomersTab ? 3 : 2;
+  int get _reportsIndex => enableCustomersTab ? 4 : 3;
+  int get _settingsIndex => enableCustomersTab ? 5 : 4;
+
   int _currentIndex = 0;
   late final ExcelService _excelService = widget.excelService;
   String _queueInitialFilter = 'All';
@@ -698,7 +709,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   void _navigateToQueue(String filter) {
     setState(() {
-      _currentIndex = 2; // Bills tab index
+      _currentIndex = _billsIndex;
       _queueInitialFilter = filter;
       _navKey++;
     });
@@ -707,7 +718,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
   String _receiptInitialFilter = 'Pending';
   void _navigateToReceipts(String filter) {
     setState(() {
-      _currentIndex = 3; // Receipts tab index
+      _currentIndex = _receiptsIndex;
       _receiptInitialFilter = filter;
       _navKey++;
     });
@@ -715,11 +726,16 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
 
   String _customerInitialFilter = 'All';
   void _navigateToCustomers(String filter) {
-    setState(() {
-      _currentIndex = 1; // Customers tab index
-      _customerInitialFilter = filter;
-      _navKey++;
-    });
+    if (enableCustomersTab) {
+      setState(() {
+        _currentIndex = _customersIndex;
+        _customerInitialFilter = filter;
+        _navKey++;
+      });
+    } else {
+      // When Customers tab is hidden, smoothly route to Bills queue
+      _navigateToQueue(filter);
+    }
   }
 
   Widget _buildBody() {
@@ -734,12 +750,13 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
           onNavigateToCustomers: _navigateToCustomers,
           onFileImported: _loadFileName,
         ),
-        CustomersTab(
-          settingsService: widget.settingsService,
-          excelService: _excelService,
-          initialFilter: _customerInitialFilter,
-          navKey: _navKey,
-        ),
+        if (enableCustomersTab)
+          CustomersTab(
+            settingsService: widget.settingsService,
+            excelService: _excelService,
+            initialFilter: _customerInitialFilter,
+            navKey: _navKey,
+          ),
         BillsTab(
           settingsService: widget.settingsService,
           excelService: _excelService,
@@ -895,23 +912,24 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 title: const Text('Dashboard', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _currentIndex = 0);
+                  setState(() => _currentIndex = _dashboardIndex);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.people, color: Colors.white70),
-                title: const Text('Customers', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() => _currentIndex = 1);
-                },
-              ),
+              if (enableCustomersTab)
+                ListTile(
+                  leading: const Icon(Icons.people, color: Colors.white70),
+                  title: const Text('Customers', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    setState(() => _currentIndex = _customersIndex);
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.payment, color: Colors.white70),
                 title: const Text('Bills', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _currentIndex = 2);
+                  setState(() => _currentIndex = _billsIndex);
                 },
               ),
               ListTile(
@@ -919,7 +937,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 title: const Text('Receipts', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _currentIndex = 3);
+                  setState(() => _currentIndex = _receiptsIndex);
                 },
               ),
               ListTile(
@@ -927,7 +945,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 title: const Text('Reports', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _currentIndex = 4);
+                  setState(() => _currentIndex = _reportsIndex);
                 },
               ),
               ListTile(
@@ -935,7 +953,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 title: const Text('Settings', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  setState(() => _currentIndex = 5);
+                  setState(() => _currentIndex = _settingsIndex);
                 },
               ),
               const Divider(color: Colors.white24),
@@ -1029,7 +1047,7 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
           ),
         ),
         body: _buildBody(),
-        bottomNavigationBar: _currentIndex == 5 ? null : Theme(
+        bottomNavigationBar: _currentIndex == _settingsIndex ? null : Theme(
           data: Theme.of(context).copyWith(
             splashColor: Colors.transparent,
             highlightColor: Colors.transparent,
@@ -1048,28 +1066,29 @@ class _MainLayoutState extends State<MainLayout> with WidgetsBindingObserver {
                 _currentIndex = index;
               });
             },
-            items: const [
-              BottomNavigationBarItem(
+            items: [
+              const BottomNavigationBarItem(
                 icon: Icon(Icons.home_outlined),
                 activeIcon: Icon(Icons.home),
                 label: 'Dashboard',
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.people_outline),
-                activeIcon: Icon(Icons.people),
-                label: 'Customers',
-              ),
-              BottomNavigationBarItem(
+              if (enableCustomersTab)
+                const BottomNavigationBarItem(
+                  icon: Icon(Icons.people_outline),
+                  activeIcon: Icon(Icons.people),
+                  label: 'Customers',
+                ),
+              const BottomNavigationBarItem(
                 icon: Icon(Icons.payment_outlined),
                 activeIcon: Icon(Icons.payment),
                 label: 'Bills',
               ),
-              BottomNavigationBarItem(
+              const BottomNavigationBarItem(
                 icon: Icon(Icons.receipt_long_outlined),
                 activeIcon: Icon(Icons.receipt_long),
                 label: 'Receipts',
               ),
-              BottomNavigationBarItem(
+              const BottomNavigationBarItem(
                 icon: Icon(Icons.analytics_outlined),
                 activeIcon: Icon(Icons.analytics),
                 label: 'Reports',

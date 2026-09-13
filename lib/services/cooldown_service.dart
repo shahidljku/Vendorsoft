@@ -9,18 +9,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Designed to make sending patterns indistinguishable from a human vendor
 /// manually sending bills to customers one at a time.
 ///
-/// Batch: 15 messages per window → 25–40 min cooldown → repeat.
-/// Inter-message: 18–35s (with occasional extra pauses) to simulate human pace.
-/// Daily throughput: ~200–280 messages/day (enough for 500–700 over 2–3 days).
+/// Batch: 20–40 messages per window (randomized per cycle) → 25–40 min cooldown → repeat.
+/// Inter-message: 8–15s delay to simulate human pace.
 class CooldownService {
   static const _channel = MethodChannel('com.example.image_sender/cooldown');
   static const _keyCooldownEndTime = 'cooldownEndTime';
   static const _keySentTimestamps = 'sentTimestamps';
+  static const _keyCurrentBatchQuota = 'currentBatchQuota';
 
-  /// Max messages per batch before cooldown triggers.
-  /// 15 is conservative enough to avoid WhatsApp's burst detection,
-  /// while still being practical for month-end billing.
-  static const int _maxQuota = 15;
+  /// Min and max messages per batch before cooldown triggers.
+  /// Randomized per cycle (20–40) to avoid detectable patterns.
+  static const int _minBatchQuota = 20;
+  static const int _maxBatchQuota = 40;
 
   /// Rolling window duration (seconds). Timestamps older than this are pruned.
   /// Set to 40 minutes (2400s) to match the max cooldown duration.
@@ -30,6 +30,18 @@ class CooldownService {
 
   Future<void> _init() async {
     _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  /// Returns the current batch quota for this cycle.
+  /// Generates a random value (20–40) if none is set, and persists it.
+  Future<int> getCurrentBatchQuota() async {
+    await _init();
+    int? quota = _prefs!.getInt(_keyCurrentBatchQuota);
+    if (quota == null || quota < _minBatchQuota || quota > _maxBatchQuota) {
+      quota = _minBatchQuota + Random().nextInt(_maxBatchQuota - _minBatchQuota + 1);
+      await _prefs!.setInt(_keyCurrentBatchQuota, quota);
+    }
+    return quota;
   }
 
   /// Returns true if a full cooldown lock is currently active.
@@ -61,25 +73,27 @@ class CooldownService {
     return diff;
   }
 
-  /// Returns the number of messages sent (out of 15) in the current window.
+  /// Returns the number of messages sent in the current window.
   Future<int> getUsedQuota() async {
-    if (await isCooldownActive()) return _maxQuota;
+    final maxQuota = await getCurrentBatchQuota();
+    if (await isCooldownActive()) return maxQuota;
     await _pruneOldTimestamps();
     final timestamps = _getTimestamps();
-    return timestamps.length > _maxQuota ? _maxQuota : timestamps.length;
+    return timestamps.length > maxQuota ? maxQuota : timestamps.length;
   }
 
-  /// Returns the remaining available quota (out of 15) in the current window.
+  /// Returns the remaining available quota in the current window.
   Future<int> getRemainingQuota() async {
     if (await isCooldownActive()) return 0;
+    final maxQuota = await getCurrentBatchQuota();
     await _pruneOldTimestamps();
     final timestamps = _getTimestamps();
-    final remaining = _maxQuota - timestamps.length;
+    final remaining = maxQuota - timestamps.length;
     return remaining < 0 ? 0 : remaining;
   }
 
   /// Records a successfully sent message timestamp.
-  /// If total count in window hits 15, automatically triggers a full cooldown lock.
+  /// If total count in window hits the batch quota, automatically triggers a full cooldown lock.
   Future<void> recordMessageSent() async {
     await _init();
     await _pruneOldTimestamps();
@@ -87,18 +101,30 @@ class CooldownService {
     timestamps.add(DateTime.now().millisecondsSinceEpoch);
     await _saveTimestamps(timestamps);
 
-    if (timestamps.length >= _maxQuota) {
+    final maxQuota = await getCurrentBatchQuota();
+    if (timestamps.length >= maxQuota) {
       await startCooldown();
     }
   }
 
-  /// Triggers a full cooldown lock for a randomized duration of 25–40 minutes.
-  /// Shorter cooldowns (vs old 1h+) compensate for the smaller batch size,
-  /// maintaining similar throughput while spreading messages more evenly over time.
+  /// Returns the configured cooldown duration in minutes.
+  Future<int> getCooldownDurationMinutes() async {
+    await _init();
+    return _prefs!.getInt('cooldownMinutes') ?? 25;
+  }
+
+  /// Sets the cooldown duration in minutes.
+  Future<void> setCooldownDurationMinutes(int minutes) async {
+    await _init();
+    final safeMinutes = minutes < 1 ? 1 : minutes;
+    await _prefs!.setInt('cooldownMinutes', safeMinutes);
+  }
+
+  /// Triggers a full cooldown lock using the user-configured duration (default: 25 minutes).
   Future<void> startCooldown({int? testDurationSeconds}) async {
     await _init();
-    // Jitter: 1500 to 2400 seconds (25 to 40 minutes)
-    final durationSeconds = testDurationSeconds ?? (1500 + Random().nextInt(901));
+    final configuredMinutes = await getCooldownDurationMinutes();
+    final durationSeconds = testDurationSeconds ?? (configuredMinutes * 60);
     final endTime = DateTime.now().add(Duration(seconds: durationSeconds));
     await _prefs!.setInt(_keyCooldownEndTime, endTime.millisecondsSinceEpoch);
 
@@ -117,10 +143,14 @@ class CooldownService {
     }
   }
 
-  /// Clears the cooldown lock.
+  /// Clears the cooldown lock and allows immediate sending.
   Future<void> clearCooldown() async {
     await _init();
     await _prefs!.remove(_keyCooldownEndTime);
+    await _prefs!.remove(_keySentTimestamps);
+    // Generate a new random batch quota for the next cycle
+    final newQuota = _minBatchQuota + Random().nextInt(_maxBatchQuota - _minBatchQuota + 1);
+    await _prefs!.setInt(_keyCurrentBatchQuota, newQuota);
     try {
       await _channel.invokeMethod('cancelNotification');
     } on PlatformException {
@@ -168,18 +198,10 @@ class CooldownService {
 
   /// Generates a humanized inter-message delay (in milliseconds).
   ///
-  /// Base delay: 18–33 seconds (simulates human opening WhatsApp, previewing, sending, switching back).
-  /// Spike delay: 15% chance of an additional 5–15 second pause (simulates human briefly
-  /// checking a notification, scrolling back, or adjusting something between sends).
-  ///
-  /// Average: ~25 seconds. Range: 18–48 seconds.
-  /// This pacing makes 15 messages take ~6–8 minutes, which matches a real person's speed.
+  /// Delay: 8–15 seconds between each message send.
   static int getJitterDelayMilliseconds() {
     final rng = Random();
-    int base = 18000 + rng.nextInt(15001); // 18,000–33,000 ms (18–33 seconds)
-    // 15% chance of an additional "human distraction" pause
-    int spike = rng.nextDouble() < 0.15 ? (5000 + rng.nextInt(10001)) : 0; // 0 or 5,000–15,000 ms
-    return base + spike;
+    return 8000 + rng.nextInt(7001); // 8,000–15,000 ms (8–15 seconds)
   }
 }
 

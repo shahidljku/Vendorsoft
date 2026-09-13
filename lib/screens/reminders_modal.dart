@@ -50,8 +50,10 @@ class RemindersModal extends StatefulWidget {
 
 class _RemindersModalState extends State<RemindersModal> {
   List<Customer> _eligibleCustomers = [];
-  final Set<String> _selectedMobiles = {};
+  final Set<Customer> _selectedCustomers = {};
   String _template = '';
+  int _deliveryDelaySec = 3;
+  int _cooldownMinutes = 25;
   bool _isSending = false;
   int _currentIndex = 0;
   bool _waitingForWhatsApp = false;
@@ -141,10 +143,15 @@ class _RemindersModalState extends State<RemindersModal> {
   Future<void> _loadTemplateAndCheck() async {
     String tmpl = await widget.settingsService.getReminderTemplate();
     bool enabled = await AccessibilityService.isEnabled();
+    int delay = await widget.settingsService.getInterBillDelaySeconds();
+    if (delay < 3) delay = 3;
+    int cooldown = await CooldownService().getCooldownDurationMinutes();
     if (mounted) {
       setState(() {
         _template = tmpl;
         _isAccessibilityEnabled = enabled;
+        _deliveryDelaySec = delay;
+        _cooldownMinutes = cooldown;
       });
       _applyFilter();
     }
@@ -228,21 +235,31 @@ class _RemindersModalState extends State<RemindersModal> {
 
     setState(() {
       _eligibleCustomers = filtered;
-      _selectedMobiles.clear();
+      _selectedCustomers.clear();
       // Auto-select ALL unpaid users sent 15+ days ago right away
-      for (Customer c in filtered) {
-        _selectedMobiles.add(c.mobile);
-      }
+      _selectedCustomers.addAll(filtered);
     });
   }
 
   void _toggleSelection(Customer c) {
     if (_isSending) return;
     setState(() {
-      if (_selectedMobiles.contains(c.mobile)) {
-        _selectedMobiles.remove(c.mobile);
+      if (_selectedCustomers.contains(c)) {
+        _selectedCustomers.remove(c);
       } else {
-        _selectedMobiles.add(c.mobile);
+        _selectedCustomers.add(c);
+      }
+    });
+  }
+
+  void _toggleSelectAll() {
+    if (_isSending) return;
+    setState(() {
+      if (_selectedCustomers.length == _eligibleCustomers.length) {
+        _selectedCustomers.clear();
+      } else {
+        _selectedCustomers.clear();
+        _selectedCustomers.addAll(_eligibleCustomers);
       }
     });
   }
@@ -308,6 +325,291 @@ class _RemindersModalState extends State<RemindersModal> {
     );
   }
 
+  void _showDeliverySettingsDialog() {
+    int tempDelay = _deliveryDelaySec;
+    int tempCooldown = _cooldownMinutes;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF161B22),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (BuildContext bc) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(bc).viewInsets.bottom + MediaQuery.of(bc).viewPadding.bottom + 16,
+                left: 20,
+                right: 20,
+                top: 24,
+              ),
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Delivery Speed & Rest',
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // ── Per-Reminder Timer (Delay) ──
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.speed, color: Color(0xFF00E676), size: 16),
+                                SizedBox(width: 6),
+                                Text(
+                                  'Per-Reminder Timer (Delay)',
+                                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Min safe: 3s (Automatic sub-second jitter applied)',
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white10,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove, size: 18),
+                                color: tempDelay <= 3 ? Colors.grey.shade600 : Colors.white,
+                                padding: const EdgeInsets.all(4),
+                                constraints: const BoxConstraints(),
+                                tooltip: tempDelay <= 3 ? 'Cannot decrease below 3s for safety' : 'Decrease',
+                                onPressed: tempDelay <= 3
+                                    ? null
+                                    : () {
+                                        setSheetState(() {
+                                          if (tempDelay > 3) tempDelay--;
+                                        });
+                                      },
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                child: Text(
+                                  '${tempDelay}s',
+                                  style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add, size: 18),
+                                color: Colors.white,
+                                padding: const EdgeInsets.all(4),
+                                constraints: const BoxConstraints(),
+                                tooltip: 'Increase delay',
+                                onPressed: () {
+                                  setSheetState(() {
+                                    tempDelay++;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        _buildTimerPresetChip('3s (Fastest)', 3, tempDelay, () {
+                          setSheetState(() => tempDelay = 3);
+                        }),
+                        _buildTimerPresetChip('5s (Safe)', 5, tempDelay, () {
+                          setSheetState(() => tempDelay = 5);
+                        }),
+                        _buildTimerPresetChip('8s (Extra Caution)', 8, tempDelay, () {
+                          setSheetState(() => tempDelay = 8);
+                        }),
+                      ],
+                    ),
+
+                    const SizedBox(height: 16),
+                    const Divider(color: Colors.white12, height: 1),
+                    const SizedBox(height: 16),
+
+                    // ── Batch Cooldown Duration ──
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.hourglass_top, color: Colors.orangeAccent, size: 16),
+                                SizedBox(width: 6),
+                                Text(
+                                  'Cooldown Rest Period',
+                                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Pause between batches (Adjust up or down)',
+                              style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white10,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white12),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove, size: 18),
+                                color: tempCooldown <= 5 ? Colors.grey.shade600 : Colors.white,
+                                padding: const EdgeInsets.all(4),
+                                constraints: const BoxConstraints(),
+                                tooltip: 'Decrease cooldown',
+                                onPressed: tempCooldown <= 5
+                                    ? null
+                                    : () {
+                                        setSheetState(() {
+                                          if (tempCooldown > 5) tempCooldown -= 5;
+                                        });
+                                      },
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 8),
+                                child: Text(
+                                  '${tempCooldown}m',
+                                  style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add, size: 18),
+                                color: Colors.white,
+                                padding: const EdgeInsets.all(4),
+                                constraints: const BoxConstraints(),
+                                tooltip: 'Increase cooldown',
+                                onPressed: () {
+                                  setSheetState(() {
+                                    tempCooldown += 5;
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        _buildCooldownPresetChip('10 min', 10, tempCooldown, () {
+                          setSheetState(() => tempCooldown = 10);
+                        }),
+                        _buildCooldownPresetChip('20 min', 20, tempCooldown, () {
+                          setSheetState(() => tempCooldown = 20);
+                        }),
+                        _buildCooldownPresetChip('30 min', 30, tempCooldown, () {
+                          setSheetState(() => tempCooldown = 30);
+                        }),
+                        _buildCooldownPresetChip('45 min', 45, tempCooldown, () {
+                          setSheetState(() => tempCooldown = 45);
+                        }),
+                      ],
+                    ),
+
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00E676),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () async {
+                          await widget.settingsService.setInterBillDelaySeconds(tempDelay);
+                          await CooldownService().setCooldownDurationMinutes(tempCooldown);
+                          if (mounted) {
+                            setState(() {
+                              _deliveryDelaySec = tempDelay;
+                              _cooldownMinutes = tempCooldown;
+                            });
+                          }
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                        child: const Text('Save Settings', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildTimerPresetChip(String label, int value, int selectedValue, VoidCallback onTap) {
+    bool isSelected = selectedValue == value;
+    return ActionChip(
+      label: Text(label),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 11,
+      ),
+      backgroundColor: isSelected ? const Color(0xFF00E676) : const Color(0xFF21262D),
+      side: BorderSide(color: isSelected ? const Color(0xFF00E676) : Colors.white12),
+      onPressed: onTap,
+    );
+  }
+
+  Widget _buildCooldownPresetChip(String label, int value, int selectedValue, VoidCallback onTap) {
+    bool isSelected = selectedValue == value;
+    return ActionChip(
+      label: Text(label),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 11,
+      ),
+      backgroundColor: isSelected ? Colors.orangeAccent : const Color(0xFF21262D),
+      side: BorderSide(color: isSelected ? Colors.orangeAccent : Colors.white12),
+      onPressed: onTap,
+    );
+  }
+
   String _formatMessageForCustomer(Customer c) {
     String name = c.custName.isNotEmpty ? c.custName : c.mobile;
     String billNo = c.billNo.isNotEmpty ? c.billNo : 'N/A';
@@ -349,7 +651,7 @@ class _RemindersModalState extends State<RemindersModal> {
               ],
             ),
             content: Text(
-              'Batch limit reached (15 messages in the last 40 minutes).\n\nTo protect your free WhatsApp account from being banned, automatic sending is paused. Please wait $mins minutes before sending the next batch.',
+              'Batch limit reached.\n\nTo protect your free WhatsApp account from being banned, automatic sending is paused. Please wait $mins minutes before sending the next batch.',
               style: const TextStyle(color: Colors.white70),
             ),
             actions: [
@@ -365,7 +667,7 @@ class _RemindersModalState extends State<RemindersModal> {
       return;
     }
 
-    List<Customer> toSend = _eligibleCustomers.where((c) => _selectedMobiles.contains(c.mobile)).toList();
+    List<Customer> toSend = _eligibleCustomers.where((c) => _selectedCustomers.contains(c)).toList();
     if (toSend.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No customers selected!')));
@@ -404,6 +706,17 @@ class _RemindersModalState extends State<RemindersModal> {
     int sentCount = 0;
     while (_currentIndex < toSend.length && _isSending) {
       Customer c = toSend[_currentIndex];
+      if (c.mobile.trim().isEmpty) {
+        await LogService().writeLog(c.custName.isNotEmpty ? c.custName : c.billNo, "Payment Reminder Skipped - Missing phone number");
+        if (mounted) {
+          setState(() {
+            _selectedCustomers.remove(c);
+            _eligibleCustomers.remove(c);
+          });
+        }
+        _currentIndex++;
+        continue;
+      }
       try {
         String msg = _formatMessageForCustomer(c);
         if (_isAccessibilityEnabled) {
@@ -449,17 +762,17 @@ class _RemindersModalState extends State<RemindersModal> {
           // 2. Remove customer from the active list right away
           if (mounted) {
             setState(() {
-              _selectedMobiles.remove(c.mobile);
-              _eligibleCustomers.removeWhere((item) => item.mobile == c.mobile);
+              _selectedCustomers.remove(c);
+              _eligibleCustomers.remove(c);
             });
           }
 
-          // 3. Stop immediately if batch limit of 15 messages has been hit
+          // 3. Stop immediately if batch limit has been hit
           if (await CooldownService().isCooldownActive()) {
             await _checkCooldownTicker();
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Batch limit of 15 reached! Pausing automatically to prevent WhatsApp ban.'),
+                content: Text('Batch limit reached! Pausing automatically to prevent WhatsApp ban.'),
                 backgroundColor: Colors.orange,
                 duration: Duration(seconds: 5),
               ));
@@ -478,13 +791,11 @@ class _RemindersModalState extends State<RemindersModal> {
       });
 
       if (_currentIndex < toSend.length) {
-        int delayMs = await widget.settingsService.getDelayBetweenCustomers();
-        int baseSec = (delayMs / 1000).round();
-        // Minimal safe base delay: at least 4 seconds so WhatsApp does not flag speed
-        if (baseSec < 4) baseSec = 4;
-        // Jitter: add 0 to 3 seconds of randomized variation to avoid robotic pattern detection
-        int jitterSec = Random().nextInt(4);
-        int remainingSec = baseSec + jitterSec;
+        int baseSec = _deliveryDelaySec;
+        if (baseSec < 3) baseSec = 3;
+        int organicJitterMs = Random().nextInt(1200); // 0 to 1.2s organic jitter
+        int totalDelayMs = (baseSec * 1000) + organicJitterMs;
+        int remainingSec = (totalDelayMs / 1000).round();
         while (remainingSec > 0 && _isSending) {
           await Future.delayed(const Duration(seconds: 1));
           remainingSec--;
@@ -560,7 +871,7 @@ class _RemindersModalState extends State<RemindersModal> {
           ),
         ),
 
-        // Template Preview Bar
+        // Template Preview & Selection Control Bar
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           color: const Color(0xFF1E1E1E),
@@ -568,14 +879,41 @@ class _RemindersModalState extends State<RemindersModal> {
             children: [
               Expanded(
                 child: Text(
-                  'Template: Gujarati Gentle Reminder (${_eligibleCustomers.length} eligible)',
+                  '${_eligibleCustomers.length} eligible unpaid bills',
                   style: const TextStyle(color: Colors.grey, fontSize: 13),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               TextButton.icon(
+                onPressed: (_isSending || _eligibleCustomers.isEmpty) ? null : _toggleSelectAll,
+                icon: Icon(
+                  _selectedCustomers.length == _eligibleCustomers.length && _eligibleCustomers.isNotEmpty
+                      ? Icons.deselect
+                      : Icons.select_all,
+                  size: 16,
+                  color: const Color(0xFF00E676),
+                ),
+                label: Text(
+                  _selectedCustomers.length == _eligibleCustomers.length && _eligibleCustomers.isNotEmpty
+                      ? 'Clear All'
+                      : 'Select All',
+                  style: const TextStyle(color: Color(0xFF00E676), fontSize: 12),
+                ),
+              ),
+              const SizedBox(width: 4),
+              TextButton.icon(
+                onPressed: _isSending ? null : _showDeliverySettingsDialog,
+                icon: const Icon(Icons.tune, size: 16, color: Colors.orangeAccent),
+                label: Text(
+                  '${_deliveryDelaySec}s / ${_cooldownMinutes}m',
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                ),
+              ),
+              const SizedBox(width: 4),
+              TextButton.icon(
                 onPressed: _isSending ? null : _showEditTemplateDialog,
-                icon: const Icon(Icons.edit, size: 16, color: Color(0xFF00E676)),
-                label: const Text('Edit Template', style: TextStyle(color: Color(0xFF00E676))),
+                icon: const Icon(Icons.edit, size: 16, color: Colors.white70),
+                label: const Text('Template', style: TextStyle(color: Colors.white70, fontSize: 12)),
               ),
             ],
           ),
@@ -594,7 +932,7 @@ class _RemindersModalState extends State<RemindersModal> {
                   itemCount: _eligibleCustomers.length,
                   itemBuilder: (context, index) {
                     Customer c = _eligibleCustomers[index];
-                    bool isChecked = _selectedMobiles.contains(c.mobile);
+                    bool isChecked = _selectedCustomers.contains(c);
                     bool isStopped = c.yesNo.trim().toLowerCase() == 'no';
                     int? days = getDaysSinceReference(c);
 
@@ -696,7 +1034,7 @@ class _RemindersModalState extends State<RemindersModal> {
                     const SizedBox(width: 16),
                     Expanded(
                       child: Text(
-                        'Sending reminder $_currentIndex of ${_selectedMobiles.length}...',
+                        'Sending reminder ${_currentIndex + 1} of ${_selectedCustomers.length}...',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -713,7 +1051,7 @@ class _RemindersModalState extends State<RemindersModal> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Selected: ${_selectedMobiles.length} of ${_eligibleCustomers.length} eligible',
+                        '${_selectedCustomers.length}/${_eligibleCustomers.length} Selected',
                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -725,7 +1063,7 @@ class _RemindersModalState extends State<RemindersModal> {
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: (_selectedMobiles.isEmpty && !_isCooldownActive)
+                      onPressed: (_selectedCustomers.isEmpty && !_isCooldownActive)
                           ? null
                           : _startSendingReminders,
                       icon: Icon(_isCooldownActive ? Icons.timer : Icons.send, color: Colors.black, size: 18),

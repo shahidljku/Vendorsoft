@@ -133,6 +133,11 @@ class ExcelService extends ChangeNotifier {
           status = 'Pending';
         }
 
+        // Normalize common status variants from external software (e.g. VendSoft desktop)
+        if (status.trim().toLowerCase() == 'send') {
+          status = 'Sent';
+        }
+
         customers.add(
           Customer(
             mobile: row.isNotEmpty ? _cellToString(row[0]) : '',

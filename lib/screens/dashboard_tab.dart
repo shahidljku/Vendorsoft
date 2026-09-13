@@ -790,7 +790,7 @@ class _DashboardTabState extends State<DashboardTab> with SingleTickerProviderSt
           ],
         ),
         content: Text(
-          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 15 messages.
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches.
 
 Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),

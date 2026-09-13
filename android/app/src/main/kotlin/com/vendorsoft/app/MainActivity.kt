@@ -51,19 +51,37 @@ class MainActivity : FlutterActivity() {
         // ── Accessibility Message Sent/Failed Receiver ──
         messageSentReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                val txId = intent?.getStringExtra("transactionId")
+                val reason = intent?.getStringExtra("reason")
+                val args = HashMap<String, Any?>().apply {
+                    put("transactionId", txId)
+                    put("reason", reason)
+                }
                 when (intent?.action) {
-                    "com.vendorsoft.app.MESSAGE_SENT" -> {
+                    "com.vendorsoft.app.TRANSACTION_CONFIRMED", "com.vendorsoft.app.MESSAGE_SENT" -> {
                         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
-                            .invokeMethod("messageSent", null)
+                            .invokeMethod("messageSent", args)
                     }
-                    "com.vendorsoft.app.MESSAGE_FAILED" -> {
+                    "com.vendorsoft.app.TRANSACTION_FAILED", "com.vendorsoft.app.MESSAGE_FAILED" -> {
                         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
-                            .invokeMethod("messageFailed", null)
+                            .invokeMethod("messageFailed", args)
+                    }
+                    "com.vendorsoft.app.TRANSACTION_UNCERTAIN" -> {
+                        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
+                            .invokeMethod("messageUncertain", args)
+                    }
+                    "com.vendorsoft.app.CIRCUIT_BREAKER_TRIPPED" -> {
+                        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ACCESSIBILITY_CHANNEL)
+                            .invokeMethod("circuitBreakerTripped", args)
                     }
                 }
             }
         }
         val filter = IntentFilter().apply {
+            addAction("com.vendorsoft.app.TRANSACTION_CONFIRMED")
+            addAction("com.vendorsoft.app.TRANSACTION_FAILED")
+            addAction("com.vendorsoft.app.TRANSACTION_UNCERTAIN")
+            addAction("com.vendorsoft.app.CIRCUIT_BREAKER_TRIPPED")
             addAction("com.vendorsoft.app.MESSAGE_SENT")
             addAction("com.vendorsoft.app.MESSAGE_FAILED")
         }
@@ -181,10 +199,16 @@ class MainActivity : FlutterActivity() {
                     }
                     "setAutoSendMode" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
+                        val txId = call.argument<String>("transactionId")
+                        val custName = call.argument<String>("customerName")
+                        val custPhone = call.argument<String>("customerPhone")
                         if (enabled) {
+                            ImageSenderAccessibilityService.activeTransactionId = txId
+                            ImageSenderAccessibilityService.activeCustomerName = custName
+                            ImageSenderAccessibilityService.activeCustomerPhone = custPhone
                             ImageSenderAccessibilityService.autoSendEnabled = true
                         } else {
-                            ImageSenderAccessibilityService.abortExternal()
+                            ImageSenderAccessibilityService.abortExternal("Disabled via setAutoSendMode")
                         }
                         result.success(true)
                     }
@@ -431,6 +455,7 @@ class MainActivity : FlutterActivity() {
                 putExtra("jid", "$cleanNumber@s.whatsapp.net")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
 
             startActivity(intent)

@@ -28,6 +28,11 @@ class SettingsService extends ChangeNotifier {
   static const _keySavedCollectionMen = 'savedCollectionMen';
   static const _keySavedItems = 'savedItems';
   static const _keyHasAcceptedTerms = 'hasAcceptedTerms';
+  static const _keyInterBillDelaySeconds = 'interBillDelaySeconds';
+  static const _keyCooldownMinutes = 'cooldownMinutes';
+
+  /// Minimum safe inter-bill delay in seconds (enforced floor)
+  static const int minInterBillDelaySeconds = 3;
 
   SharedPreferences? _prefs;
 
@@ -80,6 +85,35 @@ class SettingsService extends ChangeNotifier {
   Future<void> setDelayBeforeNext(int value) async {
     await _init();
     await _prefs!.setInt(_keyDelayBeforeNext, value);
+  }
+
+  // ── Per-Image Send Timer (Seconds, Min 3s) ──
+
+  Future<int> getInterBillDelaySeconds() async {
+    await _init();
+    final val = _prefs!.getInt(_keyInterBillDelaySeconds) ?? minInterBillDelaySeconds;
+    return val < minInterBillDelaySeconds ? minInterBillDelaySeconds : val;
+  }
+
+  Future<void> setInterBillDelaySeconds(int seconds) async {
+    await _init();
+    final safeSeconds = seconds < minInterBillDelaySeconds ? minInterBillDelaySeconds : seconds;
+    await _prefs!.setInt(_keyInterBillDelaySeconds, safeSeconds);
+    notifyListeners();
+  }
+
+  // ── Cooldown Duration (Minutes) ──
+
+  Future<int> getCooldownMinutes() async {
+    await _init();
+    return _prefs!.getInt(_keyCooldownMinutes) ?? 25;
+  }
+
+  Future<void> setCooldownMinutes(int minutes) async {
+    await _init();
+    final safeMinutes = minutes < 1 ? 1 : minutes;
+    await _prefs!.setInt(_keyCooldownMinutes, safeMinutes);
+    notifyListeners();
   }
 
   // ── Logging ──

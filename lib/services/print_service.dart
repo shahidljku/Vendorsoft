@@ -608,6 +608,43 @@ class PrintService {
                         ],
                       ),
                     ),
+                    // Bill Amount + Surplus/Due indicator
+                    ...() {
+                      final double billAmt = double.tryParse(
+                        customer.billAmount.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+                      final double paidAmt = double.tryParse(
+                        (customer.amountPaid.isNotEmpty ? customer.amountPaid : customer.billAmount)
+                          .replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+                      final List<pw.Widget> rows = [];
+                      if (customer.billAmount.isNotEmpty) {
+                        rows.add(pw.SizedBox(height: 4));
+                        rows.add(pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text('Bill Amount:', style: const pw.TextStyle(fontSize: 8)),
+                            pw.Text('Rs. ${customer.billAmount}', style: const pw.TextStyle(fontSize: 8)),
+                          ],
+                        ));
+                      }
+                      if (billAmt > 0 && paidAmt > 0 && paidAmt > billAmt) {
+                        rows.add(pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text('Surplus:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                            pw.Text('Rs. ${(paidAmt - billAmt).toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                          ],
+                        ));
+                      } else if (billAmt > 0 && paidAmt > 0 && paidAmt < billAmt) {
+                        rows.add(pw.Row(
+                          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                          children: [
+                            pw.Text('Due:', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                            pw.Text('Rs. ${(billAmt - paidAmt).toStringAsFixed(2)}', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
+                          ],
+                        ));
+                      }
+                      return rows;
+                    }(),
                     pw.SizedBox(height: 6),
                     pw.Text('Payment Verified & Successful', style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold)),
                     pw.Divider(thickness: 1, height: 8),

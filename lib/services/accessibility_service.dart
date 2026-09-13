@@ -2,6 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+/// Payload for accessibility transaction events.
+class AccessibilityTransactionEvent {
+  final String? transactionId;
+  final String? reason;
+  const AccessibilityTransactionEvent({this.transactionId, this.reason});
+}
+
 /// Service for managing the Android Accessibility Service
 /// that auto-presses Send in WhatsApp.
 class AccessibilityService {
@@ -17,12 +24,40 @@ class AccessibilityService {
   static final _messageFailedController = StreamController<bool>.broadcast();
   static Stream<bool> get onMessageFailed => _messageFailedController.stream;
 
+  static final _txConfirmedController = StreamController<AccessibilityTransactionEvent>.broadcast();
+  static Stream<AccessibilityTransactionEvent> get onTransactionConfirmed => _txConfirmedController.stream;
+
+  static final _txFailedController = StreamController<AccessibilityTransactionEvent>.broadcast();
+  static Stream<AccessibilityTransactionEvent> get onTransactionFailed => _txFailedController.stream;
+
+  static final _txUncertainController = StreamController<AccessibilityTransactionEvent>.broadcast();
+  static Stream<AccessibilityTransactionEvent> get onTransactionUncertain => _txUncertainController.stream;
+
+  static final _circuitBreakerController = StreamController<AccessibilityTransactionEvent>.broadcast();
+  static Stream<AccessibilityTransactionEvent> get onCircuitBreakerTripped => _circuitBreakerController.stream;
+
   static void initialize() {
     _channel.setMethodCallHandler((call) async {
+      String? txId;
+      String? reason;
+      if (call.arguments is Map) {
+        final map = call.arguments as Map;
+        txId = map['transactionId'] as String?;
+        reason = map['reason'] as String?;
+      }
+      final event = AccessibilityTransactionEvent(transactionId: txId, reason: reason);
+
       if (call.method == 'messageSent') {
         _messageSentController.add(true);
+        _txConfirmedController.add(event);
       } else if (call.method == 'messageFailed') {
         _messageFailedController.add(true);
+        _txFailedController.add(event);
+      } else if (call.method == 'messageUncertain') {
+        _messageFailedController.add(false);
+        _txUncertainController.add(event);
+      } else if (call.method == 'circuitBreakerTripped') {
+        _circuitBreakerController.add(event);
       }
     });
   }
@@ -57,10 +92,18 @@ class AccessibilityService {
 
   /// Enables or disables auto-send mode.
   /// When enabled, the accessibility service will auto-press Send in WhatsApp.
-  static Future<void> setAutoSendMode(bool enabled) async {
+  static Future<void> setAutoSendMode(
+    bool enabled, {
+    String? transactionId,
+    String? customerName,
+    String? customerPhone,
+  }) async {
     try {
       await _channel.invokeMethod('setAutoSendMode', {
         'enabled': enabled,
+        'transactionId': transactionId,
+        'customerName': customerName,
+        'customerPhone': customerPhone,
       });
     } on PlatformException {
       // Silently fail

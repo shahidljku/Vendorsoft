@@ -1,16 +1,20 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/customer.dart';
+import '../models/bill_transaction.dart';
+import '../models/batch_summary.dart';
 import '../services/log_service.dart';
 import '../services/excel_service.dart';
 import '../services/whatsapp_service.dart';
 import '../services/accessibility_service.dart';
 import '../services/settings_service.dart';
 import '../services/cooldown_service.dart';
+import '../services/transaction_ledger.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 class SendingScreen extends StatefulWidget {
@@ -21,12 +25,15 @@ class SendingScreen extends StatefulWidget {
 
   final DateTime? scheduledStart;
 
+  final int? delaySeconds;
+
   const SendingScreen(
       {
         super.key,
         required this.queue,
         required this.excelService,
         this.scheduledStart,
+        this.delaySeconds,
       }
       );
 
@@ -49,6 +56,14 @@ class _SendingScreenState
   StreamSubscription<bool>? _messageSentSubscription;
   StreamSubscription<bool>? _messageFailedSubscription;
 
+  final TransactionLedger _ledger = TransactionLedger();
+  String? _activeTransactionId;
+  int _consecutiveFailures = 0;
+  StreamSubscription<AccessibilityTransactionEvent>? _txConfirmedSubscription;
+  StreamSubscription<AccessibilityTransactionEvent>? _txFailedSubscription;
+  StreamSubscription<AccessibilityTransactionEvent>? _txUncertainSubscription;
+  StreamSubscription<AccessibilityTransactionEvent>? _circuitBreakerSubscription;
+
   bool _accessibilityEnabled = false;
   int _countdownSeconds = 0;
   bool _useWhatsAppBusiness = false;
@@ -56,25 +71,95 @@ class _SendingScreenState
   bool _isWaitingForSchedule = false;
   LogService logService = LogService();
   int _sendingSessionId = 0;
+  bool _timeoutTriggered = false;
 
   /// Completer used to block the loop while paused.
   Completer<void>? _pauseCompleter;
+
+  int _confirmedCount = 0;
+  int _failedCount = 0;
+  int _uncertainCount = 0;
+  int _skippedCount = 0;
+  final DateTime _sessionStartTime = DateTime.now();
+  String? _haltReason;
+
+  BatchSummary _buildSummary([String? haltReason]) {
+    return BatchSummary(
+      totalQueued: widget.queue.length,
+      confirmed: _confirmedCount,
+      failed: _failedCount,
+      uncertain: _uncertainCount,
+      skipped: _skippedCount,
+      haltReason: haltReason ?? _haltReason,
+      duration: DateTime.now().difference(_sessionStartTime),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     AccessibilityService.initialize();
+    _ledger.initialize();
+
     _messageSentSubscription = AccessibilityService.onMessageSent.listen((_) {
       if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
+        _consecutiveFailures = 0;
         _whatsAppCompleter!.complete(true);
       }
     });
+
     _messageFailedSubscription = AccessibilityService.onMessageFailed.listen((_) {
       if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp && _whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
         _waitingForWhatsApp = false;
+        _consecutiveFailures++;
         _whatsAppCompleter!.complete(false);
+      }
+    });
+
+    _txConfirmedSubscription = AccessibilityService.onTransactionConfirmed.listen((event) {
+      if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp) {
+        if (_activeTransactionId != null && event.transactionId != null && event.transactionId != _activeTransactionId) {
+          logService.writeLog("SECURITY", "Ignored mismatched confirmation: ${event.transactionId} != $_activeTransactionId");
+          return;
+        }
+        _waitingForWhatsApp = false;
+        _consecutiveFailures = 0;
+        if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+          _whatsAppCompleter!.complete(true);
+        }
+      }
+    });
+
+    _txFailedSubscription = AccessibilityService.onTransactionFailed.listen((event) {
+      if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp) {
+        _waitingForWhatsApp = false;
+        _consecutiveFailures++;
+        if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+          _whatsAppCompleter!.complete(false);
+        }
+      }
+    });
+
+    _txUncertainSubscription = AccessibilityService.onTransactionUncertain.listen((event) {
+      if (AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp) {
+        _waitingForWhatsApp = false;
+        _consecutiveFailures++;
+        if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+          _whatsAppCompleter!.complete(false);
+        }
+      }
+    });
+
+    _circuitBreakerSubscription = AccessibilityService.onCircuitBreakerTripped.listen((event) {
+      if (isSending) {
+        _haltReason = event.reason ?? "Circuit Breaker Tripped";
+        setState(() {
+          isSending = false;
+        });
+        WakelockPlus.disable();
+        _showCircuitBreakerDialog(event.reason ?? "Abnormal WhatsApp condition detected");
       }
     });
     
@@ -83,10 +168,16 @@ class _SendingScreenState
     _loadSettings();
   }
 
+  int _interBillDelaySeconds = 3;
+
   Future<void> _loadSettings() async {
     final settingsService = SettingsService();
     _useWhatsAppBusiness = await settingsService.getUseWhatsAppBusiness();
-
+    if (widget.delaySeconds != null) {
+      _interBillDelaySeconds = widget.delaySeconds! < 3 ? 3 : widget.delaySeconds!;
+    } else {
+      _interBillDelaySeconds = await settingsService.getInterBillDelaySeconds();
+    }
   }
 
   @override
@@ -94,6 +185,10 @@ class _SendingScreenState
     WidgetsBinding.instance.removeObserver(this);
     _messageSentSubscription?.cancel();
     _messageFailedSubscription?.cancel();
+    _txConfirmedSubscription?.cancel();
+    _txFailedSubscription?.cancel();
+    _txUncertainSubscription?.cancel();
+    _circuitBreakerSubscription?.cancel();
     if (_accessibilityEnabled) {
       AccessibilityService.setAutoSendMode(false);
     }
@@ -108,19 +203,23 @@ class _SendingScreenState
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && AccessibilityService.activeSendingMode == 'bill' && isSending && _waitingForWhatsApp) {
-      _waitingForWhatsApp = false;
 
       // The accessibility broadcast receiver should have completed the completer already.
       // If it hasn't, and accessibility is enabled, we still wait or assume sent as a fallback.
       // For manual mode, we definitely show the dialog.
       if (!_accessibilityEnabled) {
-        // Manual mode: show confirmation dialog
+        // Manual mode: show confirmation dialog immediately
+        _waitingForWhatsApp = false;
         _showSendConfirmationDialog();
       } else {
-        // Fallback for accessibility if broadcast failed or user cancelled/encountered error
+        // Accessibility mode: DO NOT set _waitingForWhatsApp = false here!
+        // The onMessageSent listener needs it to be true to process callbacks
+        // that may arrive slightly after app resume on slow phones.
         if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
           Future.delayed(const Duration(milliseconds: 1500), () {
             if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+              // Callback didn't arrive in 1.5s — close the listener window and ask user
+              _waitingForWhatsApp = false;
               _showSendConfirmationDialog();
             }
           });
@@ -157,6 +256,35 @@ class _SendingScreenState
     );
 
     _whatsAppCompleter?.complete(result ?? false);
+  }
+
+  void _showCircuitBreakerDialog(String reason) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.red, size: 28),
+            SizedBox(width: 8),
+            Expanded(child: Text('Safety Circuit Breaker Tripped', style: TextStyle(fontWeight: FontWeight.bold))),
+          ],
+        ),
+        content: Text(
+          'Sending was automatically paused for account safety:\n\n'
+          'Reason: $reason\n\n'
+          'The queue has been safely halted. Please inspect WhatsApp manually before resuming.',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Acknowledge'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> requestPermission() async {
@@ -210,11 +338,22 @@ class _SendingScreenState
 
 
       Customer customer = widget.queue[currentIndex];
+      final billId = customer.billNo.isNotEmpty ? customer.billNo : 'BILL_${customer.custNo}';
+      final billingPeriod = customer.monthNm.isNotEmpty ? customer.monthNm : DateTime.now().month.toString();
+
+      // Invariant: If this bill is already CONFIRMED in the ledger, skip automatically
+      if (_ledger.isBillConfirmed(customer.custNo, billId, billingPeriod)) {
+        await logService.writeLog(customer.mobile, "Skipped - Already CONFIRMED for $billingPeriod");
+        _skippedCount++;
+        currentIndex++;
+        continue;
+      }
 
       setState(() {
         customer.status = "Processing";
       });
 
+      BillTransaction? currentTx;
       try {
         // Check if image file exists before sending
         File imageFile = File(customer.resolvedImagePath);
@@ -228,10 +367,25 @@ class _SendingScreenState
            throw Exception("please enter 10 digit number");
         }
 
+        // Stage immutable transaction in ledger
+        currentTx = await _ledger.stageTransaction(
+          customer: customer,
+          billId: billId,
+          billingPeriod: billingPeriod,
+        );
+        _activeTransactionId = currentTx.transactionId;
+
         // ── WhatsApp Integration ──
         if (_accessibilityEnabled) {
-          await AccessibilityService.setAutoSendMode(true);
+          await AccessibilityService.setAutoSendMode(
+            true,
+            transactionId: currentTx.transactionId,
+            customerName: customer.custName,
+            customerPhone: customer.mobile,
+          );
         }
+
+        await _ledger.markInFlight(currentTx.transactionId);
 
         bool whatsAppOpened = await WhatsAppService.sendImage(
           mobile: customer.mobile,
@@ -251,8 +405,10 @@ class _SendingScreenState
         });
 
         // Add timeout to prevent infinite hang if Accessibility Service fails
+        _timeoutTriggered = false;
         Timer timeoutTimer = Timer(const Duration(seconds: 45), () {
           if (_whatsAppCompleter != null && !_whatsAppCompleter!.isCompleted) {
+            _timeoutTriggered = true;
             _whatsAppCompleter!.complete(false);
           }
         });
@@ -268,6 +424,9 @@ class _SendingScreenState
         }
 
         if (wasSent) {
+          await _ledger.markConfirmed(currentTx.transactionId);
+          _confirmedCount++;
+          _consecutiveFailures = 0;
           setState(() {
             customer.status = "Sent";
             customer.sentTime = DateTime.now().toString();
@@ -275,34 +434,111 @@ class _SendingScreenState
           await logService.writeLog(customer.mobile, "Sent");
           await CooldownService().recordMessageSent();
           if (await CooldownService().isCooldownActive()) {
+            _haltReason = "Cooldown limit reached";
             if (mounted) {
               setState(() {
                 isSending = false;
               });
-              Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cooldown limit reached (15 messages). Pausing sending.')),
+                const SnackBar(content: Text('Batch limit reached. Pausing sending for cooldown.')),
               );
             }
             WakelockPlus.disable();
             break;
           }
+        } else if (_timeoutTriggered && mounted) {
+          // Timeout caused the failure — the message may have actually been sent.
+          // Ask the user before marking as Failed.
+          _timeoutTriggered = false;
+          final userConfirmed = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Message Status'),
+              content: const Text(
+                'Could not automatically detect if the message was sent. '
+                'Did you send it in WhatsApp?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('No / Cancelled'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('Yes, Sent'),
+                ),
+              ],
+            ),
+          );
+          if (userConfirmed == true) {
+            await _ledger.markConfirmed(currentTx.transactionId, diagnosticNote: "User confirmed sent via dialog");
+            _confirmedCount++;
+            _consecutiveFailures = 0;
+            setState(() {
+              customer.status = "Sent";
+              customer.sentTime = DateTime.now().toString();
+            });
+            await logService.writeLog(customer.mobile, "Sent (User Confirmed)");
+            await CooldownService().recordMessageSent();
+            if (await CooldownService().isCooldownActive()) {
+              _haltReason = "Cooldown limit reached";
+              if (mounted) {
+                setState(() {
+                  isSending = false;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Batch limit reached. Pausing sending for cooldown.')),
+                );
+              }
+              WakelockPlus.disable();
+              break;
+            }
+          } else {
+            await _ledger.markUncertain(currentTx.transactionId, reason: "User reported not sent after timeout");
+            _uncertainCount++;
+            throw Exception("User confirmed not sent in WhatsApp");
+          }
         } else {
+          await _ledger.markUncertain(currentTx.transactionId, reason: "Cancelled or uncertain in WhatsApp");
+          _uncertainCount++;
           throw Exception("User cancelled in WhatsApp");
         }
 
       } on WhatsAppException catch (e) {
+        if (currentTx != null) {
+          await _ledger.markFailed(currentTx.transactionId, error: e.message);
+        }
+        _failedCount++;
+        _consecutiveFailures++;
         setState(() {
           customer.status = "Failed";
           customer.lastError = e.message;
         });
         await logService.writeLog(customer.mobile, "Failed - ${e.message}");
       } catch (e) {
+        if (currentTx != null) {
+          await _ledger.markFailed(currentTx.transactionId, error: e.toString());
+        }
+        _failedCount++;
+        _consecutiveFailures++;
         setState(() {
           customer.status = "Failed";
           customer.lastError = e.toString();
         });
         await logService.writeLog(customer.mobile, "Failed - $e");
+      }
+
+      // Circuit Breaker: Halt queue on 2 consecutive failures
+      if (_consecutiveFailures >= 2) {
+        _haltReason = "Two consecutive transaction failures (Circuit Breaker)";
+        if (mounted) {
+          setState(() {
+            isSending = false;
+          });
+        }
+        WakelockPlus.disable();
+        _showCircuitBreakerDialog("Two consecutive transaction failures. Queue halted automatically to protect your WhatsApp account.");
+        break;
       }
 
       // Always save to Excel after processing the customer, whether success or failure
@@ -323,10 +559,9 @@ class _SendingScreenState
       // Advance to next customer
       currentIndex++;
 
-      // Fetch dynamic jitter delay (5 to 10 seconds)
+      // Calm adaptive settling interval between bills (user configured, minimum 3 seconds)
       if (currentIndex < widget.queue.length && isSending && _sendingSessionId == sessionId) {
-        int delayMs = CooldownService.getJitterDelayMilliseconds();
-        int remainingSeconds = (delayMs / 1000).round();
+        int remainingSeconds = _interBillDelaySeconds;
         
         while (remainingSeconds > 0 && isSending && _sendingSessionId == sessionId) {
           if (isPaused) {
@@ -343,6 +578,12 @@ class _SendingScreenState
           
           await Future.delayed(const Duration(seconds: 1));
           remainingSeconds--;
+        }
+
+        // Sub-second organic jitter (0 to 1,200ms) to break the robotic metronome pattern
+        if (isSending && _sendingSessionId == sessionId) {
+          final jitterMs = Random().nextInt(1201);
+          await Future.delayed(Duration(milliseconds: jitterMs));
         }
         
         if (mounted) {
@@ -364,19 +605,16 @@ class _SendingScreenState
       }
       AccessibilityService.activeSendingMode = 'none';
 
+      _haltReason = "Completed";
       setState(() {
         isSending = false;
       });
       widget.excelService.triggerNotify();
 
       if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'Queue Completed',
-            ),
+            content: Text('Queue Completed'),
           ),
         );
       }
@@ -506,34 +744,24 @@ class _SendingScreenState
   @override
   Widget build(BuildContext context) {
     if (widget.queue.isEmpty) {
-
       return Scaffold(
-
         appBar: AppBar(
           title: const Text("Sending"),
-        ),
-
-        body: const Center(
-
-          child: Text(
-
-            "No Customers",
-
-            style: TextStyle(
-              fontSize: 20,
-            ),
-
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.pop(context, _buildSummary()),
           ),
-
         ),
-
+        body: const Center(
+          child: Text("No Customers", style: TextStyle(fontSize: 20)),
+        ),
       );
-
     }
     if (currentIndex >= widget.queue.length) {
-      int sentCount = widget.queue.where((c) => c.status == 'Sent').length;
-      int failedCount = widget.queue.where((c) => c.status == 'Failed').length;
-      int skippedCount = widget.queue.length - sentCount - failedCount;
+      int sentCount = _confirmedCount;
+      int failedCount = _failedCount;
+      int uncertainCount = _uncertainCount;
+      int skippedCount = _skippedCount;
 
       return Scaffold(
         backgroundColor: const Color(0xFF0B1014),
@@ -541,6 +769,10 @@ class _SendingScreenState
           title: const Text('Sending Summary'),
           centerTitle: true,
           elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.pop(context, _buildSummary("Completed")),
+          ),
         ),
         body: Center(
           child: SingleChildScrollView(
@@ -563,9 +795,9 @@ class _SendingScreenState
                   ),
                 ),
                 const SizedBox(height: 24),
-                const Text(
-                  'Queue Completed',
-                  style: TextStyle(
+                Text(
+                  _haltReason != null && _haltReason != "Completed" ? 'Batch Halted' : 'Queue Completed',
+                  style: const TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
@@ -574,10 +806,32 @@ class _SendingScreenState
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Processed ${widget.queue.length} customers',
+                  'Processed $currentIndex of ${widget.queue.length} customers',
                   style: const TextStyle(fontSize: 16, color: Colors.white70),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+                if (_haltReason != null && _haltReason != "Completed")
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 20),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.shield_outlined, color: Colors.red, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Reason: $_haltReason',
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 Card(
                   color: const Color(0xFF161B22),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -588,6 +842,10 @@ class _SendingScreenState
                         _buildSummaryRow('Successfully Sent', sentCount.toString(), const Color(0xFF00E676), Icons.check_circle),
                         const Divider(color: Colors.white12, height: 24),
                         _buildSummaryRow('Failed', failedCount.toString(), Colors.red, Icons.error),
+                        if (uncertainCount > 0) ...[
+                          const Divider(color: Colors.white12, height: 24),
+                          _buildSummaryRow('Uncertain / Quarantined', uncertainCount.toString(), Colors.orange, Icons.warning_amber),
+                        ],
                         if (skippedCount > 0) ...[
                           const Divider(color: Colors.white12, height: 24),
                           _buildSummaryRow('Skipped', skippedCount.toString(), Colors.grey, Icons.skip_next),
@@ -602,7 +860,7 @@ class _SendingScreenState
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () => Navigator.pop(context, _buildSummary("Completed")),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -642,14 +900,27 @@ class _SendingScreenState
     widget.queue[currentIndex];
 
 
-    return Scaffold(
-
-      appBar: AppBar(
-
-        title:
-        const Text("Sending"),
-
-        actions: [
+    return PopScope(
+      canPop: !isSending,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && isSending) {
+          stopSending();
+          Navigator.pop(context, _buildSummary("Cancelled by user"));
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text("Sending"),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              if (isSending) {
+                stopSending();
+              }
+              Navigator.pop(context, _buildSummary("Cancelled by user"));
+            },
+          ),
+          actions: [
           // Accessibility toggle indicator
           IconButton(
             icon: Icon(
@@ -982,10 +1253,9 @@ class _SendingScreenState
         ),
 
       ),
-
-    );
-
-  }
+    ),
+  );
+}
 
   Color _getStatusColor(String status) {
     switch (status) {

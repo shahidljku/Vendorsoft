@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:screenshot/screenshot.dart';
@@ -44,13 +45,6 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   List<Customer> _submittedReceipts = [];
   final ScreenshotController _screenshotController = ScreenshotController();
 
-  String _getCurrentDateFormatted() {
-    final now = DateTime.now();
-    final day = now.day.toString().padLeft(2, '0');
-    final month = now.month.toString().padLeft(2, '0');
-    final year = now.year.toString();
-    return '$day/$month/$year';
-  }
   late TabController _tabController;
   bool _waitingForWhatsApp = false;
   Completer<bool>? _whatsAppCompleter;
@@ -223,10 +217,20 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
   void _showStartOptions(BuildContext context) async {
     int defaultLimit = await widget.settingsService.getDefaultSendLimit();
     int remainingQuota = await CooldownService().getRemainingQuota();
+    int currentDelaySeconds = await widget.settingsService.getInterBillDelaySeconds();
+    if (currentDelaySeconds < 3) currentDelaySeconds = 3;
+    int currentCooldownMinutes = await CooldownService().getCooldownDurationMinutes();
     if (defaultLimit > remainingQuota && remainingQuota > 0) {
       defaultLimit = remainingQuota;
     }
-    TextEditingController limitCtrl = TextEditingController(text: defaultLimit.toString());
+
+    int pendingCount = _pendingReceipts.length;
+    int initialLimit = defaultLimit > 0 ? defaultLimit : (pendingCount > 0 ? (pendingCount < 5 ? pendingCount : 5) : 5);
+    if (initialLimit > remainingQuota && remainingQuota > 0) {
+      initialLimit = remainingQuota;
+    }
+
+    TextEditingController limitCtrl = TextEditingController(text: initialLimit.toString());
     bool setAsDefault = false;
     
     if (!context.mounted) return;
@@ -234,23 +238,84 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Theme.of(context).cardColor,
+      backgroundColor: const Color(0xFF161B22),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (BuildContext bc) {
+        int selectedDelay = currentDelaySeconds;
+        int selectedCooldown = currentCooldownMinutes;
+
         return Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(bc).viewInsets.bottom),
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(bc).viewInsets.bottom + MediaQuery.of(bc).viewPadding.bottom + 16,
+            left: 20,
+            right: 20,
+            top: 24,
+          ),
           child: SafeArea(
             child: StatefulBuilder(
               builder: (context, setSheetState) {
-                return Wrap(
-                  children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: TextField(
+                void selectPreset(int count) {
+                  int target = count;
+                  if (target > remainingQuota && remainingQuota > 0) target = remainingQuota;
+                  setSheetState(() {
+                    limitCtrl.text = target.toString();
+                  });
+                }
+
+                int allTarget = pendingCount;
+                if (allTarget > remainingQuota && remainingQuota > 0) allTarget = remainingQuota;
+
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Select Batch Size',
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '$pendingCount Pending',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Remaining quota: $remainingQuota receipts',
+                        style: const TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Presets
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _buildPresetChip('Next 5', 5, limitCtrl, () => selectPreset(5)),
+                          _buildPresetChip('Next 10', 10, limitCtrl, () => selectPreset(10)),
+                          _buildPresetChip('Next 20', 20, limitCtrl, () => selectPreset(20)),
+                          _buildPresetChip('All ($allTarget)', allTarget, limitCtrl, () => selectPreset(allTarget)),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      TextField(
                         controller: limitCtrl,
                         keyboardType: TextInputType.number,
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
-                          labelText: 'Send Limit (Max $remainingQuota)',
+                          labelText: 'Custom Batch Limit (Max $remainingQuota)',
                           labelStyle: const TextStyle(color: Colors.grey),
                           enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
                           focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
@@ -258,47 +323,247 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                         onChanged: (val) {
                           setSheetState(() {
                             int? parsed = int.tryParse(val);
-                            if (parsed != null && parsed > remainingQuota) {
+                            if (parsed != null && parsed > remainingQuota && remainingQuota > 0) {
                               limitCtrl.text = remainingQuota.toString();
                               limitCtrl.selection = TextSelection.fromPosition(TextPosition(offset: limitCtrl.text.length));
                             }
                           });
                         },
                       ),
-                    ),
-                    CheckboxListTile(
-                      title: const Text('Set this limit as default', style: TextStyle(color: Colors.white70)),
-                      value: setAsDefault,
-                      activeColor: const Color(0xFF00E676),
-                      checkColor: Colors.black,
-                      onChanged: (val) {
-                        setSheetState(() {
-                          setAsDefault = val ?? false;
-                        });
-                      },
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                    Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: limitCtrl.text.isEmpty ? Colors.grey.shade800 : const Color(0xFF00E676),
-                        borderRadius: BorderRadius.circular(8),
+
+                      const SizedBox(height: 16),
+                      const Divider(color: Colors.white12, height: 1),
+                      const SizedBox(height: 16),
+
+                      // ── Per-Receipt Send Timer (Min 3s floor, can only increase) ──
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.speed, color: Color(0xFF00E676), size: 16),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Per-Receipt Timer (Delay)',
+                                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Min safe: 3s (Increase if WhatsApp flags)',
+                                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.remove, size: 18),
+                                  color: selectedDelay <= 3 ? Colors.grey.shade600 : Colors.white,
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: selectedDelay <= 3 ? 'Cannot decrease below 3s for safety' : 'Decrease',
+                                  onPressed: selectedDelay <= 3
+                                      ? null
+                                      : () {
+                                          setSheetState(() {
+                                            if (selectedDelay > 3) selectedDelay--;
+                                          });
+                                        },
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  child: Text(
+                                    '${selectedDelay}s',
+                                    style: const TextStyle(color: Color(0xFF00E676), fontWeight: FontWeight.bold, fontSize: 15),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.add, size: 18),
+                                  color: Colors.white,
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: 'Increase delay',
+                                  onPressed: () {
+                                    setSheetState(() {
+                                      selectedDelay++;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      child: ListTile(
-                        leading: Icon(Icons.play_arrow, color: limitCtrl.text.isEmpty ? Colors.grey : Colors.black),
-                        title: Text('Start Now', style: TextStyle(color: limitCtrl.text.isEmpty ? Colors.grey : Colors.black, fontWeight: FontWeight.bold)),
-                        onTap: limitCtrl.text.isEmpty ? null : () async {
-                          int limit = int.tryParse(limitCtrl.text) ?? defaultLimit;
-                          if (limit > remainingQuota) limit = remainingQuota;
-                          if (setAsDefault) {
-                            await widget.settingsService.setDefaultSendLimit(limit);
-                          }
-                          if (context.mounted) Navigator.pop(context);
-                          _startSending(limit);
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          _buildTimerPresetChip('3s (Fastest)', 3, selectedDelay, () {
+                            setSheetState(() => selectedDelay = 3);
+                          }),
+                          _buildTimerPresetChip('5s (Safe)', 5, selectedDelay, () {
+                            setSheetState(() => selectedDelay = 5);
+                          }),
+                          _buildTimerPresetChip('8s (Extra Caution)', 8, selectedDelay, () {
+                            setSheetState(() => selectedDelay = 8);
+                          }),
+                        ],
+                      ),
+
+                      const SizedBox(height: 16),
+                      const Divider(color: Colors.white12, height: 1),
+                      const SizedBox(height: 16),
+
+                      // ── Batch Cooldown Duration (Can increase / decrease) ──
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.hourglass_top, color: Colors.orangeAccent, size: 16),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    'Cooldown Period',
+                                    style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Pause between batches (Adjust up or down)',
+                                style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.remove, size: 18),
+                                  color: selectedCooldown <= 5 ? Colors.grey.shade600 : Colors.white,
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: 'Decrease cooldown',
+                                  onPressed: selectedCooldown <= 5
+                                      ? null
+                                      : () {
+                                          setSheetState(() {
+                                            if (selectedCooldown > 5) selectedCooldown -= 5;
+                                          });
+                                        },
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  child: Text(
+                                    '${selectedCooldown}m',
+                                    style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 15),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.add, size: 18),
+                                  color: Colors.white,
+                                  padding: const EdgeInsets.all(4),
+                                  constraints: const BoxConstraints(),
+                                  tooltip: 'Increase cooldown',
+                                  onPressed: () {
+                                    setSheetState(() {
+                                      selectedCooldown += 5;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          _buildCooldownPresetChip('10 min', 10, selectedCooldown, () {
+                            setSheetState(() => selectedCooldown = 10);
+                          }),
+                          _buildCooldownPresetChip('20 min', 20, selectedCooldown, () {
+                            setSheetState(() => selectedCooldown = 20);
+                          }),
+                          _buildCooldownPresetChip('30 min', 30, selectedCooldown, () {
+                            setSheetState(() => selectedCooldown = 30);
+                          }),
+                          _buildCooldownPresetChip('45 min', 45, selectedCooldown, () {
+                            setSheetState(() => selectedCooldown = 45);
+                          }),
+                        ],
+                      ),
+
+                      const SizedBox(height: 12),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Set this limit as default', style: TextStyle(color: Colors.white70, fontSize: 14)),
+                        value: setAsDefault,
+                        activeColor: const Color(0xFF00E676),
+                        checkColor: Colors.black,
+                        onChanged: (val) {
+                          setSheetState(() {
+                            setAsDefault = val ?? false;
+                          });
                         },
+                        controlAffinity: ListTileControlAffinity.leading,
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.play_arrow, color: Colors.black),
+                          label: const Text('Start Batch', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: limitCtrl.text.isEmpty ? Colors.grey.shade800 : const Color(0xFF00E676),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: limitCtrl.text.isEmpty ? null : () async {
+                            int limit = int.tryParse(limitCtrl.text) ?? defaultLimit;
+                            if (limit > remainingQuota && remainingQuota > 0) limit = remainingQuota;
+                            
+                            if (setAsDefault) {
+                              await widget.settingsService.setDefaultSendLimit(limit);
+                            }
+
+                            // Persist user-selected timer and cooldown preferences
+                            await widget.settingsService.setInterBillDelaySeconds(selectedDelay);
+                            await CooldownService().setCooldownDurationMinutes(selectedCooldown);
+                            
+                            if (context.mounted) {
+                              Navigator.pop(context);
+                              _startSending(limit, delaySeconds: selectedDelay);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               }
             ),
@@ -308,7 +573,52 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
     );
   }
 
-  Future<void> _startSending(int limit) async {
+  Widget _buildPresetChip(String label, int value, TextEditingController controller, VoidCallback onTap) {
+    bool isSelected = controller.text == value.toString();
+    return ActionChip(
+      label: Text(label),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 13,
+      ),
+      backgroundColor: isSelected ? const Color(0xFF00E676) : const Color(0xFF21262D),
+      side: BorderSide(color: isSelected ? const Color(0xFF00E676) : Colors.white24),
+      onPressed: onTap,
+    );
+  }
+
+  Widget _buildTimerPresetChip(String label, int value, int selectedValue, VoidCallback onTap) {
+    bool isSelected = selectedValue == value;
+    return ActionChip(
+      label: Text(label),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 11,
+      ),
+      backgroundColor: isSelected ? const Color(0xFF00E676) : const Color(0xFF21262D),
+      side: BorderSide(color: isSelected ? const Color(0xFF00E676) : Colors.white12),
+      onPressed: onTap,
+    );
+  }
+
+  Widget _buildCooldownPresetChip(String label, int value, int selectedValue, VoidCallback onTap) {
+    bool isSelected = selectedValue == value;
+    return ActionChip(
+      label: Text(label),
+      labelStyle: TextStyle(
+        color: isSelected ? Colors.black : Colors.white70,
+        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        fontSize: 11,
+      ),
+      backgroundColor: isSelected ? Colors.orangeAccent : const Color(0xFF21262D),
+      side: BorderSide(color: isSelected ? Colors.orangeAccent : Colors.white12),
+      onPressed: onTap,
+    );
+  }
+
+  Future<void> _startSending(int limit, {int? delaySeconds}) async {
     if (_pendingReceipts.isEmpty) return;
     
     setState(() {
@@ -408,7 +718,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
                 _isSending = false;
               });
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cooldown limit reached (15 messages). Pausing sending.')),
+                const SnackBar(content: Text('Batch limit reached. Pausing sending for cooldown.')),
               );
             }
             break;
@@ -431,8 +741,11 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
       }
       
       if (_currentIndex < _pendingReceipts.length && sentInSession < limit) {
-        int delayMs = CooldownService.getJitterDelayMilliseconds();
-        int remainingSeconds = (delayMs / 1000).round();
+        int baseSec = delaySeconds ?? (await widget.settingsService.getInterBillDelaySeconds());
+        if (baseSec < 3) baseSec = 3;
+        int organicJitterMs = Random().nextInt(1200); // 0 to 1.2s temporal jitter
+        int totalDelayMs = (baseSec * 1000) + organicJitterMs;
+        int remainingSeconds = (totalDelayMs / 1000).round();
         while (remainingSeconds > 0 && _isSending) {
           await Future.delayed(const Duration(seconds: 1));
           remainingSeconds--;
@@ -933,7 +1246,7 @@ class _ReceiptsTabState extends State<ReceiptsTab> with SingleTickerProviderStat
           ],
         ),
         content: Text(
-          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches of 15 messages.
+          '''To prevent WhatsApp from flagging your account as a bot, a cooldown lock is active between batches.
 
 Time remaining: ${CooldownService.formatDuration(remaining)}''',
           style: const TextStyle(color: Colors.white70),

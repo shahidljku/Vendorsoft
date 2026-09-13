@@ -66,6 +66,26 @@ class ReceiptCardWidget extends StatelessWidget {
                     const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                     _buildReceiptRow(Icons.currency_rupee, Colors.blueAccent, 'Payment', '₹${customer.amountPaid}'),
                     const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
+                    if (customer.billAmount.isNotEmpty)
+                      _buildReceiptRow(Icons.monetization_on, Colors.deepOrange, 'Bill Amount', '₹${customer.billAmount}'),
+                    if (customer.billAmount.isNotEmpty)
+                      const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
+                    // Surplus/Due indicator
+                    ...() {
+                      final double billAmt = double.tryParse(
+                        customer.billAmount.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+                      final double paidAmt = double.tryParse(
+                        customer.amountPaid.replaceAll(',', '').replaceAll('₹', '').trim()) ?? 0.0;
+                      final List<Widget> rows = [];
+                      if (billAmt > 0 && paidAmt > 0 && paidAmt > billAmt) {
+                        rows.add(_buildReceiptRow(Icons.arrow_upward, Colors.green, 'Surplus', '₹${(paidAmt - billAmt).toStringAsFixed(2)}'));
+                        rows.add(const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)));
+                      } else if (billAmt > 0 && paidAmt > 0 && paidAmt < billAmt) {
+                        rows.add(_buildReceiptRow(Icons.arrow_downward, Colors.red, 'Due', '₹${(billAmt - paidAmt).toStringAsFixed(2)}'));
+                        rows.add(const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)));
+                      }
+                      return rows;
+                    }(),
                     _buildReceiptRow(Icons.account_balance_wallet, Colors.purpleAccent, 'Mode', customer.paymentMethod.isNotEmpty ? customer.paymentMethod : 'Online'),
                     const Divider(height: 16, thickness: 1, color: Color(0xFFEEEEEE)),
                     _buildReceiptRow(Icons.assignment_ind, Colors.pinkAccent, 'Transaction', customer.transactionId.isNotEmpty ? customer.transactionId : 'N/A'),

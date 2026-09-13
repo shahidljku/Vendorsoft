@@ -38,9 +38,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
   bool _hasPinSet = false;
   bool _autoSendEnabled = false;
   bool _useWhatsAppBusiness = false;
-  int _sendLimit = 50;
-  int _delayBetween = 10000;
-  int _delayNext = 10000;
   String _printerWidth = '58mm';
   String? _selectedPrinterName;
   bool _directPrintEnabled = false;
@@ -103,9 +100,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     _autoSendEnabled = await widget.settingsService.getAutoSendEnabled();
     _useWhatsAppBusiness = await widget.settingsService.getUseWhatsAppBusiness();
     
-    _sendLimit = await widget.settingsService.getDefaultSendLimit();
-    _delayBetween = await widget.settingsService.getDelayBetweenCustomers();
-    _delayNext = await widget.settingsService.getDelayBeforeNext();
     _printerWidth = await widget.settingsService.getDefaultPrinterWidth();
     _selectedPrinterName = await widget.settingsService.getSelectedPrinterName();
     _directPrintEnabled = await widget.settingsService.getDirectPrintEnabled();
@@ -249,36 +243,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
                   setState(() => _useWhatsAppBusiness = val);
                   await widget.settingsService.setUseWhatsAppBusiness(val);
                 },
-              ),
-              _buildNumberItem(
-                icon: Icons.speed,
-                title: 'Send Limit',
-                subtitle: 'Batch size limit',
-                value: _sendLimit,
-                onTap: () => _editNumber('Send Limit', _sendLimit, (val) async {
-                  setState(() => _sendLimit = val);
-                  await widget.settingsService.setDefaultSendLimit(val);
-                }),
-              ),
-              _buildNumberItem(
-                icon: Icons.hourglass_bottom,
-                title: 'Delay Between (ms)',
-                subtitle: 'Delay during sending',
-                value: _delayBetween,
-                onTap: () => _editNumber('Delay Between (ms)', _delayBetween, (val) async {
-                  setState(() => _delayBetween = val);
-                  await widget.settingsService.setDelayBetweenCustomers(val);
-                }),
-              ),
-              _buildNumberItem(
-                icon: Icons.timer,
-                title: 'Delay Next (ms)',
-                subtitle: 'Delay before next batch',
-                value: _delayNext,
-                onTap: () => _editNumber('Delay Next (ms)', _delayNext, (val) async {
-                  setState(() => _delayNext = val);
-                  await widget.settingsService.setDelayBeforeNext(val);
-                }),
               ),
             ],
           ),
@@ -679,50 +643,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
     );
   }
 
-  void _editNumber(String title, int currentValue, Function(int) onSave) {
-    TextEditingController ctrl = TextEditingController(text: currentValue.toString());
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).cardColor,
-          title: Text('Edit $title', style: const TextStyle(color: Colors.white)),
-          content: TextField(
-            controller: ctrl,
-            keyboardType: TextInputType.number,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              labelText: title,
-              labelStyle: const TextStyle(color: Colors.grey),
-              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFF00E676))),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                int? val = int.tryParse(ctrl.text);
-                if (val != null) {
-                  if (title == 'Send Limit' && val > 30) {
-                    val = 30;
-                  }
-                  onSave(val);
-                }
-                Navigator.pop(context);
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00E676)),
-              child: const Text('Save', style: TextStyle(color: Colors.black)),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   Widget _buildSettingsGroup({required String title, required List<Widget> children}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -775,41 +695,6 @@ class _SettingsTabState extends State<SettingsTab> with WidgetsBindingObserver {
       subtitle: Text(subtitle, style: TextStyle(color: Colors.grey.withValues(alpha: 0.8), fontSize: 13)),
       secondary: Icon(icon, color: Colors.grey, size: 24),
       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    );
-  }
-
-  Widget _buildNumberItem({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required int value,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-        child: Row(
-          children: [
-            Icon(icon, color: Colors.grey, size: 24),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 2),
-                  Text(subtitle, style: TextStyle(color: Colors.grey.withValues(alpha: 0.8), fontSize: 13)),
-                ],
-              ),
-            ),
-            Text(value.toString(), style: const TextStyle(color: Color(0xFF00E676), fontSize: 16, fontWeight: FontWeight.bold)),
-            const SizedBox(width: 8),
-            const Icon(Icons.edit, color: Colors.grey, size: 16),
-          ],
-        ),
-      ),
     );
   }
 
